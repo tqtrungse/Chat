@@ -106,110 +106,6 @@ func (x *Message) GetHops() uint32 {
 	return 0
 }
 
-type BatchGetIDsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RequestId     uint64                 `protobuf:"varint,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	NumIds        uint32                 `protobuf:"varint,2,opt,name=num_ids,json=numIds,proto3" json:"num_ids,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BatchGetIDsRequest) Reset() {
-	*x = BatchGetIDsRequest{}
-	mi := &file_priv_internal_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BatchGetIDsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BatchGetIDsRequest) ProtoMessage() {}
-
-func (x *BatchGetIDsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_priv_internal_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BatchGetIDsRequest.ProtoReflect.Descriptor instead.
-func (*BatchGetIDsRequest) Descriptor() ([]byte, []int) {
-	return file_priv_internal_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *BatchGetIDsRequest) GetRequestId() uint64 {
-	if x != nil {
-		return x.RequestId
-	}
-	return 0
-}
-
-func (x *BatchGetIDsRequest) GetNumIds() uint32 {
-	if x != nil {
-		return x.NumIds
-	}
-	return 0
-}
-
-type BatchGetIDsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RequestId     uint64                 `protobuf:"varint,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	Ids           []uint64               `protobuf:"varint,2,rep,packed,name=ids,proto3" json:"ids,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BatchGetIDsResponse) Reset() {
-	*x = BatchGetIDsResponse{}
-	mi := &file_priv_internal_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BatchGetIDsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BatchGetIDsResponse) ProtoMessage() {}
-
-func (x *BatchGetIDsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_priv_internal_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BatchGetIDsResponse.ProtoReflect.Descriptor instead.
-func (*BatchGetIDsResponse) Descriptor() ([]byte, []int) {
-	return file_priv_internal_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *BatchGetIDsResponse) GetRequestId() uint64 {
-	if x != nil {
-		return x.RequestId
-	}
-	return 0
-}
-
-func (x *BatchGetIDsResponse) GetIds() []uint64 {
-	if x != nil {
-		return x.Ids
-	}
-	return nil
-}
-
 var File_priv_internal_proto protoreflect.FileDescriptor
 
 const file_priv_internal_proto_rawDesc = "" +
@@ -222,18 +118,7 @@ const file_priv_internal_proto_rawDesc = "" +
 	"channel_id\x18\x03 \x01(\x04B\a\xfaB\x042\x02(\x01R\tchannelId\x12,\n" +
 	"\rencrypted_key\x18\x04 \x01(\fB\a\xfaB\x04z\x02\x10\x01R\fencryptedKey\x12,\n" +
 	"\rencrypted_msg\x18\x05 \x01(\fB\a\xfaB\x04z\x02\x10\x01R\fencryptedMsg\x12\x12\n" +
-	"\x04hops\x18\x06 \x01(\rR\x04hops\"a\n" +
-	"\x12BatchGetIDsRequest\x12&\n" +
-	"\n" +
-	"request_id\x18\x01 \x01(\x04B\a\xfaB\x042\x02(\x01R\trequestId\x12#\n" +
-	"\anum_ids\x18\x02 \x01(\rB\n" +
-	"\xfaB\a*\x05\x18\x80 (\x01R\x06numIds\"F\n" +
-	"\x13BatchGetIDsResponse\x12\x1d\n" +
-	"\n" +
-	"request_id\x18\x01 \x01(\x04R\trequestId\x12\x10\n" +
-	"\x03ids\x18\x02 \x03(\x04R\x03ids2R\n" +
-	"\fGenIDService\x12B\n" +
-	"\vBatchGetIDs\x12\x18.priv.BatchGetIDsRequest\x1a\x19.priv.BatchGetIDsResponseB\fZ\n" +
+	"\x04hops\x18\x06 \x01(\rR\x04hopsB\fZ\n" +
 	"./gen/privb\x06proto3"
 
 var (
@@ -248,17 +133,13 @@ func file_priv_internal_proto_rawDescGZIP() []byte {
 	return file_priv_internal_proto_rawDescData
 }
 
-var file_priv_internal_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_priv_internal_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_priv_internal_proto_goTypes = []any{
-	(*Message)(nil),             // 0: priv.Message
-	(*BatchGetIDsRequest)(nil),  // 1: priv.BatchGetIDsRequest
-	(*BatchGetIDsResponse)(nil), // 2: priv.BatchGetIDsResponse
+	(*Message)(nil), // 0: priv.Message
 }
 var file_priv_internal_proto_depIdxs = []int32{
-	1, // 0: priv.GenIDService.BatchGetIDs:input_type -> priv.BatchGetIDsRequest
-	2, // 1: priv.GenIDService.BatchGetIDs:output_type -> priv.BatchGetIDsResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
+	0, // [0:0] is the sub-list for method output_type
+	0, // [0:0] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -275,9 +156,9 @@ func file_priv_internal_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_priv_internal_proto_rawDesc), len(file_priv_internal_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   1,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   0,
 		},
 		GoTypes:           file_priv_internal_proto_goTypes,
 		DependencyIndexes: file_priv_internal_proto_depIdxs,

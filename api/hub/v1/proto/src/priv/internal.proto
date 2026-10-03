@@ -14,20 +14,3 @@ message Message {
   bytes encrypted_msg = 5 [(validate.rules).bytes.min_len = 1];
   uint32 hops = 6;
 }
-
-service GenIDService {
-  rpc BatchGetIDs(BatchGetIDsRequest) returns (BatchGetIDsResponse);
-}
-
-message BatchGetIDsRequest {
-  uint64 request_id = 1 [(validate.rules).uint64.gte = 1];
-  uint32 num_ids = 2 [(validate.rules).uint32 = {
-    gte: 1,
-    lte: 4096,
-  }];
-}
-
-message BatchGetIDsResponse {
-  uint64 request_id = 1;
-  repeated uint64 ids = 2;
-}
