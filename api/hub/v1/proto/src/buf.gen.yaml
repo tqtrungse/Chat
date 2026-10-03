@@ -1,0 +1,20 @@
+# api/hub/v1/proto/src/buf.gen.yaml
+
+version: v2
+
+plugins:
+  - local: protoc-gen-go
+    out: ../gen
+    opt:
+      - paths=source_relative
+
+  - local: protoc-gen-validate-go
+    out: ../gen
+    opt:
+      - lang=go
+      - paths=source_relative
+
+  - local: protoc-gen-go-grpc
+    out: ../gen
+    opt:
+      - paths=source_relative

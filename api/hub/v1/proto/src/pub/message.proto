@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package pub;
+
+import "validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "./gen/pub";
+
+enum PacketType {
+  UNKNOWN = 0;
+
+  REQ_ACTIVE_CONN = 1;
+  REQ_SEND_MSG = 2;
+  REQ_DIRECT_FORWARD_MSG = 3;
+  REQ_BROKER_FORWARD_MSG = 4;
+  REQ_ACK_RECV_MSG = 5;
+
+  RESP_ACTIVE_CONN = 501;
+  RESP_SEND_MSG = 502;
+  RESP_ACK_RECV_MSG = 503;
+}
+
+enum Code {
+  SUCCESS = 0;
+
+  ERR_INVALID_PACK_TYPE = 1; // Wrong packet type
+  ERR_INVALID_PACK_SIZE = 2; // Wrong packet size
+  ERR_INVALID_PACK_CIPHER = 3; // Wrong packet cipher
+  ERR_MODIFIED_PACK = 4; // Packet is modified
+  ERR_DECRYPT = 5; // Packet decryption error
+  ERR_DESERIALIZE = 6; // Packet parsing error
+  ERR_INTERNAL = 7; // Server error
+}
+
+message ActiveConnReq {
+  bytes token = 1 [(validate.rules).bytes = {
+    min_len: 8,
+    max_len: 8,
+  }];
+
+  bytes sign = 2 [(validate.rules).bytes = {
+    min_len: 64,
+    max_len: 64,
+  }];
+}
+
+message ActiveConnResp {
+  Code code = 1;
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------------------
+// | MsgType |   Nonce   | CipherSize | Cipher |                                  Expand                                                    |
+// ------------------------------------------------------------------------------------------------------------------------------------------
+// | 2 bytes |  12 bytes |   2 bytes  |   Pb   |  Nonce-1 | EncryptedKey-1 |  Nonce-2 | EncryptedKey-2 | ...  |   Nonce  | EncryptedMessage |
+// ------------------------------------------------------------------------------------------------------------------------------------------
+//                                             | 12 bytes |   32 Bytes     | 12 bytes |   32 Bytes     | ...  | 12 bytes |    Remaining     |
+// ------------------------------------------------------------------------------------------------------------------------------------------
+message SendMsgReq {
+  uint64 channel_id = 1 [(validate.rules).uint64.gte = 1];
+  uint64 dedup_key = 2 [(validate.rules).uint64.gte = 1];
+
+  repeated uint64 recv_device_ids = 3 [(validate.rules).repeated = {
+    min_items: 1,
+    unique: true,
+  }];
+}
+
+message SendMsgResp {
+  uint64 channel_id = 1;
+  uint64 msg_id = 2; // Received device will dedup key by LRU cache + DB.
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// | MsgType |   Nonce   | CipherSize | Cipher |                         Expand                            |
+// ---------------------------------------------------------------------------------------------------------
+// | 2 bytes |  12 bytes |   2 bytes  |   Pb   |  KeyNonce | EncryptedKey |   MsgNonce  | EncryptedMessage |
+// ---------------------------------------------------------------------------------------------------------
+//                                             |  12 bytes |   32 Bytes   |    12 bytes |    Remaining     |
+// ---------------------------------------------------------------------------------------------------------
+message DirectForwardMsgReq {
+  uint64 send_device_id = 1;
+  uint64 msg_id = 2;
+  uint64 channel_id = 3;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// |  MsgType |   Pb Size    |   Pb  |                           Expand                                    |
+// ---------------------------------------------------------------------------------------------------------
+// |  2 bytes |   2 bytes    |  xxx  |  KeyNonce | EncryptedKey |  MsgNonce | EncryptedMessage |    HMAC   |
+// ---------------------------------------------------------------------------------------------------------
+//                                   |  12 bytes |   32 bytes   |  12 bytes |     xxxx         |  32 bytes |
+// ---------------------------------------------------------------------------------------------------------
+message BrokerForwardMsgReq {
+  uint64 send_device_id = 1 [(validate.rules).uint64.gte = 1];
+  uint64 recv_device_id = 2 [(validate.rules).uint64.gte = 1];
+  uint64 msg_id = 3 [(validate.rules).uint64.gte = 1];
+  uint64 channel_id = 4 [(validate.rules).uint64.gte = 1];
+}
+
+message AckRecvMsgReq {
+  uint64 channel_id = 1 [(validate.rules).uint64.gte = 1];
+  uint64 msg_id = 2 [(validate.rules).uint64.gte = 1];
+}
+
+message AckRecvMsgResp {
+  Code code = 1;
+}
