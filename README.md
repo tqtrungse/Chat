@@ -138,11 +138,9 @@ Requirements: Go (see `go.mod`), Redis, NATS, ScyllaDB.
 ## Roadmap
 
 - [ ] Finish crash detection and distributed reaping
-- [ ] Finish router and NATS lifecycle
 - [ ] Implement ScyllaDB offline storage and its circuit breaker
 - [ ] Implement offline pull with live-message buffering
-- [ ] Benchmark at 50k connections per hub
-- [ ] Decide on Redis vs DragonflyDB vs Valkey
+- [ ] Benchmark at 10k connections per hub
 
 ## License
 

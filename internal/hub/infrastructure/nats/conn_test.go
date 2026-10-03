@@ -21,7 +21,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	
+
 	"xxx/pkg/log"
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
