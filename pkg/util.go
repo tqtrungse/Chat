@@ -17,10 +17,20 @@
 package pkg
 
 import (
+	"fmt"
 	"math/bits"
+	"os"
+	"strconv"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/cpu"
+)
+
+const (
+	serviceBits = uint64(8) // max 256 service
+	ordinalBits = uint64(8) // max 256 replicas per service
+	machineBits = serviceBits + ordinalBits
 )
 
 const (
@@ -74,6 +84,25 @@ func CacheRemap(index, capacity, entrySize uint32) uint32 {
 	groupNum := rawIndex % groupCount
 	groupIdx := rawIndex / groupCount
 	return groupNum*entriesPerHalfLine + groupIdx
+}
+
+// MachineIDFromHostname get machine ID from K8S StatefullSet host name.
+func MachineIDFromHostname(serviceID uint64) (uint64, error) {
+	h, err := os.Hostname()
+	if err != nil {
+		return 0, err
+	}
+
+	i := strings.LastIndex(h, "-")
+	if i < 0 {
+		return 0, fmt.Errorf("no ordinal in hostname %q", h)
+	}
+
+	n, err := strconv.Atoi(h[i+1:])
+	if err != nil || n < 0 || n >= 1<<ordinalBits {
+		return 0, fmt.Errorf("invalid ordinal in hostname %q", h)
+	}
+	return serviceID<<ordinalBits | uint64(n), nil
 }
 
 //// GetRAM
