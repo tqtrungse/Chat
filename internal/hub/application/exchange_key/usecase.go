@@ -74,7 +74,6 @@ func (ke *keyExchanger) Exchange(ctx context.Context, req json.ExchangeKeyReq) (
 	}
 	if deviceMeta.State != device.StateActive {
 		slicepool.Put(deviceMeta.IdentityPub)
-		deviceMeta.IdentityPub = nil
 		return nil, protocol.ErrUnactiveDevice
 	}
 

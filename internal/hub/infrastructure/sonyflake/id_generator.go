@@ -24,8 +24,6 @@ import (
 	"github.com/sony/sonyflake/v2"
 )
 
-var defaultStartTime = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-
 type idGen struct {
 	sf *sonyflake.Sonyflake
 }
@@ -33,7 +31,7 @@ type idGen struct {
 func NewIDGen(hubID uint64) (send_message.GenID, error) {
 	sf, err := sonyflake.New(
 		sonyflake.Settings{
-			StartTime: defaultStartTime,
+			StartTime: time.Now(),
 			MachineID: func() (int, error) { return int(hubID), nil },
 		},
 	)
