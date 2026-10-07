@@ -17,8 +17,6 @@
 package sonyflake
 
 import (
-	"time"
-
 	"xxx/internal/hub/application/send_message"
 
 	"github.com/sony/sonyflake/v2"
@@ -31,7 +29,6 @@ type idGen struct {
 func NewIDGen(hubID uint64) (send_message.GenID, error) {
 	sf, err := sonyflake.New(
 		sonyflake.Settings{
-			StartTime: time.Now(),
 			MachineID: func() (int, error) { return int(hubID), nil },
 		},
 	)
