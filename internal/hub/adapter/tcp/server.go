@@ -98,6 +98,8 @@ func (s *Server) Run() error {
 		// After restarting, allow the new process to bind immediately service
 		// although that service still got connections with TIME_WAIT state.
 		nio.WithReuseAddr(true),
+
+		nio.WithTicker(true),
 	)
 }
 
