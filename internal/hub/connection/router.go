@@ -128,6 +128,11 @@ func NewRouter(
 	return r
 }
 
+func (r *Router) Exist(deviceID device.ID) bool {
+	_, existence := r.conns[deviceID&mask].Lookup(deviceID)
+	return existence
+}
+
 func (r *Router) CreateUnactiveConn(
 	deviceID device.ID,
 	secretKey *[32]byte,
@@ -148,7 +153,10 @@ func (r *Router) CreateUnactiveConn(
 
 	uConn := new(unactiveConn)
 	uConn.SetContext(ss)
-	r.conns[deviceID&mask].Insert(deviceID, uConn)
+	if existence := r.conns[deviceID&mask].Insert(deviceID, uConn); existence {
+		r.meta.Add(^uint32(0))
+		return false
+	}
 	return true
 }
 
@@ -157,19 +165,23 @@ func (r *Router) ActivateConn(
 	token []byte,
 	sign []byte,
 	conn nio.Conn,
-) (device.ID, error) {
+	callback func(id device.ID),
+) error {
 	var (
 		deviceID         = device.ID(binary.LittleEndian.Uint64(token))
 		uConn, existence = r.conns[deviceID&mask].Lookup(deviceID)
 	)
 
 	if !existence {
-		return 0, protocol.ErrNotFoundSession
+		return protocol.ErrSessionNotFound
 	}
 
 	ss := uConn.Context().(*session.Data)
+	if ss.State.Load() == uint32(session.StateActive) {
+		return nil
+	}
 	if err := r.signer.Verify(ss.IdentityPub, token, sign); err != nil {
-		return 0, err
+		return err
 	}
 
 	slicepool.Put(ss.IdentityPub)
@@ -188,7 +200,7 @@ func (r *Router) ActivateConn(
 	r.conns[deviceID&mask].Update(deviceID, conn)
 
 	// Sync device presence (device -> this hub) to cache.
-	return deviceID, r.pool.Submit(func(_ *workerpool.Context) {
+	return r.pool.Submit(func(_ *workerpool.Context) {
 		err := r.presence.Submit(
 			ctx,
 			deviceOp{
@@ -196,20 +208,18 @@ func (r *Router) ActivateConn(
 				Timestamp: timestamp,
 				Op:        addDeviceOp,
 			},
-			func(resp any, err error) {
-				//if err == nil || errors.Is(err, errSuperseded) {
-				//	return
-				//}
+			func(_ any, err error) {
+				if err == nil {
+					callback(deviceID)
+					return
+				}
+				r.logger.Error("failed to add connection to ledger", zap.Error(err))
+				r.ForceClose(conn)
 			},
 		)
 		if err != nil {
 			r.logger.Error("failed to submit batch", zap.Error(err))
-
-			if err = conn.Close(); err != nil {
-				r.logger.Error("failed to force close connection", zap.Error(err))
-			} else {
-				r.logger.Info("forces close connection")
-			}
+			r.ForceClose(conn)
 		}
 	})
 }
@@ -253,7 +263,7 @@ func (r *Router) RemoveConn(ctx context.Context, conn nio.Conn) {
 				//
 				// When device reconnect, cache will remove garbage record and create new record.
 				if err != nil && !errors.Is(err, errSuperseded) {
-					r.logger.Error("failed to delete cache connection", zap.Error(err))
+					r.logger.Error("failed to delete connection from ledger", zap.Error(err))
 				}
 			},
 		)
@@ -269,7 +279,7 @@ func (r *Router) RemoveConn(ctx context.Context, conn nio.Conn) {
 func (r *Router) Send(deviceID device.ID, data SendData) error {
 	conn, existence := r.conns[deviceID&mask].Lookup(deviceID)
 	if !existence {
-		return protocol.ErrNotFoundSession
+		return protocol.ErrSessionNotFound
 	}
 
 	ss := conn.Context().(*session.Data)
@@ -317,10 +327,19 @@ func (r *Router) Tick() time.Duration {
 				if durationSecs >= int64(r.ttlUnactiveSession.Seconds()) {
 					r.conns[i].Delete(deviceID)
 					conn.SetContext(nil)
+					r.meta.Add(^uint32(0))
 				}
 			}
 			return true
 		})
 	}
 	return r.tickerDuration
+}
+
+func (r *Router) ForceClose(conn nio.Conn) {
+	if err := conn.Close(); err != nil {
+		r.logger.Error("failed to force close connection", zap.Error(err))
+	} else {
+		r.logger.Info("forces close connection")
+	}
 }

@@ -38,31 +38,38 @@ type keyExchanger struct {
 	db               sql.DB
 	keyDeriver       KeyDeriver
 	deviceMetaReader DeviceMetaReader
-	connManager      *connection.Router
+	router           *connection.Router
 }
 
 func New(
 	db sql.DB,
 	keyDeriver KeyDeriver,
 	deviceMetaReader DeviceMetaReader,
-	connManager *connection.Router,
+	router *connection.Router,
 ) Usecase {
 	return &keyExchanger{
 		db:               db,
 		deviceMetaReader: deviceMetaReader,
 		keyDeriver:       keyDeriver,
-		connManager:      connManager,
+		router:           router,
 	}
 }
 
-func (ke *keyExchanger) Exchange(ctx context.Context, req json.ExchangeKeyReq) (*json.ExchangeKeyResp, error) {
+func (ke *keyExchanger) Exchange(
+	ctx context.Context,
+	req json.ExchangeKeyReq,
+) (*json.ExchangeKeyResp, error) {
 	var (
 		deviceID   = device.ID(req.DeviceID)
 		deviceMeta *DeviceMeta
 		err        error
 	)
 
-	err = ke.db.Transaction(ctx, sql.TxSourcePrimary, func(dbCtx context.Context) error {
+	if ke.router.Exist(deviceID) {
+		return nil, protocol.ErrSessionDuplicate
+	}
+
+	err = ke.db.Transaction(ctx, sql.TxSourceReplicas, func(dbCtx context.Context) error {
 		deviceMeta, err = ke.deviceMetaReader.FindDeviceMeta(dbCtx, deviceID)
 		return err
 	})
@@ -70,11 +77,11 @@ func (ke *keyExchanger) Exchange(ctx context.Context, req json.ExchangeKeyReq) (
 		return nil, err
 	}
 	if deviceMeta == nil {
-		return nil, protocol.ErrNotFoundDevice
+		return nil, protocol.ErrDeviceNotFound
 	}
 	if deviceMeta.State != device.StateActive {
 		slicepool.Put(deviceMeta.IdentityPub)
-		return nil, protocol.ErrUnactiveDevice
+		return nil, protocol.ErrDeviceUnactive
 	}
 
 	var (
@@ -91,11 +98,15 @@ func (ke *keyExchanger) Exchange(ctx context.Context, req json.ExchangeKeyReq) (
 		return nil, err
 	}
 
-	ke.connManager.CreateUnactiveConn(
+	success := ke.router.CreateUnactiveConn(
 		deviceID,
 		&secretKey,
 		&req.ClientHmacKey,
 		deviceMeta.IdentityPub,
 	)
-	return resp, nil
+	if success {
+		return resp, nil
+	}
+	slicepool.Put(deviceMeta.IdentityPub)
+	return nil, protocol.ErrSessionDuplicate
 }

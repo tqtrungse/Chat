@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"xxx/internal/hub/connection"
+	"xxx/internal/hub/domain/device"
 	"xxx/internal/hub/protocol"
 
 	pbpub "xxx/api/hub/v1/proto/gen/pub"
@@ -71,21 +72,27 @@ func (ca *connActivator) Activate(ctx context.Context, conn nio.Conn, pack []byt
 		return nio.Close
 	}
 
-	deviceID, err := ca.router.ActivateConn(ctx, req.Token, req.Sign, conn)
-	if err != nil {
-		ca.logger.Error("failed to activate connection, force close", zap.Error(err))
-		return nio.Close
-	}
-
-	err = ca.router.Send(
-		deviceID,
-		connection.SendData{
-			PackType: pbpub.PacketType_RESP_ACTIVE_CONN,
-			Msg:      &pbpub.ActiveConnResp{Code: pbpub.Code_SUCCESS},
+	err := ca.router.ActivateConn(
+		ctx,
+		req.Token,
+		req.Sign,
+		conn,
+		func(deviceID device.ID) {
+			err := ca.router.Send(
+				deviceID,
+				connection.SendData{
+					PackType: pbpub.PacketType_RESP_ACTIVE_CONN,
+					Msg:      &pbpub.ActiveConnResp{Code: pbpub.Code_SUCCESS},
+				},
+			)
+			if err != nil {
+				ca.logger.Error("failed to respond, force close", zap.Error(err))
+				ca.router.ForceClose(conn)
+			}
 		},
 	)
 	if err != nil {
-		ca.logger.Error("failed to respond, force close", zap.Error(err))
+		ca.logger.Error("failed to activate connection, force close", zap.Error(err))
 		return nio.Close
 	}
 	return nio.None

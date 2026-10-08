@@ -45,7 +45,7 @@ func (d *Decoder) Decode(
 	// |  2 bytes |   2 bytes  | xxx  |    xxx   |  32 bytes |
 	// -------------------------------------------------------
 	if len(packet) <= 36 {
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_SIZE, ErrInvalidPkgSize
+		return nil, nil, pbpub.Code_ERR_INVALID_PACK_SIZE, ErrPkgSizeInvalid
 	}
 
 	size := len(packet) - 32
@@ -53,7 +53,7 @@ func (d *Decoder) Decode(
 	mac.Write(packet[:size])
 
 	if ok := hmac.Equal(mac.Sum(nil), packet[size:]); !ok {
-		return nil, nil, pbpub.Code_ERR_MODIFIED_PACK, ErrModifiedPkg
+		return nil, nil, pbpub.Code_ERR_MODIFIED_PACK, ErrPkgModified
 	}
 
 	var (
@@ -63,7 +63,7 @@ func (d *Decoder) Decode(
 	)
 
 	if int(pbSize) > len(packet)-36 {
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_SIZE, ErrInvalidPkgSize
+		return nil, nil, pbpub.Code_ERR_INVALID_PACK_SIZE, ErrPkgSizeInvalid
 	}
 
 	switch pbpub.PacketType(packType) {
@@ -74,7 +74,7 @@ func (d *Decoder) Decode(
 		msg = new(pbpub.DirectForwardMsgReq)
 
 	default:
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_TYPE, ErrInvalidPkgType
+		return nil, nil, pbpub.Code_ERR_INVALID_PACK_TYPE, ErrPkgTypeInvalid
 	}
 
 	if err := d.pbUnmarshal.Unmarshal(packet[4:pbSize+4], msg); err != nil {
@@ -93,7 +93,7 @@ func (d *Decoder) DecodeS(
 	// | 2 bytes |  12 bytes |   2 bytes  |   Pb   |   xxx  |
 	// ------------------------------------------------------
 	if len(packet) <= 16 {
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_SIZE, ErrInvalidPkgSize
+		return nil, nil, pbpub.Code_ERR_INVALID_PACK_SIZE, ErrPkgSizeInvalid
 	}
 
 	var (
@@ -106,13 +106,13 @@ func (d *Decoder) DecodeS(
 		msg = new(pbpub.SendMsgReq)
 
 	default:
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_TYPE, ErrInvalidPkgType
+		return nil, nil, pbpub.Code_ERR_INVALID_PACK_TYPE, ErrPkgTypeInvalid
 	}
 
 	cipherSize := binary.LittleEndian.Uint16(packet[14:16])
 	if !d.secureChannel.IsValid(int(cipherSize)) ||
 		int(cipherSize) > len(packet)-16 {
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_CIPHER, ErrInvalidPkgCipher
+		return nil, nil, pbpub.Code_ERR_INVALID_PACK_CIPHER, ErrPkgCipherInvalid
 	}
 
 	plain, err := d.secureChannel.Open(
