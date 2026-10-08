@@ -84,11 +84,13 @@ func (ke *keyExchanger) Exchange(
 		return nil, protocol.ErrDeviceNotFound
 	}
 
+	var success bool
 	defer func() {
-		if err != nil {
+		if !success {
 			slicepool.Put(deviceMeta.IdentityPub)
 		}
 	}()
+
 	if deviceMeta.State != device.StateActive {
 		return nil, protocol.ErrDeviceUnactive
 	}
@@ -113,8 +115,9 @@ func (ke *keyExchanger) Exchange(
 		&hmacKey,
 		deviceMeta.IdentityPub,
 	)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		success = true
+		return resp, nil
 	}
-	return resp, nil
+	return nil, err
 }
