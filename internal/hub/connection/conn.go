@@ -16,7 +16,11 @@
 
 package connection
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+
+	"xxx/internal/hub/domain/session"
+)
 
 type connection interface {
 	// Context returns a user-defined context, it's concurrency-safe.
@@ -27,13 +31,17 @@ type connection interface {
 }
 
 type unactiveConn struct {
-	ctx atomic.Value
+	ss atomic.Pointer[session.Data]
 }
 
 func (u *unactiveConn) Context() (ctx any) {
-	return u.ctx.Load()
+	if s := u.ss.Load(); s != nil {
+		return s
+	}
+	return nil
 }
 
 func (u *unactiveConn) SetContext(ctx any) {
-	u.ctx.Store(ctx)
+	s, _ := ctx.(*session.Data) // nil hoặc kiểu khác -> nil
+	u.ss.Store(s)
 }
