@@ -61,6 +61,6 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 	c.MaxRequests = loader.GetUint32("CIRCUIT_BREAKER_MAX_REQUESTS")
 	c.Interval = loader.GetDuration("CIRCUIT_BREAKER_INTERVAL")
 	c.Timeout = loader.GetDuration("CIRCUIT_BREAKER_TIMEOUT")
-	c.ConsecutiveFailures = loader.GetUint32("CIRCUIT_BREAKER_CONSECUTIVE_FAILURES")
+	c.ConsecutiveFailures = loader.GetUint32("CIRCUIT_BREAKER_CONSECUTIVE_FAILURE")
 
 }
