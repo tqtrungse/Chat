@@ -97,7 +97,7 @@ func (c *circuitBreaker) Execute(ctx context.Context, fn func(ctx context.Contex
 	}
 
 	if errors.Is(err, gobreaker.ErrOpenState) || errors.Is(err, gobreaker.ErrTooManyRequests) {
-		return connection.CbErrOpen
+		return connection.ErrCbOpen
 	}
 	return err
 }

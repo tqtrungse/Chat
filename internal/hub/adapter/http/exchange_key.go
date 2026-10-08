@@ -17,9 +17,16 @@
 package http
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 
 	"xxx/api/hub/v1/json"
+	"xxx/internal/hub/application/exchange_key"
+	"xxx/internal/hub/connection"
+	"xxx/internal/hub/protocol"
+
+	slicepool "xxx/pkg/pool/slice"
 
 	"github.com/mailru/easyjson"
 	"go.uber.org/zap"
@@ -33,6 +40,7 @@ func (s *Server) exchangeKey(w http.ResponseWriter, r *http.Request) {
 	)
 
 	//claims := r.Context().Value(claimsKey).(*pkg.Auth0Claims)
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
 	err = easyjson.UnmarshalFromReader(r.Body, &req)
 	if err != nil {
 		s.logger.Error("failed to unmarshal request", zap.Error(err))
@@ -41,10 +49,33 @@ func (s *Server) exchangeKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err = s.keyExchanger.Exchange(r.Context(), req)
-	if err != nil {
-		s.logger.Error("failed to exchange key", zap.Error(err))
-		s.respondErr(w, http.StatusInternalServerError, err)
+	defer slicepool.Put(req.ClientPubKey)
+	if err == nil {
+		s.respond(w, resp)
 		return
 	}
-	s.respond(w, resp)
+
+	s.logger.Error("failed to exchange key", zap.Error(err))
+
+	if errors.Is(err, protocol.ErrDeviceNotFound) {
+		s.respondErr(w, http.StatusNotFound, err)
+		return
+	}
+	if errors.Is(err, protocol.ErrDeviceUnactive) {
+		s.respondErr(w, http.StatusForbidden, err)
+		return
+	}
+	if errors.Is(err, exchange_key.ErrRequestInvalid) {
+		s.respondErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if errors.Is(err, connection.ErrRouterClosed) || errors.Is(err, connection.ErrConnReachMax) {
+		s.respondErr(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	if errors.Is(err, connection.ErrSessionDuplicate) {
+		s.respondErr(w, http.StatusConflict, err)
+		return
+	}
+	s.respondErr(w, http.StatusInternalServerError, fmt.Errorf("internal error"))
 }

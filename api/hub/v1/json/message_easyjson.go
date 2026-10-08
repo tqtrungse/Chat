@@ -105,14 +105,9 @@ func easyjson4086215fDecodeXxxApiHubV1Json1(in *jlexer.Lexer, out *ExchangeKeyRe
 		case "client_pub_key":
 			if in.IsNull() {
 				in.Skip()
+				out.ClientPubKey = nil
 			} else {
-				copy(out.ClientPubKey[:], in.Bytes())
-			}
-		case "client_hmac_key":
-			if in.IsNull() {
-				in.Skip()
-			} else {
-				copy(out.ClientHmacKey[:], in.Bytes())
+				out.ClientPubKey = in.Bytes()
 			}
 		default:
 			in.SkipRecursive()
@@ -136,12 +131,7 @@ func easyjson4086215fEncodeXxxApiHubV1Json1(out *jwriter.Writer, in ExchangeKeyR
 	{
 		const prefix string = ",\"client_pub_key\":"
 		out.RawString(prefix)
-		out.Base64Bytes(in.ClientPubKey[:])
-	}
-	{
-		const prefix string = ",\"client_hmac_key\":"
-		out.RawString(prefix)
-		out.Base64Bytes(in.ClientHmacKey[:])
+		out.Base64Bytes(in.ClientPubKey)
 	}
 	out.RawByte('}')
 }

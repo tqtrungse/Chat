@@ -117,7 +117,7 @@ func TestExecute_OpenStateFailsFastWithoutCallingFn(t *testing.T) {
 		called = true
 		return nil
 	})
-	require.Equal(t, connection.CbErrOpen, err)
+	require.Equal(t, connection.ErrCbOpen, err)
 	require.False(t, called)
 }
 
@@ -189,7 +189,7 @@ func TestExecute_HalfOpenRejectsConcurrentProbeBeyondMaxRequests(t *testing.T) {
 	close(release)
 
 	require.NoError(t, <-firstDone)
-	require.Equal(t, connection.CbErrOpen, secondErr)
+	require.Equal(t, connection.ErrCbOpen, secondErr)
 	require.False(t, secondCalled)
 	require.Equal(t, gobreaker.StateClosed, cb.State())
 }

@@ -17,5 +17,13 @@
 package exchange_key
 
 type KeyDeriver interface {
-	DeriveKeys(peerPub *[32]byte, info []byte) (secretKey [32]byte, pubKey [32]byte, err error)
+	DeriveKeys(
+		peerPub *[32]byte,
+		info []byte,
+	) (
+		secretKey [32]byte,
+		hmacKey [32]byte,
+		pubKey [32]byte,
+		err error,
+	)
 }

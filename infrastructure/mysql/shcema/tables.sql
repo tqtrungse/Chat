@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS `devices`
     `id`           BIGINT UNSIGNED NOT NULL,           -- Snowflake
     `external_id`  NVARCHAR(64)    NOT NULL,           -- Auth0 ID
     `user_id`      BIGINT UNSIGNED NOT NULL,
-    `device_name`  NVARCHAR(128)   NOT NULL,           -- Device type + OS name
+    `name`         NVARCHAR(128)   NOT NULL,           -- Device type + OS name
     `state`        SMALLINT        NOT NULL DEFAULT 1, -- 1: active, 2: locked
     `identity_pub` TINYBLOB        NOT NULL,           -- ed25519.GenerateKey(rand.Reader)
     `peer_pub`     TINYBLOB        NOT NULL,           -- x25519

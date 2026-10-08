@@ -14,26 +14,20 @@
  * limitations under the License.
  */
 
-package entity
+package connection
 
-import (
-	"time"
+import "errors"
 
-	"xxx/internal/hub/domain/device"
-	"xxx/internal/hub/domain/user"
+var (
+	// errSuperseded is returned to a batched request that lost to a newer
+	// operation on the same device (see dedupeDeviceOps).
+	errSuperseded = errors.New("device operation superseded")
 
-	"gorm.io/gorm"
+	// ErrCbOpen is returned when the circuit is open, or half-open with a probe
+	// already in flight, so the attempt did not run.
+	ErrCbOpen = errors.New("cb: circuit breaker open")
+
+	ErrRouterClosed     = errors.New("router closed")
+	ErrConnReachMax     = errors.New("connection over")
+	ErrSessionDuplicate = errors.New("session duplicate")
 )
-
-type Device struct {
-	ID          device.ID `gorm:"primaryKey;autoIncrement:false"`
-	ExternalID  string
-	UserID      user.ID
-	Name        string
-	State       device.State
-	IdentityPub []byte
-	PeerPub     []byte
-	CreatedAt   time.Time `gorm:"->"`
-	UpdatedAt   time.Time `gorm:"<-:update"`
-	DeletedAt   gorm.DeletedAt
-}

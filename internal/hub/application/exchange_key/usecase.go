@@ -65,11 +65,15 @@ func (ke *keyExchanger) Exchange(
 		err        error
 	)
 
+	if req.DeviceID == 0 || len(req.ClientPubKey) != 32 {
+		return nil, ErrRequestInvalid
+	}
+
 	if ke.router.Exist(deviceID) {
 		return nil, protocol.ErrSessionDuplicate
 	}
 
-	err = ke.db.Transaction(ctx, sql.TxSourceReplicas, func(dbCtx context.Context) error {
+	err = ke.db.Transaction(ctx, sql.TxSourcePrimary, func(dbCtx context.Context) error {
 		deviceMeta, err = ke.deviceMetaReader.FindDeviceMeta(dbCtx, deviceID)
 		return err
 	})
@@ -79,34 +83,38 @@ func (ke *keyExchanger) Exchange(
 	if deviceMeta == nil {
 		return nil, protocol.ErrDeviceNotFound
 	}
+
+	defer func() {
+		if err != nil {
+			slicepool.Put(deviceMeta.IdentityPub)
+		}
+	}()
 	if deviceMeta.State != device.StateActive {
-		slicepool.Put(deviceMeta.IdentityPub)
 		return nil, protocol.ErrDeviceUnactive
 	}
 
 	var (
 		resp      = new(json.ExchangeKeyResp)
 		secretKey [32]byte
+		hmacKey   [32]byte
 	)
 
-	secretKey, resp.ServerPubKey, err = ke.keyDeriver.DeriveKeys(
-		&req.ClientPubKey,
+	secretKey, hmacKey, resp.ServerPubKey, err = ke.keyDeriver.DeriveKeys(
+		(*[32]byte)(req.ClientPubKey),
 		keyDerivationInfo,
 	)
 	if err != nil {
-		slicepool.Put(deviceMeta.IdentityPub)
 		return nil, err
 	}
 
-	success := ke.router.CreateUnactiveConn(
+	err = ke.router.CreateUnactiveConn(
 		deviceID,
 		&secretKey,
-		&req.ClientHmacKey,
+		&hmacKey,
 		deviceMeta.IdentityPub,
 	)
-	if success {
-		return resp, nil
+	if err != nil {
+		return nil, err
 	}
-	slicepool.Put(deviceMeta.IdentityPub)
-	return nil, protocol.ErrSessionDuplicate
+	return resp, nil
 }

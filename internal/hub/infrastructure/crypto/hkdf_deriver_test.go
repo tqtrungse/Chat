@@ -42,6 +42,23 @@ func genX25519KeyPair(t *testing.T) (priv, pub [32]byte) {
 	return
 }
 
+// deriveExpected independently derives one labeled key for the peer-side
+// assertions below. The labels are part of the exchange-key derivation
+// contract and must match the client implementation.
+func deriveExpected(t *testing.T, rawSecret, baseInfo []byte, label string) [32]byte {
+	t.Helper()
+
+	info := make([]byte, 0, len(baseInfo)+1+len(label))
+	info = append(info, baseInfo...)
+	info = append(info, '/')
+	info = append(info, label...)
+
+	var key [32]byte
+	_, err := io.ReadFull(hkdf.New(sha256.New, rawSecret, nil, info), key[:])
+	require.NoError(t, err)
+	return key
+}
+
 // TestHkdfDeriver_DeriveKeys_MatchesManualECDH is the core correctness
 // test: it verifies the full ECDH handshake round-trips. The peer
 // independently recomputes the shared secret using its own private key and
@@ -53,7 +70,7 @@ func TestHkdfDeriver_DeriveKeys_MatchesManualECDH(t *testing.T) {
 	peerPriv, peerPub := genX25519KeyPair(t)
 	info := []byte("session-info")
 
-	secretKey, ephemeralPub, err := deriver.DeriveKeys(&peerPub, info)
+	secretKey, hmacKey, ephemeralPub, err := deriver.DeriveKeys(&peerPub, info)
 	require.NoError(t, err)
 
 	// The peer computes the same shared secret from its own private key
@@ -61,23 +78,18 @@ func TestHkdfDeriver_DeriveKeys_MatchesManualECDH(t *testing.T) {
 	rawSecret, err := curve25519.X25519(peerPriv[:], ephemeralPub[:])
 	require.NoError(t, err)
 
-	kdf := hkdf.New(
-		sha256.New,
-		rawSecret,
-		nil,
-		info,
-	)
-	var expected [32]byte
-	_, err = io.ReadFull(kdf, expected[:])
-	require.NoError(t, err)
-	require.True(t, bytes.Equal(secretKey[:], expected[:]))
+	expectedEncryptionKey := deriveExpected(t, rawSecret, info, "encryption")
+	expectedHmacKey := deriveExpected(t, rawSecret, info, "packet-hmac")
+	require.Equal(t, expectedEncryptionKey, secretKey)
+	require.Equal(t, expectedHmacKey, hmacKey)
+	require.NotEqual(t, secretKey, hmacKey)
 }
 
 func TestHkdfDeriver_DeriveKeys_ReturnsValidEphemeralPublicKey(t *testing.T) {
 	deriver := NewHkdfDeriver()
 	_, peerPub := genX25519KeyPair(t)
 
-	_, ephemeralPub, err := deriver.DeriveKeys(&peerPub, []byte("info"))
+	_, _, ephemeralPub, err := deriver.DeriveKeys(&peerPub, []byte("info"))
 	require.NoError(t, err)
 
 	var zero [32]byte
@@ -89,13 +101,14 @@ func TestHkdfDeriver_DeriveKeys_ProducesFreshEphemeralKeyEachCall(t *testing.T) 
 	_, peerPub := genX25519KeyPair(t)
 	info := []byte("session-info")
 
-	secret1, pub1, err := deriver.DeriveKeys(&peerPub, info)
+	secret1, hmac1, pub1, err := deriver.DeriveKeys(&peerPub, info)
 	require.NoError(t, err)
 
-	secret2, pub2, err := deriver.DeriveKeys(&peerPub, info)
+	secret2, hmac2, pub2, err := deriver.DeriveKeys(&peerPub, info)
 	require.NoError(t, err)
 	require.False(t, bytes.Equal(pub1[:], pub2[:]))
 	require.False(t, bytes.Equal(secret1[:], secret2[:]))
+	require.False(t, bytes.Equal(hmac1[:], hmac2[:]))
 }
 
 func TestHkdfDeriver_DeriveKeys_DifferentInfoYieldsDifferentKeys(t *testing.T) {
@@ -108,22 +121,14 @@ func TestHkdfDeriver_DeriveKeys_DifferentInfoYieldsDifferentKeys(t *testing.T) {
 	// alone -- it wouldn't isolate whether info specifically matters.
 	// Instead: derive the raw ECDH secret once, the same way
 	// MatchesManualECDH does, and hold it fixed while varying only info.
-	_, ephemeralPub, err := deriver.DeriveKeys(&peerPub, []byte("context-A"))
+	_, _, ephemeralPub, err := deriver.DeriveKeys(&peerPub, []byte("context-A"))
 	require.NoError(t, err)
 
 	rawSecret, err := curve25519.X25519(peerPriv[:], ephemeralPub[:])
 	require.NoError(t, err)
 
-	derive := func(info []byte) [32]byte {
-		kdf := hkdf.New(sha256.New, rawSecret, nil, info)
-		var out [32]byte
-		_, err := io.ReadFull(kdf, out[:])
-		require.NoError(t, err)
-		return out
-	}
-
-	keyA := derive([]byte("context-A"))
-	keyB := derive([]byte("context-B"))
+	keyA := deriveExpected(t, rawSecret, []byte("context-A"), "encryption")
+	keyB := deriveExpected(t, rawSecret, []byte("context-B"), "encryption")
 	require.False(t, bytes.Equal(keyA[:], keyB[:]))
 
 	// Ties this back to the real implementation: MatchesManualECDH
@@ -137,7 +142,7 @@ func TestHkdfDeriver_DeriveKeys_NilInfoIsAccepted(t *testing.T) {
 	deriver := NewHkdfDeriver()
 	_, peerPub := genX25519KeyPair(t)
 
-	_, _, err := deriver.DeriveKeys(&peerPub, nil)
+	_, _, _, err := deriver.DeriveKeys(&peerPub, nil)
 	require.NoError(t, err)
 }
 
@@ -154,7 +159,7 @@ func TestHkdfDeriver_DeriveKeys_RejectsLowOrderPeerKey(t *testing.T) {
 	deriver := NewHkdfDeriver()
 	var lowOrderPub [32]byte // all-zero
 
-	_, _, err := deriver.DeriveKeys(&lowOrderPub, []byte("info"))
+	_, _, _, err := deriver.DeriveKeys(&lowOrderPub, []byte("info"))
 	require.Error(t, err)
 }
 
@@ -180,29 +185,29 @@ func TestHkdfDeriver_DeriveKeys_SecretIsBoundToIntendedPeer(t *testing.T) {
 	peerBPriv, _ := genX25519KeyPair(t)
 	info := []byte("info")
 
-	secretA, ephemeralPub, err := deriver.DeriveKeys(&peerAPub, info)
+	secretA, hmacA, ephemeralPub, err := deriver.DeriveKeys(&peerAPub, info)
 	require.NoError(t, err)
 
-	deriveAs := func(priv [32]byte) [32]byte {
+	deriveAs := func(priv [32]byte, label string) [32]byte {
 		raw, err := curve25519.X25519(priv[:], ephemeralPub[:])
 		require.NoError(t, err)
-		kdf := hkdf.New(sha256.New, raw, nil, info)
-		var out [32]byte
-		_, err = io.ReadFull(kdf, out[:])
-		require.NoError(t, err)
-		return out
+		return deriveExpected(t, raw, info, label)
 	}
 
 	// The intended recipient (peer A, whose public key was passed to
 	// DeriveKeys) recomputes the exact same secret DeriveKeys returned --
 	// this mirrors MatchesManualECDH.
-	wantA := deriveAs(peerAPriv)
-	require.True(t, bytes.Equal(secretA[:], wantA[:]))
+	wantEncryptionA := deriveAs(peerAPriv, "encryption")
+	wantHmacA := deriveAs(peerAPriv, "packet-hmac")
+	require.Equal(t, wantEncryptionA, secretA)
+	require.Equal(t, wantHmacA, hmacA)
 
 	// Peer B, holding a different private key, gets a different secret
 	// from that same ephemeral public key -- the shared secret is
 	// genuinely bound to the intended recipient's private key, not just
 	// to the ephemeral key or the plaintext info string.
-	secretB := deriveAs(peerBPriv)
-	require.False(t, bytes.Equal(secretA[:], secretB[:]))
+	secretB := deriveAs(peerBPriv, "encryption")
+	hmacB := deriveAs(peerBPriv, "packet-hmac")
+	require.NotEqual(t, secretA, secretB)
+	require.NotEqual(t, hmacA, hmacB)
 }

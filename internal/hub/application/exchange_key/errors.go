@@ -14,26 +14,8 @@
  * limitations under the License.
  */
 
-package entity
+package exchange_key
 
-import (
-	"time"
+import "errors"
 
-	"xxx/internal/hub/domain/device"
-	"xxx/internal/hub/domain/user"
-
-	"gorm.io/gorm"
-)
-
-type Device struct {
-	ID          device.ID `gorm:"primaryKey;autoIncrement:false"`
-	ExternalID  string
-	UserID      user.ID
-	Name        string
-	State       device.State
-	IdentityPub []byte
-	PeerPub     []byte
-	CreatedAt   time.Time `gorm:"->"`
-	UpdatedAt   time.Time `gorm:"<-:update"`
-	DeletedAt   gorm.DeletedAt
-}
+var ErrRequestInvalid = errors.New("invalid client request")

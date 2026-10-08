@@ -56,6 +56,10 @@ const (
 	defaultMaxConns           = 128000
 )
 
+type ctxHolder struct {
+	Session *session.Data
+}
+
 type SendData struct {
 	PackType pbpub.PacketType
 	Msg      proto.Message
@@ -118,7 +122,7 @@ func NewRouter(
 		pool,
 	)
 
-	nItemsPerShard := math.Ceil(float64(cfg.Router.MaxConns / nShards))
+	nItemsPerShard := math.Ceil(float64(r.maxConns / nShards))
 	for i := range nShards {
 		r.conns[i] = swiss.NewTableC2WithCap[device.ID, connection](
 			int(nItemsPerShard),
@@ -138,11 +142,15 @@ func (r *Router) CreateUnactiveConn(
 	secretKey *[32]byte,
 	hmacKey *[32]byte,
 	identityPub []byte,
-) bool {
+) error {
 	meta := r.meta.Add(1)
-	if meta&closed != 0 || meta&(^closed) > (r.maxConns) {
+	if meta&closed != 0 {
 		r.meta.Add(^uint32(0))
-		return false
+		return ErrRouterClosed
+	}
+	if meta&(^closed) > (r.maxConns) {
+		r.meta.Add(^uint32(0))
+		return ErrConnReachMax
 	}
 
 	ss := new(session.Data)
@@ -152,12 +160,12 @@ func (r *Router) CreateUnactiveConn(
 	ss.LastHeartBeat.Store(time.Now().Unix())
 
 	uConn := new(unactiveConn)
-	uConn.SetContext(ss)
+	uConn.SetContext(&ctxHolder{Session: ss})
 	if existence := r.conns[deviceID&mask].Insert(deviceID, uConn); existence {
 		r.meta.Add(^uint32(0))
-		return false
+		return ErrSessionDuplicate
 	}
-	return true
+	return nil
 }
 
 func (r *Router) ActivateConn(
@@ -176,7 +184,7 @@ func (r *Router) ActivateConn(
 		return protocol.ErrSessionNotFound
 	}
 
-	ss := uConn.Context().(*session.Data)
+	ss := uConn.Context().(*ctxHolder).Session
 	if ss.State.Load() == uint32(session.StateActive) {
 		return nil
 	}

@@ -16,12 +16,22 @@
 
 package http
 
-import "xxx/pkg"
+import (
+	"time"
+
+	"xxx/pkg"
+)
 
 type Config struct {
-	Addr          string
-	Auth0Domain   string
-	Auth0Audience string
+	Addr              string
+	Auth0Domain       string
+	Auth0Audience     string
+	CertFile          string
+	KeyFile           string
+	ReadHeaderTimeout time.Duration
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	MaxHeaderBytes    int
 }
 
 func (c *Config) Load(loader pkg.ConfigLoader) {
@@ -31,4 +41,10 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 	c.Addr = loader.GetString("HTTP_SERVER_ADDR")
 	c.Auth0Domain = loader.GetString("HTTP_SERVER_AUTH0_DOMAIN")
 	c.Auth0Audience = loader.GetString("HTTP_SERVER_AUTH0_AUDIENCE")
+	c.CertFile = loader.GetString("HTTP_SERVER_CERT_FILE")
+	c.KeyFile = loader.GetString("HTTP_SERVER_KEY_FILE")
+	c.ReadHeaderTimeout = loader.GetDuration("HTTP_READ_HEADER_TIMEOUT")
+	c.ReadTimeout = loader.GetDuration("HTTP_READ_TIMEOUT")
+	c.WriteTimeout = loader.GetDuration("HTTP_WRITE_TIMEOUT")
+	c.MaxHeaderBytes = loader.GetInt("HTTP_MAX_HEADER_BYTES")
 }

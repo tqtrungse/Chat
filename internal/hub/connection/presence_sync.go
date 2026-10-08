@@ -31,10 +31,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// errSuperseded is returned to a batched request that lost to a newer
-// operation on the same device (see dedupeDeviceOps).
-var errSuperseded = errors.New("device operation superseded")
-
 const (
 	defaultRetryAttempts     = 3
 	defaultBackoffJitterBase = time.Second
@@ -233,7 +229,7 @@ func (s *presenceSync) retryDistCacheOperation(
 		// The circuit breaker is open (or a half-open probe is already
 		// running). Do not retry because another immediate Execute would
 		// only fail with ErrOpen again.
-		if errors.Is(err, CbErrOpen) {
+		if errors.Is(err, ErrCbOpen) {
 			return err
 		}
 

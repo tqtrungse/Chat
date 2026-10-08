@@ -18,15 +18,10 @@ package connection
 
 import (
 	"context"
-	"errors"
 )
 
 // CbState is a type that represents a state of CircuitBreaker.
 type CbState int
-
-// CbErrOpen is returned when the circuit is open, or half-open with a probe
-// already in flight, so the attempt did not run.
-var CbErrOpen = errors.New("cb: circuit breaker open")
 
 // These constants are states of CircuitBreaker.
 const (

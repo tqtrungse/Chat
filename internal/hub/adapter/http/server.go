@@ -43,6 +43,8 @@ type Server struct {
 	auth0        *pkg.Auth0
 	logger       *log.Logger
 	keyExchanger exchange_key.Usecase
+	certFile     string
+	keyFile      string
 }
 
 func NewServer(
@@ -66,29 +68,41 @@ func NewServer(
 		auth0:        auth0,
 		logger:       logger,
 		keyExchanger: keyExchanger,
+		certFile:     cfg.CertFile,
+		keyFile:      cfg.KeyFile,
 	}
 
 	router := chi.NewRouter()
 	router.Use(middleware.Logger)
 	router.Use(middleware.Recoverer)
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			next.ServeHTTP(w, r)
+		})
+	})
 	router.Group(func(r chi.Router) {
 		r.Use(s.authenticate)
 		r.Post("/hub/v1/exchange-key", s.exchangeKey)
 	})
 
 	s.srv = &http.Server{
-		Addr:    cfg.Addr,
-		Handler: router,
+		Addr:              cfg.Addr,
+		Handler:           router,
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		MaxHeaderBytes:    cfg.MaxHeaderBytes,
 	}
 	return s, nil
 }
 
 func (s *Server) Run() error {
-	return s.srv.ListenAndServe()
+	return s.srv.ListenAndServeTLS(s.certFile, s.keyFile)
 }
 
 func (s *Server) Shutdown() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	return s.srv.Shutdown(ctx)
 }

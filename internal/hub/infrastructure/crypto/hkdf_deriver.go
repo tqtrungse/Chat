@@ -20,7 +20,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"errors"
+	"fmt"
 	"io"
 
 	"xxx/internal/hub/application/exchange_key"
@@ -29,11 +29,7 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
-var (
-	zero [32]byte
-
-	ErrKeyDeriverInvalidPubKey = errors.New("invalid peer public key: low-order point")
-)
+var zero [32]byte
 
 type hkdfDeriver struct{}
 
@@ -41,11 +37,20 @@ func NewHkdfDeriver() exchange_key.KeyDeriver {
 	return new(hkdfDeriver)
 }
 
-func (hd *hkdfDeriver) DeriveKeys(peerPub *[32]byte, info []byte) (secretKey [32]byte, pubKey [32]byte, err error) {
+func (hd *hkdfDeriver) DeriveKeys(
+	peerPub *[32]byte,
+	info []byte,
+) (
+	secretKey [32]byte,
+	hmacKey [32]byte,
+	pubKey [32]byte,
+	err error,
+) {
 	// Implement of rand.Read will panic if there is any error.
 	// So we don't need check error.
 	var privateKey [32]byte
 	_, _ = rand.Read(privateKey[:])
+	defer clear(privateKey[:])
 
 	pub, err := curve25519.X25519(privateKey[:], curve25519.Basepoint)
 	if err != nil {
@@ -56,15 +61,35 @@ func (hd *hkdfDeriver) DeriveKeys(peerPub *[32]byte, info []byte) (secretKey [32
 	// PrivateKey, PublicKey, RawSecret and SecretKey are 32 bytes.
 	rawSecret, err := curve25519.X25519(privateKey[:], peerPub[:])
 	if err != nil {
+		err = fmt.Errorf("%w: %v", exchange_key.ErrRequestInvalid, err)
 		return
 	}
+	defer clear(rawSecret)
 
 	if subtle.ConstantTimeCompare(rawSecret, zero[:]) == 1 {
-		err = ErrKeyDeriverInvalidPubKey
+		err = exchange_key.ErrRequestInvalid
 		return
 	}
 
-	kdf := hkdf.New(sha256.New, rawSecret, nil, info)
-	_, err = io.ReadFull(kdf, secretKey[:])
+	secretKey, err = derive32(rawSecret, withLabel(info, "encryption"))
+	if err == nil {
+		hmacKey, err = derive32(rawSecret, withLabel(info, "packet-hmac"))
+	}
 	return
+}
+
+func derive32(secret, info []byte) (key [32]byte, err error) {
+	_, err = io.ReadFull(
+		hkdf.New(sha256.New, secret, nil, info),
+		key[:],
+	)
+	return key, err
+}
+
+func withLabel(base []byte, label string) []byte {
+	info := make([]byte, len(base)+len(label)+1)
+	info[len(base)] = '/'
+	copy(info, base)
+	copy(info[len(base)+1:], label)
+	return info
 }
