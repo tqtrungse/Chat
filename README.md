@@ -1,4 +1,4 @@
-# XXX Chatting Backend
+# Distributed chat backend
 
 > **Status: 🚧 In progress.** Under active development and not production-ready. Architecture and APIs may change. See [Project Status](#project-status) for per-component progress.
 
