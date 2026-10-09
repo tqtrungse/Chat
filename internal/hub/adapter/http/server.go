@@ -38,6 +38,12 @@ import (
 
 const claimsKey string = "claims"
 
+var (
+	errAuthHeaderNotFound = errors.New("missing or invalid Authorization header")
+	errAuthVerify         = errors.New("failed to varify token")
+	errJsonMarshall       = errors.New("failed to marshall JSON")
+)
+
 type Server struct {
 	srv          *http.Server
 	auth0        *pkg.Auth0
@@ -111,7 +117,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
-			s.respondErr(w, http.StatusUnauthorized, errors.New("missing or invalid Authorization header"))
+			s.respondErr(w, http.StatusUnauthorized, errAuthHeaderNotFound)
 			return
 		}
 
@@ -119,7 +125,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		claims, err := s.auth0.Verify(token)
 		if err != nil {
 			s.logger.Error("failed to verify token", zap.Error(err))
-			s.respondErr(w, http.StatusUnauthorized, err)
+			s.respondErr(w, http.StatusUnauthorized, errAuthVerify)
 			return
 		}
 
@@ -134,7 +140,8 @@ func (s *Server) respond(w http.ResponseWriter, v easyjson.Marshaler) {
 
 	v.MarshalEasyJSON(&jw)
 	if jw.Error != nil {
-		s.respondErr(w, http.StatusInternalServerError, jw.Error)
+		s.logger.Error("failed to marshall JSON", zap.Error(jw.Error))
+		s.respondErr(w, http.StatusInternalServerError, errJsonMarshall)
 		return
 	}
 

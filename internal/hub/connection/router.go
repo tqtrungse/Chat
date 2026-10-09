@@ -56,10 +56,6 @@ const (
 	defaultMaxConns           = 128000
 )
 
-type ctxHolder struct {
-	Session *session.Data
-}
-
 type SendData struct {
 	PackType pbpub.PacketType
 	Msg      proto.Message
@@ -160,7 +156,7 @@ func (r *Router) CreateUnactiveConn(
 	ss.LastHeartBeat.Store(time.Now().Unix())
 
 	uConn := new(unactiveConn)
-	uConn.SetContext(&ctxHolder{Session: ss})
+	uConn.SetContext(ss)
 	if existence := r.conns[deviceID&mask].Insert(deviceID, uConn); existence {
 		r.meta.Add(^uint32(0))
 		return ErrSessionDuplicate
@@ -184,7 +180,7 @@ func (r *Router) ActivateConn(
 		return protocol.ErrSessionNotFound
 	}
 
-	ss := uConn.Context().(*ctxHolder).Session
+	ss := uConn.Context().(*session.Data)
 	if ss.State.Load() == uint32(session.StateActive) {
 		return nil
 	}

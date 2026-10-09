@@ -41,22 +41,26 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// ctxHolder wraps the user-defined context so atomic.Pointer has a concrete
+// type, and so nil / mixed dynamic types can be stored (atomic.Value panics on both).
+type ctxHolder struct{ v any }
+
 type conn struct {
-	fd             int                    // file descriptor
-	ctx            atomic.Value           // user-defined context
-	remote         unix.Sockaddr          // remote socket address
-	proto          string                 // protocol name: "tcp", "udp", or "unix".
-	localAddr      net.Addr               // local addr
-	remoteAddr     net.Addr               // remote addr
-	loop           *eventloop             // connected event-loop
-	outboundBuffer buffer.Elastic         // buffer for data that is eligible to be sent to the remote
-	pollAttachment netpoll.PollAttachment // connection attachment for poller
-	inboundBuffer  buffer.Ring            // buffer for leftover data from the remote
-	buffer         []byte                 // buffer for the latest bytes
-	cache          []byte                 // temporary cache for the inbound data
-	isDatagram     bool                   // UDP protocol
-	opened         bool                   // connection opened event fired
-	isEOF          bool                   // whether the connection has reached EOF
+	fd             int                       // file descriptor
+	ctx            atomic.Pointer[ctxHolder] // user-defined context
+	remote         unix.Sockaddr             // remote socket address
+	proto          string                    // protocol name: "tcp", "udp", or "unix".
+	localAddr      net.Addr                  // local addr
+	remoteAddr     net.Addr                  // remote addr
+	loop           *eventloop                // connected event-loop
+	outboundBuffer buffer.Elastic            // buffer for data that is eligible to be sent to the remote
+	pollAttachment netpoll.PollAttachment    // connection attachment for poller
+	inboundBuffer  buffer.Ring               // buffer for leftover data from the remote
+	buffer         []byte                    // buffer for the latest bytes
+	cache          []byte                    // temporary cache for the inbound data
+	isDatagram     bool                      // UDP protocol
+	opened         bool                      // connection opened event fired
+	isEOF          bool                      // whether the connection has reached EOF
 }
 
 // ----------------------------------
@@ -278,10 +282,23 @@ func (c *conn) SetKeepAlive(enabled bool, idle, intvl time.Duration, cnt int) er
 func (c *conn) EventLoop() EventLoop {
 	return c.loop
 }
-func (c *conn) Context() any        { return c.ctx.Load() }
-func (c *conn) SetContext(ctx any)  { c.ctx.Store(ctx) }
-func (c *conn) LocalAddr() net.Addr { return c.localAddr }
 
+func (c *conn) Context() any {
+	if h := c.ctx.Load(); h != nil {
+		return h.v
+	}
+	return nil
+}
+
+func (c *conn) SetContext(ctx any) {
+	if ctx == nil {
+		c.ctx.Store(nil)
+		return
+	}
+	c.ctx.Store(&ctxHolder{v: ctx})
+}
+
+func (c *conn) LocalAddr() net.Addr  { return c.localAddr }
 func (c *conn) RemoteAddr() net.Addr { return c.remoteAddr }
 
 func (c *conn) Wake(callback AsyncCallback) error {
