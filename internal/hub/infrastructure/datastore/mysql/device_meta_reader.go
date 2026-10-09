@@ -51,7 +51,7 @@ func (d *deviceMetaReader) FindDeviceMeta(
 
 	err = tx.
 		WithContext(dbCtx).
-		Select("state", "identity_pub").
+		Select("external_id", "state", "identity_pub").
 		Take(entDevice).
 		Error
 	if err != nil {
@@ -61,6 +61,7 @@ func (d *deviceMetaReader) FindDeviceMeta(
 		return nil, err
 	}
 	return &exchange_key.DeviceMeta{
+		ExternalID:  entDevice.ExternalID,
 		State:       entDevice.State,
 		IdentityPub: entDevice.IdentityPub,
 	}, nil

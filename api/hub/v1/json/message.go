@@ -20,4 +20,7 @@ type ExchangeKeyReq struct {
 
 type ExchangeKeyResp struct {
 	ServerPubKey [32]byte `json:"server_pub_key"`
+
+	// base64; present to the hub within its TTL
+	Ticket []byte `json:"ticket"`
 }

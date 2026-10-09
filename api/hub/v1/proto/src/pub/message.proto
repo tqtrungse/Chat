@@ -34,15 +34,10 @@ enum Code {
 }
 
 message ActiveConnReq {
-  bytes token = 1 [(validate.rules).bytes = {
-    min_len: 8,
-    max_len: 8,
-  }];
-
-  bytes sign = 2 [(validate.rules).bytes = {
-    min_len: 64,
-    max_len: 64,
-  }];
+  bytes token = 1 [(validate.rules).bytes = {min_len: 8, max_len: 8}];
+  bytes sign = 2 [(validate.rules).bytes = {min_len: 64, max_len: 64}];
+  // Ticket returned by exchange-key. `sign` is Ed25519(identityPriv, ticket).
+  bytes ticket = 3 [(validate.rules).bytes = {min_len: 1, max_len: 512}];
 }
 
 message ActiveConnResp {

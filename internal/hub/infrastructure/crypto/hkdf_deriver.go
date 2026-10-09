@@ -24,6 +24,7 @@ import (
 	"io"
 
 	"xxx/internal/hub/application/exchange_key"
+	"xxx/internal/hub/domain/session"
 
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/hkdf"
@@ -40,14 +41,7 @@ func NewHkdfDeriver() exchange_key.KeyDeriver {
 func (hd *hkdfDeriver) DeriveKeys(
 	peerPub *[32]byte,
 	info []byte,
-) (
-	secretKey [32]byte,
-	hmacKey [32]byte,
-	pubKey [32]byte,
-	err error,
-) {
-	// Implement of rand.Read will panic if there is any error.
-	// So we don't need check error.
+) (keys session.Keys, pubKey [32]byte, err error) {
 	var privateKey [32]byte
 	_, _ = rand.Read(privateKey[:])
 	defer clear(privateKey[:])
@@ -58,7 +52,6 @@ func (hd *hkdfDeriver) DeriveKeys(
 	}
 	copy(pubKey[:], pub)
 
-	// PrivateKey, PublicKey, RawSecret and SecretKey are 32 bytes.
 	rawSecret, err := curve25519.X25519(privateKey[:], peerPub[:])
 	if err != nil {
 		err = fmt.Errorf("%w: %v", exchange_key.ErrRequestInvalid, err)
@@ -71,19 +64,29 @@ func (hd *hkdfDeriver) DeriveKeys(
 		return
 	}
 
-	secretKey, err = derive32(rawSecret, withLabel(info, "encryption"))
-	if err == nil {
-		hmacKey, err = derive32(rawSecret, withLabel(info, "packet-hmac"))
+	// transcript = clientPub || serverPub (fixed 64 bytes, unambiguous)
+	var salt [64]byte
+	copy(salt[:32], peerPub[:])
+	copy(salt[32:], pubKey[:])
+
+	prk := hkdf.Extract(sha256.New, rawSecret, salt[:])
+	defer clear(prk)
+
+	for _, k := range []struct {
+		label string
+		out   *[32]byte
+	}{
+		{"c2s/enc", &keys.RecvEnc},
+		{"s2c/enc", &keys.SendEnc},
+		{"c2s/mac", &keys.RecvMac},
+		{"s2c/mac", &keys.SendMac},
+	} {
+		if _, err = io.ReadFull(hkdf.Expand(sha256.New, prk, withLabel(info, k.label)), k.out[:]); err != nil {
+			keys = session.Keys{}
+			return
+		}
 	}
 	return
-}
-
-func derive32(secret, info []byte) (key [32]byte, err error) {
-	_, err = io.ReadFull(
-		hkdf.New(sha256.New, secret, nil, info),
-		key[:],
-	)
-	return key, err
 }
 
 func withLabel(base []byte, label string) []byte {

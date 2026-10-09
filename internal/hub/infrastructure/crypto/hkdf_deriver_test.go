@@ -17,11 +17,13 @@
 package crypto
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"io"
 	"testing"
+
+	"xxx/internal/hub/application/exchange_key"
+	"xxx/internal/hub/domain/session"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/curve25519"
@@ -29,7 +31,7 @@ import (
 )
 
 // genX25519KeyPair generates a random X25519 private/public key pair,
-// standing in for the "peer" side of a handshake in tests.
+// standing in for the "peer" (client) side of a handshake in tests.
 func genX25519KeyPair(t *testing.T) (priv, pub [32]byte) {
 	t.Helper()
 
@@ -42,10 +44,22 @@ func genX25519KeyPair(t *testing.T) (priv, pub [32]byte) {
 	return
 }
 
+// transcriptSalt rebuilds the HKDF salt DeriveKeys uses:
+// clientPub || serverPub (fixed 64 bytes). From DeriveKeys' point of view
+// the peer is the client and the freshly generated ephemeral key is the
+// server's.
+func transcriptSalt(clientPub, serverPub [32]byte) []byte {
+	salt := make([]byte, 0, 64)
+	salt = append(salt, clientPub[:]...)
+	salt = append(salt, serverPub[:]...)
+	return salt
+}
+
 // deriveExpected independently derives one labeled key for the peer-side
-// assertions below. The labels are part of the exchange-key derivation
-// contract and must match the client implementation.
-func deriveExpected(t *testing.T, rawSecret, baseInfo []byte, label string) [32]byte {
+// assertions below: HKDF-Extract(rawSecret, salt) followed by
+// HKDF-Expand(prk, baseInfo + "/" + label). The labels are part of the
+// exchange-key derivation contract and must match the client implementation.
+func deriveExpected(t *testing.T, rawSecret, salt, baseInfo []byte, label string) [32]byte {
 	t.Helper()
 
 	info := make([]byte, 0, len(baseInfo)+1+len(label))
@@ -53,24 +67,84 @@ func deriveExpected(t *testing.T, rawSecret, baseInfo []byte, label string) [32]
 	info = append(info, '/')
 	info = append(info, label...)
 
+	prk := hkdf.Extract(sha256.New, rawSecret, salt)
+
 	var key [32]byte
-	_, err := io.ReadFull(hkdf.New(sha256.New, rawSecret, nil, info), key[:])
+	_, err := io.ReadFull(hkdf.Expand(sha256.New, prk, info), key[:])
 	require.NoError(t, err)
 	return key
+}
+
+// deriveExpectedKeys derives the full session.Keys set the way the server
+// side is expected to hold it. Labels are directional: "c2s" (client to
+// server) is what the server receives, "s2c" is what it sends.
+func deriveExpectedKeys(t *testing.T, rawSecret, salt, info []byte) session.Keys {
+	t.Helper()
+
+	return session.Keys{
+		RecvEnc: deriveExpected(t, rawSecret, salt, info, "c2s/enc"),
+		SendEnc: deriveExpected(t, rawSecret, salt, info, "s2c/enc"),
+		RecvMac: deriveExpected(t, rawSecret, salt, info, "c2s/mac"),
+		SendMac: deriveExpected(t, rawSecret, salt, info, "s2c/mac"),
+	}
+}
+
+type namedKey struct {
+	name string
+	key  [32]byte
+}
+
+func namedKeys(k session.Keys) []namedKey {
+	return []namedKey{
+		{"RecvEnc", k.RecvEnc},
+		{"SendEnc", k.SendEnc},
+		{"RecvMac", k.RecvMac},
+		{"SendMac", k.SendMac},
+	}
+}
+
+// requireAllDistinct asserts that no two of the four derived keys are equal
+// (the per-direction / per-purpose labels must actually separate them).
+func requireAllDistinct(t *testing.T, k session.Keys) {
+	t.Helper()
+
+	nk := namedKeys(k)
+	for i := range nk {
+		for j := i + 1; j < len(nk); j++ {
+			require.NotEqual(t, nk[i].key, nk[j].key, "%s and %s must differ", nk[i].name, nk[j].name)
+		}
+	}
+}
+
+// requireEachDiffers asserts that every key in a differs from its
+// counterpart (same field) in b.
+func requireEachDiffers(t *testing.T, a, b session.Keys) {
+	t.Helper()
+
+	na, nb := namedKeys(a), namedKeys(b)
+	for i := range na {
+		require.NotEqual(t, na[i].key, nb[i].key, "%s must differ", na[i].name)
+	}
 }
 
 // TestHkdfDeriver_DeriveKeys_MatchesManualECDH is the core correctness
 // test: it verifies the full ECDH handshake round-trips. The peer
 // independently recomputes the shared secret using its own private key and
-// the ephemeral public key DeriveKeys returned, then derives a key via
-// HKDF-SHA256 exactly as the implementation does, and checks it matches.
+// the ephemeral public key DeriveKeys returned, rebuilds the transcript salt
+// (clientPub || serverPub), then derives all four keys via HKDF-SHA256
+// exactly as the implementation does, and checks they match.
+//
+// This test is also what pins the salt layout and the label -> field
+// mapping (c2s -> Recv*, s2c -> Send*): if the implementation dropped the
+// salt, swapped its order, or crossed two labels, the expected keys here
+// would no longer match.
 func TestHkdfDeriver_DeriveKeys_MatchesManualECDH(t *testing.T) {
 	deriver := NewHkdfDeriver()
 
 	peerPriv, peerPub := genX25519KeyPair(t)
 	info := []byte("session-info")
 
-	secretKey, hmacKey, ephemeralPub, err := deriver.DeriveKeys(&peerPub, info)
+	keys, ephemeralPub, err := deriver.DeriveKeys(&peerPub, info)
 	require.NoError(t, err)
 
 	// The peer computes the same shared secret from its own private key
@@ -78,22 +152,23 @@ func TestHkdfDeriver_DeriveKeys_MatchesManualECDH(t *testing.T) {
 	rawSecret, err := curve25519.X25519(peerPriv[:], ephemeralPub[:])
 	require.NoError(t, err)
 
-	expectedEncryptionKey := deriveExpected(t, rawSecret, info, "encryption")
-	expectedHmacKey := deriveExpected(t, rawSecret, info, "packet-hmac")
-	require.Equal(t, expectedEncryptionKey, secretKey)
-	require.Equal(t, expectedHmacKey, hmacKey)
-	require.NotEqual(t, secretKey, hmacKey)
+	salt := transcriptSalt(peerPub, ephemeralPub)
+	require.Equal(t, deriveExpectedKeys(t, rawSecret, salt, info), keys)
+	requireAllDistinct(t, keys)
 }
 
 func TestHkdfDeriver_DeriveKeys_ReturnsValidEphemeralPublicKey(t *testing.T) {
 	deriver := NewHkdfDeriver()
-	_, peerPub := genX25519KeyPair(t)
+	peerPriv, peerPub := genX25519KeyPair(t)
 
-	_, _, ephemeralPub, err := deriver.DeriveKeys(&peerPub, []byte("info"))
+	_, ephemeralPub, err := deriver.DeriveKeys(&peerPub, []byte("info"))
 	require.NoError(t, err)
+	require.NotEqual(t, [32]byte{}, ephemeralPub)
 
-	var zero [32]byte
-	require.False(t, bytes.Equal(ephemeralPub[:], zero[:]))
+	// The peer must be able to complete ECDH with it.
+	shared, err := curve25519.X25519(peerPriv[:], ephemeralPub[:])
+	require.NoError(t, err)
+	require.NotEqual(t, make([]byte, 32), shared)
 }
 
 func TestHkdfDeriver_DeriveKeys_ProducesFreshEphemeralKeyEachCall(t *testing.T) {
@@ -101,14 +176,14 @@ func TestHkdfDeriver_DeriveKeys_ProducesFreshEphemeralKeyEachCall(t *testing.T) 
 	_, peerPub := genX25519KeyPair(t)
 	info := []byte("session-info")
 
-	secret1, hmac1, pub1, err := deriver.DeriveKeys(&peerPub, info)
+	keys1, pub1, err := deriver.DeriveKeys(&peerPub, info)
 	require.NoError(t, err)
 
-	secret2, hmac2, pub2, err := deriver.DeriveKeys(&peerPub, info)
+	keys2, pub2, err := deriver.DeriveKeys(&peerPub, info)
 	require.NoError(t, err)
-	require.False(t, bytes.Equal(pub1[:], pub2[:]))
-	require.False(t, bytes.Equal(secret1[:], secret2[:]))
-	require.False(t, bytes.Equal(hmac1[:], hmac2[:]))
+
+	require.NotEqual(t, pub1, pub2)
+	requireEachDiffers(t, keys1, keys2)
 }
 
 func TestHkdfDeriver_DeriveKeys_DifferentInfoYieldsDifferentKeys(t *testing.T) {
@@ -119,30 +194,31 @@ func TestHkdfDeriver_DeriveKeys_DifferentInfoYieldsDifferentKeys(t *testing.T) {
 	// ProducesFreshEphemeralKeyEachCall above), so calling it twice with
 	// just different info would also change the output for that reason
 	// alone -- it wouldn't isolate whether info specifically matters.
-	// Instead: derive the raw ECDH secret once, the same way
-	// MatchesManualECDH does, and hold it fixed while varying only info.
-	_, _, ephemeralPub, err := deriver.DeriveKeys(&peerPub, []byte("context-A"))
+	// Instead: derive the raw ECDH secret and transcript salt once, the same
+	// way MatchesManualECDH does, and hold both fixed while varying only info.
+	keys, ephemeralPub, err := deriver.DeriveKeys(&peerPub, []byte("context-A"))
 	require.NoError(t, err)
 
 	rawSecret, err := curve25519.X25519(peerPriv[:], ephemeralPub[:])
 	require.NoError(t, err)
+	salt := transcriptSalt(peerPub, ephemeralPub)
 
-	keyA := deriveExpected(t, rawSecret, []byte("context-A"), "encryption")
-	keyB := deriveExpected(t, rawSecret, []byte("context-B"), "encryption")
-	require.False(t, bytes.Equal(keyA[:], keyB[:]))
+	keyA := deriveExpected(t, rawSecret, salt, []byte("context-A"), "c2s/enc")
+	keyB := deriveExpected(t, rawSecret, salt, []byte("context-B"), "c2s/enc")
+	require.NotEqual(t, keyA, keyB)
 
-	// Ties this back to the real implementation: MatchesManualECDH
-	// already confirms DeriveKeys' actual output equals this same manual
-	// HKDF(rawSecret, info) computation, so keyA differing from keyB here
-	// means swapping info would genuinely have changed DeriveKeys' output
-	// too -- info isn't being silently ignored.
+	// Ties this back to the real implementation: DeriveKeys' actual output
+	// is the context-A derivation, so keyA differing from keyB means
+	// swapping info would genuinely have changed DeriveKeys' output too --
+	// info isn't being silently ignored.
+	require.Equal(t, keyA, keys.RecvEnc)
 }
 
 func TestHkdfDeriver_DeriveKeys_NilInfoIsAccepted(t *testing.T) {
 	deriver := NewHkdfDeriver()
 	_, peerPub := genX25519KeyPair(t)
 
-	_, _, _, err := deriver.DeriveKeys(&peerPub, nil)
+	_, _, err := deriver.DeriveKeys(&peerPub, nil)
 	require.NoError(t, err)
 }
 
@@ -153,14 +229,16 @@ func TestHkdfDeriver_DeriveKeys_NilInfoIsAccepted(t *testing.T) {
 //
 // Note: golang.org/x/crypto/curve25519's X25519 already returns an error
 // itself for known low-order inputs, so this may be caught before ever
-// reaching the explicit subtle.ConstantTimeCompare check in DeriveKeys --
-// either path is acceptable, the test only asserts that some error occurs.
+// reaching the explicit subtle.ConstantTimeCompare check in DeriveKeys.
+// Both paths surface as exchange_key.ErrRequestInvalid, so the test accepts
+// either, and also checks that no key material leaks out on failure.
 func TestHkdfDeriver_DeriveKeys_RejectsLowOrderPeerKey(t *testing.T) {
 	deriver := NewHkdfDeriver()
 	var lowOrderPub [32]byte // all-zero
 
-	_, _, _, err := deriver.DeriveKeys(&lowOrderPub, []byte("info"))
-	require.Error(t, err)
+	keys, _, err := deriver.DeriveKeys(&lowOrderPub, []byte("info"))
+	require.ErrorIs(t, err, exchange_key.ErrRequestInvalid)
+	require.Equal(t, session.Keys{}, keys)
 }
 
 // TestHkdfDeriver_DeriveKeys_SecretIsBoundToIntendedPeer replaces what was
@@ -177,37 +255,34 @@ func TestHkdfDeriver_DeriveKeys_RejectsLowOrderPeerKey(t *testing.T) {
 // peers independently recompute the shared secret from that same
 // ephemeralPub. The intended peer (A) must land on DeriveKeys' actual
 // output; a different peer (B), holding a different private key, must
-// not. This isolates the peer-key's contribution without needing any
-// internal access to DeriveKeys' ephemeral private key.
+// not. The transcript salt is also held fixed (A's), so the only thing
+// that differs between A and B is the ECDH secret itself. This isolates the
+// peer-key's contribution without needing any internal access to
+// DeriveKeys' ephemeral private key.
 func TestHkdfDeriver_DeriveKeys_SecretIsBoundToIntendedPeer(t *testing.T) {
 	deriver := NewHkdfDeriver()
 	peerAPriv, peerAPub := genX25519KeyPair(t)
 	peerBPriv, _ := genX25519KeyPair(t)
 	info := []byte("info")
 
-	secretA, hmacA, ephemeralPub, err := deriver.DeriveKeys(&peerAPub, info)
+	keys, ephemeralPub, err := deriver.DeriveKeys(&peerAPub, info)
 	require.NoError(t, err)
 
-	deriveAs := func(priv [32]byte, label string) [32]byte {
+	salt := transcriptSalt(peerAPub, ephemeralPub)
+	deriveAs := func(priv [32]byte) session.Keys {
 		raw, err := curve25519.X25519(priv[:], ephemeralPub[:])
 		require.NoError(t, err)
-		return deriveExpected(t, raw, info, label)
+		return deriveExpectedKeys(t, raw, salt, info)
 	}
 
 	// The intended recipient (peer A, whose public key was passed to
-	// DeriveKeys) recomputes the exact same secret DeriveKeys returned --
+	// DeriveKeys) recomputes the exact same keys DeriveKeys returned --
 	// this mirrors MatchesManualECDH.
-	wantEncryptionA := deriveAs(peerAPriv, "encryption")
-	wantHmacA := deriveAs(peerAPriv, "packet-hmac")
-	require.Equal(t, wantEncryptionA, secretA)
-	require.Equal(t, wantHmacA, hmacA)
+	require.Equal(t, deriveAs(peerAPriv), keys)
 
-	// Peer B, holding a different private key, gets a different secret
-	// from that same ephemeral public key -- the shared secret is
-	// genuinely bound to the intended recipient's private key, not just
-	// to the ephemeral key or the plaintext info string.
-	secretB := deriveAs(peerBPriv, "encryption")
-	hmacB := deriveAs(peerBPriv, "packet-hmac")
-	require.NotEqual(t, secretA, secretB)
-	require.NotEqual(t, hmacA, hmacB)
+	// Peer B, holding a different private key, gets different keys from
+	// that same ephemeral public key -- the shared secret is genuinely
+	// bound to the intended recipient's private key, not just to the
+	// ephemeral key, the salt, or the plaintext info string.
+	requireEachDiffers(t, keys, deriveAs(peerBPriv))
 }

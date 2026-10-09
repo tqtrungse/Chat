@@ -79,6 +79,17 @@ func (m *ActiveConnReq) validate(all bool) error {
 		errors = append(errors, err)
 	}
 
+	if l := len(m.GetTicket()); l < 1 || l > 512 {
+		err := ActiveConnReqValidationError{
+			field:  "Ticket",
+			reason: "value length must be between 1 and 512 bytes, inclusive",
+		}
+		if !all {
+			return err
+		}
+		errors = append(errors, err)
+	}
+
 	if len(errors) > 0 {
 		return ActiveConnReqMultiError(errors)
 	}

@@ -18,106 +18,114 @@ package exchange_key
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/binary"
+	"errors"
+	"time"
 
 	"xxx/api/hub/v1/json"
-	"xxx/internal/hub/connection"
 	"xxx/internal/hub/domain/device"
-	"xxx/internal/hub/protocol"
+	"xxx/internal/hub/domain/session"
 
 	"xxx/pkg/database/sql"
-	slicepool "xxx/pkg/pool/slice"
+)
+
+const ticketTTL = 15 * time.Second
+
+var (
+	keyDerivationInfo = []byte("xxx/hub/exchange-key/v1")
+	errIdentityPub    = errors.New("invalid device identity key")
 )
 
 type Usecase interface {
-	Exchange(ctx context.Context, req json.ExchangeKeyReq) (*json.ExchangeKeyResp, error)
+	Exchange(ctx context.Context, subject string, req json.ExchangeKeyReq) (*json.ExchangeKeyResp, error)
 }
-
-var keyDerivationInfo = []byte("xxx/hub/exchange-key/v1")
 
 type keyExchanger struct {
 	db               sql.DB
 	keyDeriver       KeyDeriver
 	deviceMetaReader DeviceMetaReader
-	router           *connection.Router
+	tickets          session.TicketSealer
 }
 
 func New(
 	db sql.DB,
 	keyDeriver KeyDeriver,
 	deviceMetaReader DeviceMetaReader,
-	router *connection.Router,
+	tickets session.TicketSealer,
 ) Usecase {
 	return &keyExchanger{
 		db:               db,
-		deviceMetaReader: deviceMetaReader,
 		keyDeriver:       keyDeriver,
-		router:           router,
+		deviceMetaReader: deviceMetaReader,
+		tickets:          tickets,
 	}
 }
 
 func (ke *keyExchanger) Exchange(
 	ctx context.Context,
+	subject string,
 	req json.ExchangeKeyReq,
 ) (*json.ExchangeKeyResp, error) {
-	var (
-		deviceID   = device.ID(req.DeviceID)
-		deviceMeta *DeviceMeta
-		err        error
-	)
-
-	if req.DeviceID == 0 || len(req.ClientPubKey) != 32 {
+	if req.DeviceID == 0 || len(req.ClientPubKey) != 32 || subject == "" {
 		return nil, ErrRequestInvalid
 	}
 
-	if ke.router.Exist(deviceID) {
-		return nil, protocol.ErrSessionDuplicate
-	}
-
+	var (
+		meta *DeviceMeta
+		err  error
+	)
 	err = ke.db.Transaction(ctx, sql.TxSourcePrimary, func(dbCtx context.Context) error {
-		deviceMeta, err = ke.deviceMetaReader.FindDeviceMeta(dbCtx, deviceID)
+		meta, err = ke.deviceMetaReader.FindDeviceMeta(dbCtx, device.ID(req.DeviceID))
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	if deviceMeta == nil {
-		return nil, protocol.ErrDeviceNotFound
+	// Same error for "not found" and "not yours": no device enumeration.
+	if meta == nil || meta.ExternalID != subject {
+		return nil, ErrDeviceNotFound
+	}
+	if meta.State != device.StateActive {
+		return nil, ErrDeviceUnactive
+	}
+	if len(meta.IdentityPub) != ed25519.PublicKeySize {
+		return nil, errIdentityPub
 	}
 
-	var success bool
-	defer func() {
-		if !success {
-			slicepool.Put(deviceMeta.IdentityPub)
-		}
-	}()
-
-	if deviceMeta.State != device.StateActive {
-		return nil, protocol.ErrDeviceUnactive
-	}
+	info := make([]byte, 0, len(keyDerivationInfo)+8)
+	info = append(info, keyDerivationInfo...)
+	info = binary.LittleEndian.AppendUint64(info, req.DeviceID)
 
 	var (
-		resp      = new(json.ExchangeKeyResp)
-		secretKey [32]byte
-		hmacKey   [32]byte
+		resp = new(json.ExchangeKeyResp)
+		keys session.Keys
 	)
 
-	secretKey, hmacKey, resp.ServerPubKey, err = ke.keyDeriver.DeriveKeys(
-		(*[32]byte)(req.ClientPubKey),
-		keyDerivationInfo,
-	)
+	keys, resp.ServerPubKey, err = ke.keyDeriver.DeriveKeys((*[32]byte)(req.ClientPubKey), info)
 	if err != nil {
 		return nil, err
 	}
 
-	err = ke.router.CreateUnactiveConn(
-		deviceID,
-		&secretKey,
-		&hmacKey,
-		deviceMeta.IdentityPub,
-	)
-	if err == nil {
-		success = true
-		return resp, nil
+	t := &session.Ticket{
+		DeviceID:  req.DeviceID,
+		ExpiresAt: time.Now().Add(ticketTTL).Unix(),
+		Keys:      keys,
 	}
-	return nil, err
+	copy(t.IdentityPub[:], meta.IdentityPub)
+
+	resp.Ticket, err = ke.tickets.Seal(t)
+
+	clear(keys.RecvEnc[:])
+	clear(keys.SendEnc[:])
+	clear(keys.RecvMac[:])
+	clear(keys.SendMac[:])
+	clear(t.Keys.RecvEnc[:])
+	clear(t.Keys.SendEnc[:])
+	clear(t.Keys.RecvMac[:])
+	clear(t.Keys.SendMac[:])
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }

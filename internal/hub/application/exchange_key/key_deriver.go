@@ -16,14 +16,11 @@
 
 package exchange_key
 
+import "xxx/internal/hub/domain/session"
+
 type KeyDeriver interface {
-	DeriveKeys(
-		peerPub *[32]byte,
-		info []byte,
-	) (
-		secretKey [32]byte,
-		hmacKey [32]byte,
-		pubKey [32]byte,
-		err error,
-	)
+	// DeriveKeys
+	// clientPub‖serverPub is bound into the HKDF salt by the implementation.
+	// info carries protocol version + device ID.
+	DeriveKeys(peerPub *[32]byte, info []byte) (keys session.Keys, pubKey [32]byte, err error)
 }

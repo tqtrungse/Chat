@@ -23,9 +23,8 @@ import (
 
 	"xxx/api/hub/v1/json"
 	"xxx/internal/hub/application/exchange_key"
-	"xxx/internal/hub/connection"
-	"xxx/internal/hub/protocol"
 
+	"xxx/pkg"
 	slicepool "xxx/pkg/pool/slice"
 
 	"github.com/mailru/easyjson"
@@ -33,13 +32,23 @@ import (
 )
 
 func (s *Server) exchangeKey(w http.ResponseWriter, r *http.Request) {
+	// ====================================
+	// CLIENT MUST GUARANTEE CONTRACT:
+	//
+	// 1. raw = X25519(clientPriv, serverPub), prk = HKDF-Extract(SHA256, raw, salt = clientPub‖serverPub).
+	// 2. Each key: HKDF-Expand(prk, info = "xxx/hub/exchange-key/v1" ‖ deviceID(8 bytes LE) ‖ "/" ‖ label),
+	//    label ∈ c2s/enc, s2c/enc, c2s/mac, s2c/mac.
+	// 3. Client: send using c2s/*, receive using s2c/*.
+	// 4. Within 20 seconds: TCP sends ActiveConnReq{token=deviceID LE, ticket, sign=Ed25519(identityPriv, ticket)}.
+	// ======================================
+
 	var (
 		err  error
 		req  json.ExchangeKeyReq
 		resp *json.ExchangeKeyResp
 	)
 
-	//claims := r.Context().Value(claimsKey).(*pkg.Auth0Claims)
+	claims := r.Context().Value(claimsKey).(*pkg.Auth0Claims)
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
 	err = easyjson.UnmarshalFromReader(r.Body, &req)
 	if err != nil {
@@ -48,7 +57,7 @@ func (s *Server) exchangeKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err = s.keyExchanger.Exchange(r.Context(), req)
+	resp, err = s.keyExchanger.Exchange(r.Context(), claims.Subject, req)
 	defer slicepool.Put(req.ClientPubKey)
 	if err == nil {
 		s.respond(w, resp)
@@ -57,24 +66,16 @@ func (s *Server) exchangeKey(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Error("failed to exchange key", zap.Error(err))
 
-	if errors.Is(err, protocol.ErrDeviceNotFound) {
+	if errors.Is(err, exchange_key.ErrDeviceNotFound) {
 		s.respondErr(w, http.StatusNotFound, err)
 		return
 	}
-	if errors.Is(err, protocol.ErrDeviceUnactive) {
+	if errors.Is(err, exchange_key.ErrDeviceUnactive) {
 		s.respondErr(w, http.StatusForbidden, err)
 		return
 	}
 	if errors.Is(err, exchange_key.ErrRequestInvalid) {
 		s.respondErr(w, http.StatusBadRequest, err)
-		return
-	}
-	if errors.Is(err, connection.ErrRouterClosed) || errors.Is(err, connection.ErrConnReachMax) {
-		s.respondErr(w, http.StatusServiceUnavailable, err)
-		return
-	}
-	if errors.Is(err, connection.ErrSessionDuplicate) {
-		s.respondErr(w, http.StatusConflict, err)
 		return
 	}
 	s.respondErr(w, http.StatusInternalServerError, fmt.Errorf("internal error"))

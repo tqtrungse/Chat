@@ -58,7 +58,7 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 				f.sqlMock.
 					ExpectQuery(fmt.Sprintf("^%s$", regexp.QuoteMeta(
 						strings.Join([]string{
-							"SELECT `state`,`identity_pub`",
+							"SELECT `external_id`,`state`,`identity_pub`",
 							"FROM `devices`",
 							"WHERE `devices`.`deleted_at` IS NULL AND `devices`.`id` = ?",
 							" LIMIT ?",
@@ -71,10 +71,12 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 					WillReturnRows(
 						sqlmock.
 							NewRows([]string{
+								"external_id",
 								"state",
 								"identity_pub",
 							}).
 							AddRow(
+								"abc-123",
 								device.StateActive,
 								[]byte("123456789"),
 							),
@@ -82,6 +84,7 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 			},
 			args: device.ID(1),
 			expected: &exchange_key.DeviceMeta{
+				ExternalID:  "abc-123",
 				State:       device.StateActive,
 				IdentityPub: []byte("123456789"),
 			},
@@ -92,7 +95,7 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 				f.sqlMock.
 					ExpectQuery(fmt.Sprintf("^%s$", regexp.QuoteMeta(
 						strings.Join([]string{
-							"SELECT `state`,`identity_pub`",
+							"SELECT `external_id`,`state`,`identity_pub`",
 							"FROM `devices`",
 							"WHERE `devices`.`deleted_at` IS NULL AND `devices`.`id` = ?",
 							" LIMIT ?",
@@ -113,7 +116,7 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 				f.sqlMock.
 					ExpectQuery(fmt.Sprintf("^%s$", regexp.QuoteMeta(
 						strings.Join([]string{
-							"SELECT `state`,`identity_pub`",
+							"SELECT `external_id`,`state`,`identity_pub`",
 							"FROM `devices`",
 							"WHERE `devices`.`deleted_at` IS NULL AND `devices`.`id` = ?",
 							" LIMIT ?",

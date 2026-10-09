@@ -34,7 +34,6 @@ import (
 	"xxx/pkg/hash"
 	"xxx/pkg/log"
 	"xxx/pkg/nio"
-	slicepool "xxx/pkg/pool/slice"
 	workerpool "xxx/pkg/pool/worker"
 
 	"go.uber.org/zap"
@@ -51,9 +50,8 @@ const (
 	addDeviceOp Op = 1
 	delDeviceOp Op = 2
 
-	defaultTickerDuration     = time.Second
-	defaultTTLUnactiveSession = 15 * time.Second
-	defaultMaxConns           = 128000
+	defaultTickerDuration = time.Second
+	defaultMaxConns       = 128000
 )
 
 type SendData struct {
@@ -68,21 +66,22 @@ type Router struct {
 	meta atomic.Uint32
 	_    [pkg.CacheLineSize - 4]byte
 
-	signer             Signer
-	ttlUnactiveSession time.Duration
-	tickerDuration     time.Duration
-	maxConns           uint32
-	logger             *log.Logger
-	pool               *workerpool.Pool
-	encoder            *protocol.Encoder
-	presence           *presenceSync
-	conns              [nShards]*swiss.TableC2[device.ID, connection]
+	signer         Signer
+	tickets        session.TicketSealer
+	tickerDuration time.Duration
+	maxConns       uint32
+	logger         *log.Logger
+	pool           *workerpool.Pool
+	encoder        *protocol.Encoder
+	presence       *presenceSync
+	conns          [nShards]*swiss.TableC2[device.ID, nio.Conn]
 }
 
 func NewRouter(
 	rootCtx context.Context,
 	cfg Config,
 	signer Signer,
+	tickets session.TicketSealer,
 	dCache DistributedCache,
 	cb CircuitBreaker,
 	logger *log.Logger,
@@ -90,20 +89,17 @@ func NewRouter(
 	encoder *protocol.Encoder,
 ) *Router {
 	r := &Router{
-		signer:             signer,
-		ttlUnactiveSession: cfg.Router.TtlUnactiveSession,
-		tickerDuration:     cfg.Router.TickerDuration,
-		logger:             logger,
-		pool:               pool,
-		encoder:            encoder,
-		maxConns:           cfg.Router.MaxConns,
+		signer:         signer,
+		tickets:        tickets,
+		tickerDuration: cfg.Router.TickerDuration,
+		logger:         logger,
+		pool:           pool,
+		encoder:        encoder,
+		maxConns:       cfg.Router.MaxConns,
 	}
 
 	if r.tickerDuration <= 0 {
 		r.tickerDuration = defaultTickerDuration
-	}
-	if r.ttlUnactiveSession <= 0 {
-		r.ttlUnactiveSession = defaultTTLUnactiveSession
 	}
 	if r.maxConns == 0 {
 		r.maxConns = defaultMaxConns
@@ -120,7 +116,7 @@ func NewRouter(
 
 	nItemsPerShard := math.Ceil(float64(r.maxConns / nShards))
 	for i := range nShards {
-		r.conns[i] = swiss.NewTableC2WithCap[device.ID, connection](
+		r.conns[i] = swiss.NewTableC2WithCap[device.ID, nio.Conn](
 			int(nItemsPerShard),
 			hash.Int64,
 		)
@@ -128,80 +124,62 @@ func NewRouter(
 	return r
 }
 
-func (r *Router) Exist(deviceID device.ID) bool {
-	_, existence := r.conns[deviceID&mask].Lookup(deviceID)
-	return existence
-}
-
-func (r *Router) CreateUnactiveConn(
-	deviceID device.ID,
-	secretKey *[32]byte,
-	hmacKey *[32]byte,
-	identityPub []byte,
+func (r *Router) ActivateConn(
+	ctx context.Context,
+	token, ticket, sign []byte,
+	conn nio.Conn,
+	callback func(id device.ID),
 ) error {
+	deviceID := device.ID(binary.LittleEndian.Uint64(token))
+
+	t, err := r.tickets.Open(deviceID.Uint64(), ticket)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		clear(t.Keys.RecvEnc[:])
+		clear(t.Keys.SendEnc[:])
+		clear(t.Keys.RecvMac[:])
+		clear(t.Keys.SendMac[:])
+	}()
+
+	// The signature covers the ticket bytes: it's bound to this exchange
+	// (keys + expiry) and can't be replayed against another one.
+	if err = r.signer.Verify(t.IdentityPub[:], ticket, sign); err != nil {
+		return err
+	}
+
+	// Reserve a slot first; give it back if we end up replacing a conn.
 	meta := r.meta.Add(1)
 	if meta&closed != 0 {
 		r.meta.Add(^uint32(0))
 		return ErrRouterClosed
 	}
-	if meta&(^closed) > (r.maxConns) {
+	if meta&^closed > r.maxConns {
 		r.meta.Add(^uint32(0))
 		return ErrConnReachMax
 	}
 
-	ss := new(session.Data)
-	copy(ss.SecretKey[:], secretKey[:])
-	copy(ss.HmacKey[:], hmacKey[:])
-	ss.IdentityPub = identityPub
-	ss.LastHeartBeat.Store(time.Now().Unix())
-
-	uConn := new(unactiveConn)
-	uConn.SetContext(ss)
-	if existence := r.conns[deviceID&mask].Insert(deviceID, uConn); existence {
-		r.meta.Add(^uint32(0))
-		return ErrSessionDuplicate
-	}
-	return nil
-}
-
-func (r *Router) ActivateConn(
-	ctx context.Context,
-	token []byte,
-	sign []byte,
-	conn nio.Conn,
-	callback func(id device.ID),
-) error {
-	var (
-		deviceID         = device.ID(binary.LittleEndian.Uint64(token))
-		uConn, existence = r.conns[deviceID&mask].Lookup(deviceID)
-	)
-
-	if !existence {
-		return protocol.ErrSessionNotFound
-	}
-
-	ss := uConn.Context().(*session.Data)
-	if ss.State.Load() == uint32(session.StateActive) {
-		return nil
-	}
-	if err := r.signer.Verify(ss.IdentityPub, token, sign); err != nil {
-		return err
-	}
-
-	slicepool.Put(ss.IdentityPub)
+	ss := &session.Data{Keys: t.Keys, DeviceID: deviceID}
 	timestamp := time.Now().Unix()
-	ss.IdentityPub = nil
-	ss.DeviceID = deviceID
 	ss.LastHeartBeat.Store(timestamp)
 	ss.State.Store(uint32(session.StateActive))
-	uConn.SetContext(nil)
-	uConn = nil
 
-	// Group sharding is efficient: because the total number of mutexes is large,
-	// even if the overall system contention is high, the load on each individual
-	// mutex remains very small.
 	conn.SetContext(ss)
-	r.conns[deviceID&mask].Update(deviceID, conn)
+	old, existence := r.conns[deviceID&mask].Set(deviceID, conn)
+	switch {
+	case existence && old == conn:
+		r.meta.Add(^uint32(0)) // activated twice on the same conn
+	case existence:
+		// If we flip the old session to Closed first, RemoveConn(old) becomes a
+		// no-op and its slot is inherited by the new conn. If RemoveConn won the
+		// race, it already released the slot and ours stays reserved.
+		if oss, ok := old.Context().(*session.Data); ok &&
+			oss.State.Swap(uint32(session.StateClosed)) != uint32(session.StateClosed) {
+			r.meta.Add(^uint32(0))
+		}
+		r.ForceClose(old)
+	}
 
 	// Sync device presence (device -> this hub) to cache.
 	return r.pool.Submit(func(_ *workerpool.Context) {
@@ -232,20 +210,19 @@ func (r *Router) RemoveConn(ctx context.Context, conn nio.Conn) {
 	// If connection has no context, it just connects and immediately closes while doesn't
 	// send any package. It is not in map, so call connActivator.Deactivate is unnecessary.
 	// We set SO_KEEPALIVE, so when it closed, it will be cleaned up by NIO.
-	connCtx := conn.Context()
-	if connCtx == nil {
+	ss, ok := conn.Context().(*session.Data)
+	// never activated
+	if !ok {
 		return
 	}
-
-	ss := connCtx.(*session.Data)
-	_, existence := r.conns[ss.DeviceID&mask].Delete(ss.DeviceID)
-	if !existence {
+	// Whoever flips Active->Closed owns the cleanup. If ActivateConn replaced
+	// this connection it already flipped it, so we must not touch the map or counter.
+	if ss.State.Swap(uint32(session.StateClosed)) == uint32(session.StateClosed) {
 		return
 	}
-	if ss.State.Load() != uint32(session.StateClosed) {
-		ss.State.Store(uint32(session.StateClosed))
+	if cur, ok := r.conns[ss.DeviceID&mask].Lookup(ss.DeviceID); ok && cur == conn {
+		r.conns[ss.DeviceID&mask].Delete(ss.DeviceID)
 	}
-	// Don't need to update context in conn is nil because nio will do it.
 	r.meta.Add(^uint32(0))
 
 	// Delete device from cache.
@@ -283,17 +260,15 @@ func (r *Router) RemoveConn(ctx context.Context, conn nio.Conn) {
 func (r *Router) Send(deviceID device.ID, data SendData) error {
 	conn, existence := r.conns[deviceID&mask].Lookup(deviceID)
 	if !existence {
-		return protocol.ErrSessionNotFound
+		return ErrSessionNotFound
 	}
-
-	ss := conn.Context().(*session.Data)
-	if ss.State.Load() == uint32(session.StateClosed) {
-		return protocol.ErrSessionClosed
+	ss, ok := conn.Context().(*session.Data)
+	if !ok || ss.State.Load() == uint32(session.StateClosed) {
+		return ErrSessionClosed
 	}
-
 	return send(
-		conn.(nio.Conn),
-		&ss.HmacKey,
+		conn,
+		&ss.Keys.SendMac,
 		r.encoder,
 		data.PackType,
 		data.Msg,
@@ -318,25 +293,25 @@ func (r *Router) Close() {
 }
 
 func (r *Router) Tick() time.Duration {
-	for i := range nShards {
-		r.conns[i].Range(func(deviceID device.ID, conn connection) (goOn bool) {
-			conCtx := conn.Context()
-			if conCtx == nil {
-				return true
-			}
-
-			ss := conCtx.(*session.Data)
-			if ss.State.Load() == uint32(session.StateUnactive) {
-				durationSecs := time.Now().Unix() - ss.LastHeartBeat.Load()
-				if durationSecs >= int64(r.ttlUnactiveSession.Seconds()) {
-					r.conns[i].Delete(deviceID)
-					conn.SetContext(nil)
-					r.meta.Add(^uint32(0))
-				}
-			}
-			return true
-		})
-	}
+	//for i := range nShards {
+	//	r.conns[i].Range(func(deviceID device.ID, conn connection) (goOn bool) {
+	//		conCtx := conn.Context()
+	//		if conCtx == nil {
+	//			return true
+	//		}
+	//
+	//		ss := conCtx.(*session.Data)
+	//		if ss.State.Load() == uint32(session.StateUnactive) {
+	//			durationSecs := time.Now().Unix() - ss.LastHeartBeat.Load()
+	//			if durationSecs >= int64(r.ttlUnactiveSession.Seconds()) {
+	//				r.conns[i].Delete(deviceID)
+	//				conn.SetContext(nil)
+	//				r.meta.Add(^uint32(0))
+	//			}
+	//		}
+	//		return true
+	//	})
+	//}
 	return r.tickerDuration
 }
 

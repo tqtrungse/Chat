@@ -155,9 +155,11 @@ func (Code) EnumDescriptor() ([]byte, []int) {
 }
 
 type ActiveConnReq struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Token         []byte                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
-	Sign          []byte                 `protobuf:"bytes,2,opt,name=sign,proto3" json:"sign,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Token []byte                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	Sign  []byte                 `protobuf:"bytes,2,opt,name=sign,proto3" json:"sign,omitempty"`
+	// Ticket returned by exchange-key. `sign` is Ed25519(identityPriv, ticket).
+	Ticket        []byte `protobuf:"bytes,3,opt,name=ticket,proto3" json:"ticket,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -202,6 +204,13 @@ func (x *ActiveConnReq) GetToken() []byte {
 func (x *ActiveConnReq) GetSign() []byte {
 	if x != nil {
 		return x.Sign
+	}
+	return nil
+}
+
+func (x *ActiveConnReq) GetTicket() []byte {
+	if x != nil {
+		return x.Ticket
 	}
 	return nil
 }
@@ -611,10 +620,12 @@ var File_pub_message_proto protoreflect.FileDescriptor
 
 const file_pub_message_proto_rawDesc = "" +
 	"\n" +
-	"\x11pub/message.proto\x12\x03pub\x1a\x17validate/validate.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"O\n" +
+	"\x11pub/message.proto\x12\x03pub\x1a\x17validate/validate.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"s\n" +
 	"\rActiveConnReq\x12\x1f\n" +
 	"\x05token\x18\x01 \x01(\fB\t\xfaB\x06z\x04\x10\b\x18\bR\x05token\x12\x1d\n" +
-	"\x04sign\x18\x02 \x01(\fB\t\xfaB\x06z\x04\x10@\x18@R\x04sign\"/\n" +
+	"\x04sign\x18\x02 \x01(\fB\t\xfaB\x06z\x04\x10@\x18@R\x04sign\x12\"\n" +
+	"\x06ticket\x18\x03 \x01(\fB\n" +
+	"\xfaB\az\x05\x10\x01\x18\x80\x04R\x06ticket\"/\n" +
 	"\x0eActiveConnResp\x12\x1d\n" +
 	"\x04code\x18\x01 \x01(\x0e2\t.pub.CodeR\x04code\"\x8e\x01\n" +
 	"\n" +

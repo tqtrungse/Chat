@@ -56,7 +56,11 @@ func New(
 	}
 }
 
-func (ca *connActivator) Activate(ctx context.Context, conn nio.Conn, pack []byte) nio.Action {
+func (ca *connActivator) Activate(
+	ctx context.Context,
+	conn nio.Conn,
+	pack []byte,
+) nio.Action {
 	var req pbpub.ActiveConnReq
 	if err := ca.decoder.DecodeActivePack(pack, &req); err != nil {
 		ca.logger.Error("failed to decode active request, force close", zap.Error(err))
@@ -65,6 +69,7 @@ func (ca *connActivator) Activate(ctx context.Context, conn nio.Conn, pack []byt
 	defer func() {
 		slicepool.Put(req.Token)
 		slicepool.Put(req.Sign)
+		slicepool.Put(req.Ticket)
 	}()
 
 	if err := req.Validate(); err != nil {
@@ -75,6 +80,7 @@ func (ca *connActivator) Activate(ctx context.Context, conn nio.Conn, pack []byt
 	err := ca.router.ActivateConn(
 		ctx,
 		req.Token,
+		req.Ticket,
 		req.Sign,
 		conn,
 		func(deviceID device.ID) {

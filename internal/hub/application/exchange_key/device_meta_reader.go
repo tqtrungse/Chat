@@ -23,6 +23,7 @@ import (
 )
 
 type DeviceMeta struct {
+	ExternalID  string
 	State       device.State
 	IdentityPub []byte
 }

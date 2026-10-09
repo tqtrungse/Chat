@@ -18,4 +18,8 @@ package exchange_key
 
 import "errors"
 
-var ErrRequestInvalid = errors.New("invalid client request")
+var (
+	ErrRequestInvalid = errors.New("invalid client request")
+	ErrDeviceNotFound = errors.New("device not found")
+	ErrDeviceUnactive = errors.New("unactive device")
+)

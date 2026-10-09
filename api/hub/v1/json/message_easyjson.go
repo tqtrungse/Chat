@@ -37,6 +37,13 @@ func easyjson4086215fDecodeXxxApiHubV1Json(in *jlexer.Lexer, out *ExchangeKeyRes
 			} else {
 				copy(out.ServerPubKey[:], in.Bytes())
 			}
+		case "ticket":
+			if in.IsNull() {
+				in.Skip()
+				out.Ticket = nil
+			} else {
+				out.Ticket = in.Bytes()
+			}
 		default:
 			in.SkipRecursive()
 		}
@@ -55,6 +62,11 @@ func easyjson4086215fEncodeXxxApiHubV1Json(out *jwriter.Writer, in ExchangeKeyRe
 		const prefix string = ",\"server_pub_key\":"
 		out.RawString(prefix[1:])
 		out.Base64Bytes(in.ServerPubKey[:])
+	}
+	{
+		const prefix string = ",\"ticket\":"
+		out.RawString(prefix)
+		out.Base64Bytes(in.Ticket)
 	}
 	out.RawByte('}')
 }
