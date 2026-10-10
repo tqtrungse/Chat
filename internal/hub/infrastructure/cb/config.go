@@ -50,6 +50,8 @@ type Config struct {
 	// As soon as there is a successful call, the consecutive error counter will be reset to 0.
 	// When the number of consecutive errors reaches the configured threshold, circuit breaker
 	// will switch from CLOSED to OPEN state to stop sending further requests to protect the system.
+	//
+	// Default: 5
 	ConsecutiveFailures uint32
 }
 

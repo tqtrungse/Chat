@@ -26,6 +26,8 @@ import (
 	"github.com/sony/gobreaker/v2"
 )
 
+const defaultConsecutiveFailures = 5
+
 // panicError wraps a value recovered from a panic inside a guarded call.
 // It exists so the breaker's failure classifier (see NewRedisBreaker) can
 // recognize it deterministically and never exclude it from accounting —
@@ -45,13 +47,18 @@ func New(
 	isInfrastructureError func(error) bool,
 	onStateChange func(name string, from, to gobreaker.State),
 ) connection.CircuitBreaker {
+	consecutiveFailures := cfg.ConsecutiveFailures
+	if consecutiveFailures == 0 {
+		consecutiveFailures = defaultConsecutiveFailures
+	}
+
 	settings := gobreaker.Settings{
 		Name:        cfg.Name,
 		MaxRequests: cfg.MaxRequests,
 		Interval:    cfg.Interval,
 		Timeout:     cfg.Timeout,
 		ReadyToTrip: func(c gobreaker.Counts) bool {
-			return c.ConsecutiveFailures >= cfg.ConsecutiveFailures
+			return c.ConsecutiveFailures >= consecutiveFailures
 		},
 		IsExcluded: func(err error) bool {
 			if err == nil {

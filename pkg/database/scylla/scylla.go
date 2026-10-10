@@ -50,10 +50,10 @@ func NewScylla(cfg Config) (
 	if cfg.NumRetries < 0 {
 		cfg.NumRetries = defaultNumRetries
 	}
-	if cfg.ReconnectionBackoffJitterBase < 0 {
+	if cfg.ReconnectionBackoffJitterBase <= 0 {
 		cfg.ReconnectionBackoffJitterBase = defaultReconnectionBackoffJitterBase
 	}
-	if cfg.ReconnectionBackoffJitterCap < 0 {
+	if cfg.ReconnectionBackoffJitterCap <= 0 {
 		cfg.ReconnectionBackoffJitterCap = defaultReconnectionBackoffJitterCap
 	}
 	s = &Scylla{cfg: cfg}

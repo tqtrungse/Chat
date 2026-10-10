@@ -33,11 +33,6 @@ type Config struct {
 
 // RouterConfig configures Router: the connection registry.
 type RouterConfig struct {
-	// TtlUnactiveSession defines time to live of an unactive session.
-	//
-	// Default: 15s
-	TtlUnactiveSession time.Duration
-
 	// TickerDuration defines interval time to the next polling.
 	//
 	// Default: 1s
@@ -85,7 +80,6 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 	if loader == nil {
 		return
 	}
-	c.Router.TtlUnactiveSession = loader.GetDuration("ROUTER_TTL_UNACTIVE_SESSION")
 	c.Router.TickerDuration = loader.GetDuration("ROUTER_TICKER_DURATION")
 	c.Router.MaxConns = loader.GetUint32("ROUTER_MAX_CONNS")
 	c.PresenceSync.BatchSize = loader.GetInt("ROUTER_CACHE_BATCH_SIZE")
