@@ -3,7 +3,8 @@ package session
 import (
 	"sync/atomic"
 
-	"xxx/internal/hub/domain/device"
+	shareddevice "xxx/internal/shared/device"
+	sharedsession "xxx/internal/shared/session"
 )
 
 type State uint32
@@ -14,18 +15,9 @@ const (
 	StateClosed   = State(2)
 )
 
-// Keys are directional, named from the server's point of view:
-// Recv* protects client->server, Send* protects server->client.
-type Keys struct {
-	RecvEnc [32]byte
-	SendEnc [32]byte
-	RecvMac [32]byte
-	SendMac [32]byte
-}
-
 type Data struct {
-	Keys          Keys
-	DeviceID      device.ID
+	Keys          sharedsession.Keys
+	DeviceID      shareddevice.ID
 	LastHeartBeat atomic.Int64
 	State         atomic.Uint32
 }

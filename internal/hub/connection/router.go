@@ -25,9 +25,9 @@ import (
 	"time"
 
 	pbpub "xxx/api/hub/v1/proto/gen/pub"
-	"xxx/internal/hub/domain/device"
 	"xxx/internal/hub/domain/session"
 	"xxx/internal/hub/protocol"
+	shareddevice "xxx/internal/shared/device"
 
 	"xxx/pkg"
 	"xxx/pkg/collection/swiss"
@@ -67,21 +67,21 @@ type Router struct {
 	_    [pkg.CacheLineSize - 4]byte
 
 	signer         Signer
-	tickets        session.TicketSealer
+	ticketIssuer   TicketIssuer
 	tickerDuration time.Duration
 	maxConns       uint32
 	logger         *log.Logger
 	pool           *workerpool.Pool
 	encoder        *protocol.Encoder
 	presence       *presenceSync
-	conns          [nShards]*swiss.TableC2[device.ID, nio.Conn]
+	conns          [nShards]*swiss.TableC2[shareddevice.ID, nio.Conn]
 }
 
 func NewRouter(
 	rootCtx context.Context,
 	cfg Config,
 	signer Signer,
-	tickets session.TicketSealer,
+	ticketIssuer TicketIssuer,
 	dCache DistributedCache,
 	cb CircuitBreaker,
 	logger *log.Logger,
@@ -90,7 +90,7 @@ func NewRouter(
 ) *Router {
 	r := &Router{
 		signer:         signer,
-		tickets:        tickets,
+		ticketIssuer:   ticketIssuer,
 		tickerDuration: cfg.Router.TickerDuration,
 		logger:         logger,
 		pool:           pool,
@@ -116,7 +116,7 @@ func NewRouter(
 
 	nItemsPerShard := math.Ceil(float64(r.maxConns / nShards))
 	for i := range nShards {
-		r.conns[i] = swiss.NewTableC2WithCap[device.ID, nio.Conn](
+		r.conns[i] = swiss.NewTableC2WithCap[shareddevice.ID, nio.Conn](
 			int(nItemsPerShard),
 			hash.Int64,
 		)
@@ -128,11 +128,11 @@ func (r *Router) ActivateConn(
 	ctx context.Context,
 	token, ticket, sign []byte,
 	conn nio.Conn,
-	callback func(id device.ID),
+	callback func(id shareddevice.ID),
 ) error {
-	deviceID := device.ID(binary.LittleEndian.Uint64(token))
+	deviceID := shareddevice.ID(binary.LittleEndian.Uint64(token))
 
-	t, err := r.tickets.Open(deviceID.Uint64(), ticket)
+	t, err := r.ticketIssuer.Open(deviceID.Uint64(), ticket)
 	if err != nil {
 		return err
 	}
@@ -257,7 +257,7 @@ func (r *Router) RemoveConn(ctx context.Context, conn nio.Conn) {
 	}
 }
 
-func (r *Router) Send(deviceID device.ID, data SendData) error {
+func (r *Router) Send(deviceID shareddevice.ID, data SendData) error {
 	conn, existence := r.conns[deviceID&mask].Lookup(deviceID)
 	if !existence {
 		return ErrSessionNotFound
@@ -283,7 +283,7 @@ func (r *Router) MaxConns() uint32 {
 func (r *Router) CurConns() uint32 {
 	currConns := r.meta.Load() &^ closed
 	if currConns >= r.maxConns {
-		return r.maxConns
+		return r.maxConns + 1
 	}
 	return currConns
 }

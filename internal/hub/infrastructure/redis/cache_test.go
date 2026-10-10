@@ -22,10 +22,11 @@ import (
 	"fmt"
 	"testing"
 	"time"
-	"xxx/internal/hub/domain/device"
-	"xxx/pkg/log"
+
+	shareddevice "xxx/internal/shared/device"
 
 	"xxx/pkg"
+	"xxx/pkg/log"
 	slicepool "xxx/pkg/pool/slice"
 
 	"github.com/alicebob/miniredis/v2"
@@ -173,10 +174,10 @@ func TestBatchAddDevices_MultipleBuckets_AllDevicesOwnedCorrectly(t *testing.T) 
 
 	// 4 buckets (testBucketCount), 3 devices per bucket, deliberately out
 	// of bucket order in the input slice.
-	var devices []device.ID
+	var devices []shareddevice.ID
 	for round := range uint64(3) {
 		for b := range uint64(testBucketCount) {
-			devices = append(devices, device.ID(b+round*uint64(testBucketCount)))
+			devices = append(devices, shareddevice.ID(b+round*uint64(testBucketCount)))
 		}
 	}
 
@@ -217,7 +218,7 @@ func TestBatchAddDevices_MultipleBuckets_AllDevicesOwnedCorrectly(t *testing.T) 
 func TestBatchAddDevices_MovesDevicesFromOldHub(t *testing.T) {
 	c, _ := newTestCache(t, 2)
 	ctx := ctxT(t)
-	devices := []device.ID{10, 11, 12, 13}
+	devices := []shareddevice.ID{10, 11, 12, 13}
 
 	for _, dev := range devices {
 		bucket := c.deviceBucket(dev)
@@ -300,12 +301,12 @@ func TestBatchAddDevices_DuplicateDeviceIDs(t *testing.T) {
 	c, _ := newTestCache(t, 9)
 	ctx := ctxT(t)
 
-	devices := []device.ID{1, 5, 1, 9, 5}
+	devices := []shareddevice.ID{1, 5, 1, 9, 5}
 
 	_, err := c.BatchAddDevices(ctx, devices)
 	require.NoError(t, err)
 
-	for _, dev := range []device.ID{1, 5, 9} {
+	for _, dev := range []shareddevice.ID{1, 5, 9} {
 		bucket := c.deviceBucket(dev)
 		key := pkg.Concat(devicesPrefix, uint64(bucket))
 		field := pkg.U64ToBytes(dev.Uint64())
@@ -341,7 +342,7 @@ func TestListHubsByDevices_MixedFoundAndMissing_PreservesInputOrder(t *testing.T
 
 	// Owned devices spread across every bucket; one device (99) is never
 	// registered anywhere, so it must come back as 0.
-	owners := map[device.ID]uint64{0: 10, 1: 20, 2: 30, 3: 40, 5: 50}
+	owners := map[shareddevice.ID]uint64{0: 10, 1: 20, 2: 30, 3: 40, 5: 50}
 	for dev, hub := range owners {
 		bucket := c.deviceBucket(dev)
 		deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
@@ -362,7 +363,7 @@ func TestListHubsByDevices_MixedFoundAndMissing_PreservesInputOrder(t *testing.T
 		require.NoError(t, err)
 	}
 
-	query := []device.ID{5, 99, 0, 3, 1, 2} // shuffled, includes the unregistered one
+	query := []shareddevice.ID{5, 99, 0, 3, 1, 2} // shuffled, includes the unregistered one
 	result, err := c.ListHubsByDevices(ctx, query)
 	require.NoError(t, err)
 	require.Equal(t, len(query), len(result))
@@ -380,9 +381,9 @@ func TestListHubsByDevices_MixedFoundAndMissing_PreservesInputOrder(t *testing.T
 func TestDelDevice_OwnedByCaller_RemovesAndPublishes(t *testing.T) {
 	c, _ := newTestCache(t, 1)
 	ctx := ctxT(t)
-	dev := device.ID(500)
+	dev := shareddevice.ID(500)
 
-	_, err := c.BatchAddDevices(ctx, []device.ID{dev})
+	_, err := c.BatchAddDevices(ctx, []shareddevice.ID{dev})
 	require.NoError(t, err)
 
 	sub := c.rdb.Subscribe(ctx, eventDelDevice)
@@ -390,7 +391,7 @@ func TestDelDevice_OwnedByCaller_RemovesAndPublishes(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = sub.Close() }()
 
-	err = c.BatchDelDevices(ctx, []device.ID{dev})
+	err = c.BatchDelDevices(ctx, []shareddevice.ID{dev})
 	require.NoError(t, err)
 
 	bucket := c.deviceBucket(dev)
@@ -437,7 +438,7 @@ func TestDelDevice_NotOwner_NoOp(t *testing.T) {
 	var (
 		c, _         = newTestCache(t, 2) // caller is hub 2
 		ctx          = ctxT(t)
-		dev          = device.ID(600)
+		dev          = shareddevice.ID(600)
 		bucket       = c.deviceBucket(dev)
 		hubDeviceKey = pkg.Concat(hubDevicesPrefix, uint64(1))
 		deviceKey    = pkg.Concat(devicesPrefix, uint64(bucket))
@@ -465,7 +466,7 @@ func TestDelDevice_NotOwner_NoOp(t *testing.T) {
 	).Err()
 	require.NoError(t, err)
 
-	err = c.BatchDelDevices(ctx, []device.ID{dev})
+	err = c.BatchDelDevices(ctx, []shareddevice.ID{dev})
 	require.NoError(t, err)
 
 	owner, err := c.rdb.HGet(
@@ -489,18 +490,18 @@ func TestBatchDelDevices_MixedOwnershipDeletesOnlyOwnedDevices(t *testing.T) {
 
 	otherCache := sharedCache(t, mr, 2)
 
-	owned1 := device.ID(1)
-	other := device.ID(2)
-	owned2 := device.ID(3)
-	missing := device.ID(4)
+	owned1 := shareddevice.ID(1)
+	other := shareddevice.ID(2)
+	owned2 := shareddevice.ID(3)
+	missing := shareddevice.ID(4)
 
-	_, err := c.BatchAddDevices(ctx, []device.ID{owned1, owned2})
+	_, err := c.BatchAddDevices(ctx, []shareddevice.ID{owned1, owned2})
 	require.NoError(t, err)
 
-	_, err = otherCache.BatchAddDevices(ctx, []device.ID{other})
+	_, err = otherCache.BatchAddDevices(ctx, []shareddevice.ID{other})
 	require.NoError(t, err)
 
-	require.NoError(t, c.BatchDelDevices(ctx, []device.ID{
+	require.NoError(t, c.BatchDelDevices(ctx, []shareddevice.ID{
 		owned1,
 		other,
 		owned2,
@@ -509,7 +510,7 @@ func TestBatchDelDevices_MixedOwnershipDeletesOnlyOwnedDevices(t *testing.T) {
 
 	result, err := c.ListHubsByDevices(
 		ctx,
-		[]device.ID{owned1, other, owned2, missing},
+		[]shareddevice.ID{owned1, other, owned2, missing},
 	)
 	require.NoError(t, err)
 
@@ -529,9 +530,9 @@ func TestReapHub_DrainsDevicesAcrossBuckets(t *testing.T) {
 	c, _ := newTestCache(t, 1)
 	ctx := ctxT(t)
 
-	var devices []device.ID
+	var devices []shareddevice.ID
 	for i := range uint64(20) {
-		devices = append(devices, device.ID(i))
+		devices = append(devices, shareddevice.ID(i))
 	}
 
 	_, err := c.BatchAddDevices(ctx, devices)
@@ -586,7 +587,7 @@ func TestReapHub_LeavesReclaimedDeviceAlone(t *testing.T) {
 	var (
 		c, _          = newTestCache(t, 1)
 		ctx           = ctxT(t)
-		dev           = device.ID(700)
+		dev           = shareddevice.ID(700)
 		bucket        = c.deviceBucket(dev)
 		hubDeviceKey  = pkg.Concat(hubDevicesPrefix, uint64(1))
 		hubDeviceKey2 = pkg.Concat(hubDevicesPrefix, uint64(2))
@@ -703,9 +704,9 @@ func TestReapHub_DrainsDevicesAcrossMultipleBatches(t *testing.T) {
 
 	c.reapBatchSize = 3
 
-	var devices []device.ID
+	var devices []shareddevice.ID
 	for i := range uint64(10) {
-		devices = append(devices, device.ID(i))
+		devices = append(devices, shareddevice.ID(i))
 	}
 
 	_, err := c.BatchAddDevices(ctx, devices)
@@ -794,25 +795,25 @@ func TestOnDelDeviceEvent_ReceivesOtherHubsDelete_FiltersSelf(t *testing.T) {
 	ctx := ctxT(t)
 
 	other := sharedCache(t, mr, 2)
-	dev := device.ID(42)
-	_, err := other.BatchAddDevices(ctx, []device.ID{dev})
+	dev := shareddevice.ID(42)
+	_, err := other.BatchAddDevices(ctx, []shareddevice.ID{dev})
 	require.NoError(t, err)
 
 	attachHandlerSubs(t, c, ctx)
 
 	type call struct {
 		hubID uint64
-		dev   device.ID
+		dev   shareddevice.ID
 	}
 
 	got := make(chan call, 1)
-	c.callbacks.OnDeviceDeleted = func(hubID uint64, deviceID device.ID) {
+	c.callbacks.OnDeviceDeleted = func(hubID uint64, deviceID shareddevice.ID) {
 		got <- call{hubID, deviceID}
 	}
 
 	go c.handleEvents(ctx)
 
-	err = other.BatchDelDevices(ctx, []device.ID{dev})
+	err = other.BatchDelDevices(ctx, []shareddevice.ID{dev})
 	require.NoError(t, err)
 
 	select {
@@ -824,9 +825,9 @@ func TestOnDelDeviceEvent_ReceivesOtherHubsDelete_FiltersSelf(t *testing.T) {
 	}
 
 	// After receiving an event from another hub, Hub 1 deletes its own device.
-	_, err = c.BatchAddDevices(ctx, []device.ID{999})
+	_, err = c.BatchAddDevices(ctx, []shareddevice.ID{999})
 	require.NoError(t, err)
-	err = c.BatchDelDevices(ctx, []device.ID{999})
+	err = c.BatchDelDevices(ctx, []shareddevice.ID{999})
 	require.NoError(t, err)
 
 	select {
@@ -874,7 +875,7 @@ func TestStart_PingFailure_ReturnsErrorAndClosesRedis(t *testing.T) {
 func TestStart_Success_RegistersHubAndSubscribes(t *testing.T) {
 	c, _ := newTestCache(t, 1)
 	c.callbacks.OnHubDeleted = func(hubID uint64) {}
-	c.callbacks.OnDeviceDeleted = func(hubID uint64, deviceID device.ID) {}
+	c.callbacks.OnDeviceDeleted = func(hubID uint64, deviceID shareddevice.ID) {}
 	ctx := ctxT(t)
 
 	require.NoError(t, c.start(ctx))
@@ -921,7 +922,7 @@ func TestStart_CrossInstance_DelEventPropagates(t *testing.T) {
 		}
 		delCh := make(chan uint64, 4)
 		c.callbacks.OnHubDeleted = func(hubID uint64) { delCh <- hubID }
-		c.callbacks.OnDeviceDeleted = func(uint64, device.ID) {}
+		c.callbacks.OnDeviceDeleted = func(uint64, shareddevice.ID) {}
 
 		require.NoError(t, c.start(ctx))
 		t.Cleanup(func() { _ = c.close() })
@@ -946,7 +947,7 @@ func TestStop_AfterStart_StopsBackgroundHandlerAndClosesRedis(t *testing.T) {
 	ctx := ctxT(t)
 
 	c.callbacks.OnHubDeleted = func(uint64) {}
-	c.callbacks.OnDeviceDeleted = func(uint64, device.ID) {}
+	c.callbacks.OnDeviceDeleted = func(uint64, shareddevice.ID) {}
 
 	require.NoError(t, c.start(ctx))
 

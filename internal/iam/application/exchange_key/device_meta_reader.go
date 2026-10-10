@@ -14,29 +14,21 @@
  * limitations under the License.
  */
 
-package message
+package exchange_key
 
 import (
-	"xxx/internal/hub/domain/channel"
+	"context"
+
+	"xxx/internal/iam/domain/device"
 	shareddevice "xxx/internal/shared/device"
 )
 
-type ID uint64
-
-func (id ID) Uint64() uint64 {
-	return uint64(id)
+type DeviceMeta struct {
+	ExternalID  string
+	State       device.State
+	IdentityPub []byte
 }
 
-// Date
-// Format yyyymmdd
-type Date uint32
-
-type Offline struct {
-	DeviceID       shareddevice.ID
-	SenderDeviceID shareddevice.ID
-	DayBucket      Date
-	MsgID          ID
-	ChannelID      channel.ID
-	DedupKey       uint64
-	Payload        []byte
+type DeviceMetaReader interface {
+	FindDeviceMeta(dbCtx context.Context, deviceID shareddevice.ID) (*DeviceMeta, error)
 }

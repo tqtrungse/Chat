@@ -14,29 +14,25 @@
  * limitations under the License.
  */
 
-package message
+package main
 
 import (
-	"xxx/internal/hub/domain/channel"
-	shareddevice "xxx/internal/shared/device"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"xxx/cmd/iam/bootstrap"
 )
 
-type ID uint64
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-func (id ID) Uint64() uint64 {
-	return uint64(id)
-}
-
-// Date
-// Format yyyymmdd
-type Date uint32
-
-type Offline struct {
-	DeviceID       shareddevice.ID
-	SenderDeviceID shareddevice.ID
-	DayBucket      Date
-	MsgID          ID
-	ChannelID      channel.ID
-	DedupKey       uint64
-	Payload        []byte
+	if err := bootstrap.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		_, _ = fmt.Fprintln(os.Stderr, "IAM stopped:", err)
+		os.Exit(1)
+	}
 }

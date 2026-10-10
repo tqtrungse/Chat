@@ -1,2 +1,2 @@
 /infrastructure/root-ca/
-/cmd/hub/.prod.env
+/cmd/iam/.local

@@ -20,11 +20,11 @@ import (
 	"context"
 	"time"
 
-	"xxx/internal/hub/connection"
-	"xxx/internal/hub/domain/device"
-	"xxx/internal/hub/protocol"
-
 	pbpub "xxx/api/hub/v1/proto/gen/pub"
+	"xxx/internal/hub/connection"
+	"xxx/internal/hub/protocol"
+	shareddevice "xxx/internal/shared/device"
+
 	"xxx/pkg/log"
 	"xxx/pkg/nio"
 	slicepool "xxx/pkg/pool/slice"
@@ -83,7 +83,7 @@ func (ca *connActivator) Activate(
 		req.Ticket,
 		req.Sign,
 		conn,
-		func(deviceID device.ID) {
+		func(deviceID shareddevice.ID) {
 			err := ca.router.Send(
 				deviceID,
 				connection.SendData{

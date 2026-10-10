@@ -19,8 +19,8 @@ package connection
 import (
 	"context"
 
-	"xxx/internal/hub/domain/device"
 	"xxx/internal/hub/domain/message"
+	shareddevice "xxx/internal/shared/device"
 )
 
 type MsgReader interface {
@@ -40,7 +40,7 @@ type MsgReader interface {
 	ListOfflineMsgs(
 		ctx context.Context,
 		state []byte,
-		deviceID device.ID,
+		deviceID shareddevice.ID,
 		dayBucket message.Date,
 	) (msgs []message.Offline, nextState []byte, err error)
 }

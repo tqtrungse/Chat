@@ -30,8 +30,8 @@ import (
 	"time"
 
 	"xxx/internal/hub/connection"
-	"xxx/internal/hub/domain/device"
 	"xxx/internal/hub/domain/message"
+	shareddevice "xxx/internal/shared/device"
 
 	"xxx/pkg"
 	"xxx/pkg/log"
@@ -72,7 +72,7 @@ const (
 
 type Callbacks struct {
 	OnHubDeleted    func(hubID uint64)
-	OnDeviceDeleted func(hubID uint64, deviceID device.ID)
+	OnDeviceDeleted func(hubID uint64, deviceID shareddevice.ID)
 
 	// OnSelfReaped is called if this hub detects it may have been reaped by
 	// another instance while disconnected from cache service for longer than
@@ -199,7 +199,7 @@ func (c *cache) ReapHub(ctx context.Context) error {
 // indicates that a device has no registered hub.
 func (c *cache) ListHubsByDevices(
 	ctx context.Context,
-	deviceIDs []device.ID,
+	deviceIDs []shareddevice.ID,
 ) ([]uint64, error) {
 	if len(deviceIDs) == 0 {
 		return []uint64{}, nil
@@ -381,8 +381,8 @@ func (c *cache) IsInfraError(err error) bool {
 // script so the device registry and this hub's device set remain consistent.
 func (c *cache) BatchAddDevices(
 	ctx context.Context,
-	deviceIDs []device.ID,
-) (map[device.ID][]message.Date, error) {
+	deviceIDs []shareddevice.ID,
+) (map[shareddevice.ID][]message.Date, error) {
 	if len(deviceIDs) == 0 {
 		return nil, nil
 	}
@@ -392,7 +392,7 @@ func (c *cache) BatchAddDevices(
 		bHubID       = pkg.U64ToBytes(c.hubID)
 		byBucket     = make(map[uint32][]int) // bucket -> indices to deviceIDs
 		order        = make([]uint32, 0)
-		flattened    = make([]device.ID, 0, len(deviceIDs)) // The device order after flattening follows the bucket pattern, matching the ARGV.
+		flattened    = make([]shareddevice.ID, 0, len(deviceIDs)) // The device order after flattening follows the bucket pattern, matching the ARGV.
 	)
 
 	for i, id := range deviceIDs {
@@ -463,7 +463,7 @@ func (c *cache) BatchAddDevices(
 		return nil, fmt.Errorf("batchAddDevices: pending count mismatch: got %d, want %d", len(pendingRaw), len(flattened))
 	}
 
-	pending := make(map[device.ID][]message.Date, len(pendingRaw))
+	pending := make(map[shareddevice.ID][]message.Date, len(pendingRaw))
 	for idx, p := range pendingRaw {
 		// Use flattened[idx] instead of decoding the deviceID the script returns —
 		// The order Lua returns ensures a match with the Go flatten order.
@@ -510,7 +510,7 @@ func (c *cache) BatchAddDevices(
 // precomputed here rather than built in Lua.
 func (c *cache) BatchDelDevices(
 	ctx context.Context,
-	deviceIDs []device.ID,
+	deviceIDs []shareddevice.ID,
 ) error {
 	if len(deviceIDs) == 0 {
 		return nil
@@ -987,7 +987,7 @@ func (c *cache) handleEvents(ctx context.Context) {
 			if hubID != c.hubID {
 				c.callbacks.OnDeviceDeleted(
 					hubID,
-					device.ID(binary.LittleEndian.Uint64(buf[:8])),
+					shareddevice.ID(binary.LittleEndian.Uint64(buf[:8])),
 				)
 			}
 
@@ -1024,7 +1024,7 @@ func (c *cache) handleEvents(ctx context.Context) {
 }
 
 // deviceBucket returns the registry bucket for deviceID.
-func (c *cache) deviceBucket(deviceID device.ID) uint32 {
+func (c *cache) deviceBucket(deviceID shareddevice.ID) uint32 {
 	return uint32(deviceID.Uint64() % uint64(c.deviceBucketCount))
 }
 

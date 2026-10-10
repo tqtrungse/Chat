@@ -14,29 +14,27 @@
  * limitations under the License.
  */
 
-package message
+package entity
 
 import (
-	"xxx/internal/hub/domain/channel"
+	"time"
+
+	"xxx/internal/iam/domain/device"
+	"xxx/internal/iam/domain/user"
 	shareddevice "xxx/internal/shared/device"
+
+	"gorm.io/gorm"
 )
 
-type ID uint64
-
-func (id ID) Uint64() uint64 {
-	return uint64(id)
-}
-
-// Date
-// Format yyyymmdd
-type Date uint32
-
-type Offline struct {
-	DeviceID       shareddevice.ID
-	SenderDeviceID shareddevice.ID
-	DayBucket      Date
-	MsgID          ID
-	ChannelID      channel.ID
-	DedupKey       uint64
-	Payload        []byte
+type Device struct {
+	ID          shareddevice.ID `gorm:"primaryKey;autoIncrement:false"`
+	ExternalID  string
+	UserID      user.ID
+	Name        string
+	State       device.State
+	IdentityPub []byte
+	PeerPub     []byte
+	CreatedAt   time.Time `gorm:"->"`
+	UpdatedAt   time.Time `gorm:"<-:update"`
+	DeletedAt   gorm.DeletedAt
 }

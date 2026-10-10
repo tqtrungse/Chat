@@ -18,8 +18,8 @@ package connection
 
 import (
 	"xxx/api/hub/v1/proto/gen/pub"
-	"xxx/internal/hub/domain/device"
 	"xxx/internal/hub/protocol"
+	shareddevice "xxx/internal/shared/device"
 
 	"xxx/pkg/batcher"
 	"xxx/pkg/nio"
@@ -95,7 +95,7 @@ import (
 //}
 
 type deviceOp struct {
-	DeviceID  device.ID
+	DeviceID  shareddevice.ID
 	Timestamp int64
 	Op        Op
 }
@@ -157,15 +157,15 @@ func sendS(
 // assuming the operation is valid.
 func dedupeDeviceOps(reqs []batcher.Req[deviceOp]) (
 	isLatest []bool,
-	addDevices []device.ID,
-	delDevices []device.ID,
+	addDevices []shareddevice.ID,
+	delDevices []shareddevice.ID,
 ) {
 	type deviceOpMetadata struct {
 		idx       int
 		timestamp int64
 	}
 
-	latest := make(map[device.ID]deviceOpMetadata, len(reqs))
+	latest := make(map[shareddevice.ID]deviceOpMetadata, len(reqs))
 
 	for idx, req := range reqs {
 		deviceID := req.Data.DeviceID
@@ -182,8 +182,8 @@ func dedupeDeviceOps(reqs []batcher.Req[deviceOp]) (
 	}
 
 	isLatest = make([]bool, len(reqs))
-	addDevices = make([]device.ID, 0, len(latest))
-	delDevices = make([]device.ID, 0, len(latest))
+	addDevices = make([]shareddevice.ID, 0, len(latest))
+	delDevices = make([]shareddevice.ID, 0, len(latest))
 
 	for _, meta := range latest {
 		idx := meta.idx

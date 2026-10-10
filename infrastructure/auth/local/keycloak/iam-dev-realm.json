@@ -1,0 +1,47 @@
+{
+  "realm": "iam-dev",
+  "enabled": true,
+  "clients": [
+    {
+      "clientId": "iam-test",
+      "name": "IAM local test client",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "iam-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "iam-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "id": "3b9d9b54-a335-4b75-a6dc-82eec0f8eaad",
+      "username": "iam-test",
+      "email": "iam-test@example.com",
+      "firstName": "IAM",
+      "lastName": "Test",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "iam-test-password",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

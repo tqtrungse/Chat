@@ -19,8 +19,8 @@ package connection
 import (
 	"context"
 
-	"xxx/internal/hub/domain/device"
 	"xxx/internal/hub/domain/message"
+	shareddevice "xxx/internal/shared/device"
 )
 
 type DistributedCache interface {
@@ -30,15 +30,15 @@ type DistributedCache interface {
 	// BatchAddDevices
 	//
 	// deviceIDs must contain unique device IDs.
-	BatchAddDevices(ctx context.Context, deviceIDs []device.ID) (map[device.ID][]message.Date, error)
+	BatchAddDevices(ctx context.Context, deviceIDs []shareddevice.ID) (map[shareddevice.ID][]message.Date, error)
 
 	// BatchDelDevices
 	//
 	// deviceIDs must contain unique device IDs.
-	BatchDelDevices(ctx context.Context, deviceIDs []device.ID) error
+	BatchDelDevices(ctx context.Context, deviceIDs []shareddevice.ID) error
 
 	// ListHubsByDevices looks up the owning hubID for each deviceID.
-	ListHubsByDevices(ctx context.Context, deviceIDs []device.ID) ([]uint64, error)
+	ListHubsByDevices(ctx context.Context, deviceIDs []shareddevice.ID) ([]uint64, error)
 
 	IsInfraError(err error) bool
 }

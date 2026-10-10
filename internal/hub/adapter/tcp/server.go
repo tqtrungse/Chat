@@ -155,7 +155,7 @@ func (s *Server) OnTraffic(conn nio.Conn) nio.Action {
 
 	switch pub.PacketType(packType) {
 	case pub.PacketType_REQ_ACTIVE_CONN:
-		return s.activator.Activate(s.ctx, conn, pack[2:])
+		return s.activator.Activate(s.ctx, conn, pack[4:])
 
 	case pub.PacketType_REQ_SEND_MSG:
 		return s.sender.Send(conn, pack[2:])

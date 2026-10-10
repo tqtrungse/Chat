@@ -22,9 +22,9 @@ import (
 
 	"xxx/internal/hub/connection"
 	"xxx/internal/hub/domain/channel"
-	"xxx/internal/hub/domain/device"
 	"xxx/internal/hub/domain/message"
 	"xxx/internal/hub/infrastructure/datastore/scylla/entity"
+	sharedevice "xxx/internal/shared/device"
 
 	"xxx/pkg/database/scylla"
 
@@ -68,7 +68,7 @@ func NewMsgReader(
 func (m *msgReader) ListOfflineMsgs(
 	ctx context.Context,
 	state []byte,
-	deviceID device.ID,
+	deviceID sharedevice.ID,
 	dayBucket message.Date,
 ) ([]message.Offline, []byte, error) {
 	m.buildQueryOne.Do(m.buildQuery)
@@ -92,7 +92,7 @@ func (m *msgReader) ListOfflineMsgs(
 		}
 		msgs = append(msgs, message.Offline{
 			DeviceID:       deviceID,
-			SenderDeviceID: device.ID(om.SenderDeviceID),
+			SenderDeviceID: sharedevice.ID(om.SenderDeviceID),
 			DayBucket:      dayBucket,
 			MsgID:          message.ID(om.MsgID),
 			ChannelID:      channel.ID(om.ChannelID),
