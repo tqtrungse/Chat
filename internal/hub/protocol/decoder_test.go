@@ -38,8 +38,8 @@ func randomNonce(t *testing.T) [12]byte {
 	return n
 }
 
-// buildPlainPacket constructs a packet in the exact format documented for
-// Encode/Decode. Used to build fixtures independent of Encode() itself, so
+// buildPlainPacket constructs a framed packet in the exact format documented
+// for Encode/Decode. Used to build fixtures independent of Encode() itself, so
 // Decode() tests aren't coupled to Encode()'s own correctness.
 func buildPlainPacket(
 	t *testing.T,
@@ -54,9 +54,11 @@ func buildPlainPacket(
 		t.Fatalf("failed to marshal message: %v", err)
 	}
 
-	buf := make([]byte, 4, 4+len(pbBytes)+len(expand)+32)
-	binary.LittleEndian.PutUint16(buf[:2], uint16(packType))
-	binary.LittleEndian.PutUint16(buf[2:4], uint16(len(pbBytes)))
+	frameSize := 36 + len(pbBytes) + len(expand)
+	buf := make([]byte, 6, 6+len(pbBytes)+len(expand)+32)
+	binary.LittleEndian.PutUint16(buf[:2], uint16(frameSize))
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(packType))
+	binary.LittleEndian.PutUint16(buf[4:6], uint16(len(pbBytes)))
 	buf = append(buf, pbBytes...)
 	buf = append(buf, expand...)
 
@@ -82,18 +84,48 @@ func buildSecurePacket(
 	if err != nil {
 		t.Fatalf("failed to marshal message: %v", err)
 	}
-	sealed, err := ch.Seal(secretKey, &nonce, pbBytes, expand)
+	cipherSize := ch.Size(len(pbBytes))
+	frameSize := 16 + cipherSize + len(expand)
+	aad := securePacketAADForTest(uint16(frameSize), uint16(packType), uint16(cipherSize), expand)
+	sealed, err := ch.Seal(secretKey, &nonce, pbBytes, aad)
 	if err != nil {
 		t.Fatalf("Seal failed: %v", err)
 	}
 
-	buf := make([]byte, 16, 16+len(sealed)+len(expand))
-	binary.LittleEndian.PutUint16(buf[:2], uint16(packType))
-	copy(buf[2:14], nonce[:])
-	binary.LittleEndian.PutUint16(buf[14:16], uint16(len(sealed)))
+	buf := make([]byte, 18, 18+len(sealed)+len(expand))
+	binary.LittleEndian.PutUint16(buf[:2], uint16(frameSize))
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(packType))
+	copy(buf[4:16], nonce[:])
+	binary.LittleEndian.PutUint16(buf[16:18], uint16(len(sealed)))
 	buf = append(buf, sealed...)
 	buf = append(buf, expand...)
 	return buf
+}
+
+func securePacketAADForTest(frameSize, packType, cipherSize uint16, expand []byte) []byte {
+	const domain = "xxx/hub/packet/gcm/v1\x00"
+	aad := make([]byte, len(domain)+6+len(expand))
+	copy(aad, domain)
+	header := aad[len(domain) : len(domain)+6]
+	binary.LittleEndian.PutUint16(header[:2], frameSize)
+	binary.LittleEndian.PutUint16(header[2:4], packType)
+	binary.LittleEndian.PutUint16(header[4:6], cipherSize)
+	copy(aad[len(domain)+6:], expand)
+	return aad
+}
+
+// buildActivationPacket matches the TCP activation framing: frame length |
+// packet type | protobuf, without an inner protobuf-size field.
+func buildActivationPacket(t *testing.T, packType pbpub.PacketType, msg proto.Message) []byte {
+	t.Helper()
+	pbBytes, err := proto.Marshal(msg)
+	if err != nil {
+		t.Fatalf("failed to marshal activation message: %v", err)
+	}
+	packet := make([]byte, 4, 4+len(pbBytes))
+	binary.LittleEndian.PutUint16(packet[:2], uint16(2+len(pbBytes)))
+	binary.LittleEndian.PutUint16(packet[2:4], uint16(packType))
+	return append(packet, pbBytes...)
 }
 
 // runRecovered calls fn and converts any panic into a controlled test
@@ -111,15 +143,26 @@ func runRecovered(t *testing.T, name string, fn func()) {
 }
 
 func TestDecoder_DecodeActivePack_Success(t *testing.T) {
-	Decoder := NewDecoder(NewMockSecureChannel())
-
-	in := new(pbpub.ActiveConnReq)
-	plain, err := proto.Marshal(in)
-	require.NoError(t, err)
+	d := NewDecoder(NewMockSecureChannel())
+	in := &pbpub.ActiveConnReq{
+		Token:  []byte("12345678"),
+		Sign:   bytes.Repeat([]byte{1}, 64),
+		Ticket: []byte{2},
+	}
+	packet := buildActivationPacket(t, pbpub.PacketType_REQ_ACTIVE_CONN, in)
 
 	out := new(pbpub.ActiveConnReq)
-	err = Decoder.DecodeActivePack(plain, out)
-	require.NoError(t, err)
+	require.NoError(t, d.DecodeActivePack(packet[4:], out))
+	require.True(t, proto.Equal(in, out))
+}
+
+func TestDecoder_DecodeActiveProofPack_Success(t *testing.T) {
+	d := NewDecoder(NewMockSecureChannel())
+	in := &pbpub.ActiveConnProofReq{Proof: bytes.Repeat([]byte{1}, 32)}
+	packet := buildActivationPacket(t, pbpub.PacketType_REQ_ACTIVE_CONN_PROOF, in)
+
+	out := new(pbpub.ActiveConnProofReq)
+	require.NoError(t, d.DecodeActiveProofPack(packet[4:], out))
 	require.True(t, proto.Equal(in, out))
 }
 
@@ -185,7 +228,7 @@ func TestDecoder_Decode_RejectsTamperedHMAC(t *testing.T) {
 		msg,
 		[]byte("x"),
 	)
-	packet[0] ^= 0xFF // tamper a header byte covered by the HMAC
+	packet[2] ^= 0xFF // tamper the packet type, which is covered by the HMAC
 
 	_, _, code, err := d.Decode(hmacKey, packet)
 	require.Error(t, err)
@@ -229,7 +272,7 @@ func TestDecoder_Decode_UnrecognizedPacketType(t *testing.T) {
 
 	_, _, code, err := d.Decode(hmacKey, packet)
 	require.Error(t, err)
-	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_SIZE, code)
+	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_TYPE, code)
 }
 
 func TestDecoder_Decode_TooShortPacket_ReturnsErrorNotPanic(t *testing.T) {
@@ -245,6 +288,23 @@ func TestDecoder_Decode_TooShortPacket_ReturnsErrorNotPanic(t *testing.T) {
 		_, _, code, err = d.Decode(hmacKey, shortPacket)
 	})
 	require.Error(t, err)
+	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_SIZE, code)
+}
+
+func TestDecoder_Decode_RejectsInconsistentFrameLength(t *testing.T) {
+	d := NewDecoder(NewMockSecureChannel())
+	hmacKey := randomKey(t)
+	packet := buildPlainPacket(
+		t,
+		hmacKey,
+		pbpub.PacketType_REQ_ACTIVE_CONN,
+		new(pbpub.ActiveConnReq),
+		nil,
+	)
+	binary.LittleEndian.PutUint16(packet[:2], uint16(len(packet)-1))
+
+	_, _, code, err := d.Decode(hmacKey, packet)
+	require.ErrorIs(t, err, ErrPkgSizeInvalid)
 	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_SIZE, code)
 }
 
@@ -267,7 +327,7 @@ func TestDecoder_Decode_PbSizeLiesAboutLength(t *testing.T) {
 	// actually available. This also invalidates the HMAC, but the goal is
 	// to confirm the pbSize bounds-check path doesn't panic even if it
 	// were reached.
-	binary.LittleEndian.PutUint16(packet[2:4], 60000)
+	binary.LittleEndian.PutUint16(packet[4:6], 60000)
 
 	var (
 		code pbpub.Code
@@ -325,7 +385,7 @@ func TestDecoder_DecodeS_RejectsTamperedCiphertext(t *testing.T) {
 		msg,
 		nil,
 	)
-	packet[16] ^= 0xFF // flip a bit inside the ciphertext
+	packet[18] ^= 0xFF // flip a bit inside the ciphertext
 
 	_, _, code, err := Decoder.DecodeS(secretKey, packet)
 	require.Error(t, err)
@@ -427,7 +487,7 @@ func TestDecoder_DecodeS_InvalidCipherSize_TooSmall(t *testing.T) {
 		msg,
 		nil,
 	)
-	binary.LittleEndian.PutUint16(packet[14:16], 10) // <= fakeTagSize, must be rejected
+	binary.LittleEndian.PutUint16(packet[16:18], 10) // <= fakeTagSize, must be rejected
 
 	_, _, code, err := d.DecodeS(secretKey, packet)
 	require.Error(t, err)
@@ -451,6 +511,26 @@ func TestDecoder_DecodeS_TooShortPacket_ReturnsErrorNotPanic(t *testing.T) {
 	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_SIZE, code)
 }
 
+func TestDecoder_DecodeS_RejectsInconsistentFrameLength(t *testing.T) {
+	ch := NewMockSecureChannel()
+	d := NewDecoder(ch)
+	secretKey := randomKey(t)
+	packet := buildSecurePacket(
+		t,
+		ch,
+		secretKey,
+		randomNonce(t),
+		pbpub.PacketType_REQ_SEND_MSG,
+		new(pbpub.SendMsgReq),
+		nil,
+	)
+	binary.LittleEndian.PutUint16(packet[:2], uint16(len(packet)-1))
+
+	_, _, code, err := d.DecodeS(secretKey, packet)
+	require.ErrorIs(t, err, ErrPkgSizeInvalid)
+	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_SIZE, code)
+}
+
 func TestDecoder_DecodeS_CipherSizeExceedsPacket_ReturnsErrorNotPanic(t *testing.T) {
 	ch := NewMockSecureChannel()
 	b := NewDecoder(ch)
@@ -467,7 +547,7 @@ func TestDecoder_DecodeS_CipherSizeExceedsPacket_ReturnsErrorNotPanic(t *testing
 		msg,
 		nil,
 	)
-	binary.LittleEndian.PutUint16(packet[14:16], 60000) // far beyond remaining data
+	binary.LittleEndian.PutUint16(packet[16:18], 60000) // far beyond remaining data
 
 	var (
 		code pbpub.Code

@@ -99,32 +99,38 @@ func (ke *keyExchanger) Exchange(
 	info = binary.LittleEndian.AppendUint64(info, req.DeviceID)
 
 	var (
-		resp = new(json.ExchangeKeyResp)
-		keys sharedsession.Keys
+		resp    = new(json.ExchangeKeyResp)
+		derived DerivedKeys
 	)
 
-	keys, resp.ServerPubKey, err = ke.keyDeriver.DeriveKeys((*[32]byte)(req.ClientPubKey), info)
+	derived, resp.ServerPubKey, err = ke.keyDeriver.DeriveKeys((*[32]byte)(req.ClientPubKey), info)
 	if err != nil {
 		return nil, err
 	}
 
 	t := &sharedsession.Ticket{
-		DeviceID:  req.DeviceID,
-		ExpiresAt: time.Now().Add(ticketTTL).Unix(),
-		Keys:      keys,
+		DeviceID:      req.DeviceID,
+		ExpiresAt:     time.Now().Add(ticketTTL).Unix(),
+		Keys:          derived.Session,
+		ActivationKey: derived.Activation,
 	}
 	copy(t.IdentityPub[:], meta.IdentityPub)
 
 	resp.Ticket, err = ke.ticketIssuer.Seal(t)
 
-	clear(keys.RecvEnc[:])
-	clear(keys.SendEnc[:])
-	clear(keys.RecvMac[:])
-	clear(keys.SendMac[:])
+	// Delete temporary key copies after sealing.
+	clear(derived.Session.RecvEnc[:])
+	clear(derived.Session.SendEnc[:])
+	clear(derived.Session.RecvMac[:])
+	clear(derived.Session.SendMac[:])
+	clear(derived.Activation[:])
+
 	clear(t.Keys.RecvEnc[:])
 	clear(t.Keys.SendEnc[:])
 	clear(t.Keys.RecvMac[:])
 	clear(t.Keys.SendMac[:])
+	clear(t.ActivationKey[:])
+
 	if err != nil {
 		return nil, err
 	}

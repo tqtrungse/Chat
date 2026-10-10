@@ -26,15 +26,17 @@ const (
 type PacketType int32
 
 const (
-	PacketType_UNKNOWN                PacketType = 0
-	PacketType_REQ_ACTIVE_CONN        PacketType = 1
-	PacketType_REQ_SEND_MSG           PacketType = 2
-	PacketType_REQ_DIRECT_FORWARD_MSG PacketType = 3
-	PacketType_REQ_BROKER_FORWARD_MSG PacketType = 4
-	PacketType_REQ_ACK_RECV_MSG       PacketType = 5
-	PacketType_RESP_ACTIVE_CONN       PacketType = 501
-	PacketType_RESP_SEND_MSG          PacketType = 502
-	PacketType_RESP_ACK_RECV_MSG      PacketType = 503
+	PacketType_UNKNOWN                    PacketType = 0
+	PacketType_REQ_ACTIVE_CONN            PacketType = 1
+	PacketType_REQ_ACTIVE_CONN_PROOF      PacketType = 2
+	PacketType_REQ_SEND_MSG               PacketType = 3
+	PacketType_REQ_DIRECT_FORWARD_MSG     PacketType = 4
+	PacketType_REQ_BROKER_FORWARD_MSG     PacketType = 5
+	PacketType_REQ_ACK_RECV_MSG           PacketType = 6
+	PacketType_RESP_ACTIVE_CONN           PacketType = 501
+	PacketType_RESP_ACTIVE_CONN_CHALLENGE PacketType = 502
+	PacketType_RESP_SEND_MSG              PacketType = 503
+	PacketType_RESP_ACK_RECV_MSG          PacketType = 504
 )
 
 // Enum value maps for PacketType.
@@ -42,24 +44,28 @@ var (
 	PacketType_name = map[int32]string{
 		0:   "UNKNOWN",
 		1:   "REQ_ACTIVE_CONN",
-		2:   "REQ_SEND_MSG",
-		3:   "REQ_DIRECT_FORWARD_MSG",
-		4:   "REQ_BROKER_FORWARD_MSG",
-		5:   "REQ_ACK_RECV_MSG",
+		2:   "REQ_ACTIVE_CONN_PROOF",
+		3:   "REQ_SEND_MSG",
+		4:   "REQ_DIRECT_FORWARD_MSG",
+		5:   "REQ_BROKER_FORWARD_MSG",
+		6:   "REQ_ACK_RECV_MSG",
 		501: "RESP_ACTIVE_CONN",
-		502: "RESP_SEND_MSG",
-		503: "RESP_ACK_RECV_MSG",
+		502: "RESP_ACTIVE_CONN_CHALLENGE",
+		503: "RESP_SEND_MSG",
+		504: "RESP_ACK_RECV_MSG",
 	}
 	PacketType_value = map[string]int32{
-		"UNKNOWN":                0,
-		"REQ_ACTIVE_CONN":        1,
-		"REQ_SEND_MSG":           2,
-		"REQ_DIRECT_FORWARD_MSG": 3,
-		"REQ_BROKER_FORWARD_MSG": 4,
-		"REQ_ACK_RECV_MSG":       5,
-		"RESP_ACTIVE_CONN":       501,
-		"RESP_SEND_MSG":          502,
-		"RESP_ACK_RECV_MSG":      503,
+		"UNKNOWN":                    0,
+		"REQ_ACTIVE_CONN":            1,
+		"REQ_ACTIVE_CONN_PROOF":      2,
+		"REQ_SEND_MSG":               3,
+		"REQ_DIRECT_FORWARD_MSG":     4,
+		"REQ_BROKER_FORWARD_MSG":     5,
+		"REQ_ACK_RECV_MSG":           6,
+		"RESP_ACTIVE_CONN":           501,
+		"RESP_ACTIVE_CONN_CHALLENGE": 502,
+		"RESP_SEND_MSG":              503,
+		"RESP_ACK_RECV_MSG":          504,
 	}
 )
 
@@ -259,6 +265,101 @@ func (x *ActiveConnResp) GetCode() Code {
 	return Code_SUCCESS
 }
 
+type ActiveConnProofReq struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// proof = HMAC-SHA256(activation_key,
+	//   "xxx/hub/activate-proof/v1\0" || transcript || nonce).
+	Proof         []byte `protobuf:"bytes,1,opt,name=proof,proto3" json:"proof,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ActiveConnProofReq) Reset() {
+	*x = ActiveConnProofReq{}
+	mi := &file_pub_message_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActiveConnProofReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActiveConnProofReq) ProtoMessage() {}
+
+func (x *ActiveConnProofReq) ProtoReflect() protoreflect.Message {
+	mi := &file_pub_message_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActiveConnProofReq.ProtoReflect.Descriptor instead.
+func (*ActiveConnProofReq) Descriptor() ([]byte, []int) {
+	return file_pub_message_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ActiveConnProofReq) GetProof() []byte {
+	if x != nil {
+		return x.Proof
+	}
+	return nil
+}
+
+type ActiveConnChallengeResp struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// transcript = SHA256("xxx/hub/activate/v1\0" ||
+	//   LE32(len(token)) || token || LE32(len(ticket)) || ticket ||
+	//   LE32(len(sign)) || sign).
+	// nonce is fresh and valid only on the TCP connection that requested it.
+	// All integer lengths in this transcript use little-endian encoding.
+	Nonce         []byte `protobuf:"bytes,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ActiveConnChallengeResp) Reset() {
+	*x = ActiveConnChallengeResp{}
+	mi := &file_pub_message_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActiveConnChallengeResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActiveConnChallengeResp) ProtoMessage() {}
+
+func (x *ActiveConnChallengeResp) ProtoReflect() protoreflect.Message {
+	mi := &file_pub_message_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActiveConnChallengeResp.ProtoReflect.Descriptor instead.
+func (*ActiveConnChallengeResp) Descriptor() ([]byte, []int) {
+	return file_pub_message_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ActiveConnChallengeResp) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
 // ------------------------------------------------------------------------------------------------------------------------------------------
 // | MsgType |   Nonce   | CipherSize | Cipher |                                  Expand                                                    |
 // ------------------------------------------------------------------------------------------------------------------------------------------
@@ -277,7 +378,7 @@ type SendMsgReq struct {
 
 func (x *SendMsgReq) Reset() {
 	*x = SendMsgReq{}
-	mi := &file_pub_message_proto_msgTypes[2]
+	mi := &file_pub_message_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -289,7 +390,7 @@ func (x *SendMsgReq) String() string {
 func (*SendMsgReq) ProtoMessage() {}
 
 func (x *SendMsgReq) ProtoReflect() protoreflect.Message {
-	mi := &file_pub_message_proto_msgTypes[2]
+	mi := &file_pub_message_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -302,7 +403,7 @@ func (x *SendMsgReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendMsgReq.ProtoReflect.Descriptor instead.
 func (*SendMsgReq) Descriptor() ([]byte, []int) {
-	return file_pub_message_proto_rawDescGZIP(), []int{2}
+	return file_pub_message_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SendMsgReq) GetChannelId() uint64 {
@@ -336,7 +437,7 @@ type SendMsgResp struct {
 
 func (x *SendMsgResp) Reset() {
 	*x = SendMsgResp{}
-	mi := &file_pub_message_proto_msgTypes[3]
+	mi := &file_pub_message_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -348,7 +449,7 @@ func (x *SendMsgResp) String() string {
 func (*SendMsgResp) ProtoMessage() {}
 
 func (x *SendMsgResp) ProtoReflect() protoreflect.Message {
-	mi := &file_pub_message_proto_msgTypes[3]
+	mi := &file_pub_message_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -361,7 +462,7 @@ func (x *SendMsgResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendMsgResp.ProtoReflect.Descriptor instead.
 func (*SendMsgResp) Descriptor() ([]byte, []int) {
-	return file_pub_message_proto_rawDescGZIP(), []int{3}
+	return file_pub_message_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *SendMsgResp) GetChannelId() uint64 {
@@ -396,7 +497,7 @@ type DirectForwardMsgReq struct {
 
 func (x *DirectForwardMsgReq) Reset() {
 	*x = DirectForwardMsgReq{}
-	mi := &file_pub_message_proto_msgTypes[4]
+	mi := &file_pub_message_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -408,7 +509,7 @@ func (x *DirectForwardMsgReq) String() string {
 func (*DirectForwardMsgReq) ProtoMessage() {}
 
 func (x *DirectForwardMsgReq) ProtoReflect() protoreflect.Message {
-	mi := &file_pub_message_proto_msgTypes[4]
+	mi := &file_pub_message_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -421,7 +522,7 @@ func (x *DirectForwardMsgReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DirectForwardMsgReq.ProtoReflect.Descriptor instead.
 func (*DirectForwardMsgReq) Descriptor() ([]byte, []int) {
-	return file_pub_message_proto_rawDescGZIP(), []int{4}
+	return file_pub_message_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *DirectForwardMsgReq) GetSendDeviceId() uint64 {
@@ -464,7 +565,7 @@ type BrokerForwardMsgReq struct {
 
 func (x *BrokerForwardMsgReq) Reset() {
 	*x = BrokerForwardMsgReq{}
-	mi := &file_pub_message_proto_msgTypes[5]
+	mi := &file_pub_message_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -476,7 +577,7 @@ func (x *BrokerForwardMsgReq) String() string {
 func (*BrokerForwardMsgReq) ProtoMessage() {}
 
 func (x *BrokerForwardMsgReq) ProtoReflect() protoreflect.Message {
-	mi := &file_pub_message_proto_msgTypes[5]
+	mi := &file_pub_message_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -489,7 +590,7 @@ func (x *BrokerForwardMsgReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BrokerForwardMsgReq.ProtoReflect.Descriptor instead.
 func (*BrokerForwardMsgReq) Descriptor() ([]byte, []int) {
-	return file_pub_message_proto_rawDescGZIP(), []int{5}
+	return file_pub_message_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *BrokerForwardMsgReq) GetSendDeviceId() uint64 {
@@ -530,7 +631,7 @@ type AckRecvMsgReq struct {
 
 func (x *AckRecvMsgReq) Reset() {
 	*x = AckRecvMsgReq{}
-	mi := &file_pub_message_proto_msgTypes[6]
+	mi := &file_pub_message_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -542,7 +643,7 @@ func (x *AckRecvMsgReq) String() string {
 func (*AckRecvMsgReq) ProtoMessage() {}
 
 func (x *AckRecvMsgReq) ProtoReflect() protoreflect.Message {
-	mi := &file_pub_message_proto_msgTypes[6]
+	mi := &file_pub_message_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -555,7 +656,7 @@ func (x *AckRecvMsgReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AckRecvMsgReq.ProtoReflect.Descriptor instead.
 func (*AckRecvMsgReq) Descriptor() ([]byte, []int) {
-	return file_pub_message_proto_rawDescGZIP(), []int{6}
+	return file_pub_message_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AckRecvMsgReq) GetChannelId() uint64 {
@@ -581,7 +682,7 @@ type AckRecvMsgResp struct {
 
 func (x *AckRecvMsgResp) Reset() {
 	*x = AckRecvMsgResp{}
-	mi := &file_pub_message_proto_msgTypes[7]
+	mi := &file_pub_message_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -593,7 +694,7 @@ func (x *AckRecvMsgResp) String() string {
 func (*AckRecvMsgResp) ProtoMessage() {}
 
 func (x *AckRecvMsgResp) ProtoReflect() protoreflect.Message {
-	mi := &file_pub_message_proto_msgTypes[7]
+	mi := &file_pub_message_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -606,7 +707,7 @@ func (x *AckRecvMsgResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AckRecvMsgResp.ProtoReflect.Descriptor instead.
 func (*AckRecvMsgResp) Descriptor() ([]byte, []int) {
-	return file_pub_message_proto_rawDescGZIP(), []int{7}
+	return file_pub_message_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *AckRecvMsgResp) GetCode() Code {
@@ -627,7 +728,11 @@ const file_pub_message_proto_rawDesc = "" +
 	"\x06ticket\x18\x03 \x01(\fB\n" +
 	"\xfaB\az\x05\x10\x01\x18\x80\x04R\x06ticket\"/\n" +
 	"\x0eActiveConnResp\x12\x1d\n" +
-	"\x04code\x18\x01 \x01(\x0e2\t.pub.CodeR\x04code\"\x8e\x01\n" +
+	"\x04code\x18\x01 \x01(\x0e2\t.pub.CodeR\x04code\"3\n" +
+	"\x12ActiveConnProofReq\x12\x1d\n" +
+	"\x05proof\x18\x01 \x01(\fB\a\xfaB\x04z\x02h R\x05proof\"8\n" +
+	"\x17ActiveConnChallengeResp\x12\x1d\n" +
+	"\x05nonce\x18\x01 \x01(\fB\a\xfaB\x04z\x02h R\x05nonce\"\x8e\x01\n" +
 	"\n" +
 	"SendMsgReq\x12&\n" +
 	"\n" +
@@ -655,18 +760,20 @@ const file_pub_message_proto_rawDesc = "" +
 	"channel_id\x18\x01 \x01(\x04B\a\xfaB\x042\x02(\x01R\tchannelId\x12\x1e\n" +
 	"\x06msg_id\x18\x02 \x01(\x04B\a\xfaB\x042\x02(\x01R\x05msgId\"/\n" +
 	"\x0eAckRecvMsgResp\x12\x1d\n" +
-	"\x04code\x18\x01 \x01(\x0e2\t.pub.CodeR\x04code*\xd1\x01\n" +
+	"\x04code\x18\x01 \x01(\x0e2\t.pub.CodeR\x04code*\x8d\x02\n" +
 	"\n" +
 	"PacketType\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x13\n" +
-	"\x0fREQ_ACTIVE_CONN\x10\x01\x12\x10\n" +
-	"\fREQ_SEND_MSG\x10\x02\x12\x1a\n" +
-	"\x16REQ_DIRECT_FORWARD_MSG\x10\x03\x12\x1a\n" +
-	"\x16REQ_BROKER_FORWARD_MSG\x10\x04\x12\x14\n" +
-	"\x10REQ_ACK_RECV_MSG\x10\x05\x12\x15\n" +
-	"\x10RESP_ACTIVE_CONN\x10\xf5\x03\x12\x12\n" +
-	"\rRESP_SEND_MSG\x10\xf6\x03\x12\x16\n" +
-	"\x11RESP_ACK_RECV_MSG\x10\xf7\x03*\xb5\x01\n" +
+	"\x0fREQ_ACTIVE_CONN\x10\x01\x12\x19\n" +
+	"\x15REQ_ACTIVE_CONN_PROOF\x10\x02\x12\x10\n" +
+	"\fREQ_SEND_MSG\x10\x03\x12\x1a\n" +
+	"\x16REQ_DIRECT_FORWARD_MSG\x10\x04\x12\x1a\n" +
+	"\x16REQ_BROKER_FORWARD_MSG\x10\x05\x12\x14\n" +
+	"\x10REQ_ACK_RECV_MSG\x10\x06\x12\x15\n" +
+	"\x10RESP_ACTIVE_CONN\x10\xf5\x03\x12\x1f\n" +
+	"\x1aRESP_ACTIVE_CONN_CHALLENGE\x10\xf6\x03\x12\x12\n" +
+	"\rRESP_SEND_MSG\x10\xf7\x03\x12\x16\n" +
+	"\x11RESP_ACK_RECV_MSG\x10\xf8\x03*\xb5\x01\n" +
 	"\x04Code\x12\v\n" +
 	"\aSUCCESS\x10\x00\x12\x19\n" +
 	"\x15ERR_INVALID_PACK_TYPE\x10\x01\x12\x19\n" +
@@ -690,18 +797,20 @@ func file_pub_message_proto_rawDescGZIP() []byte {
 }
 
 var file_pub_message_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_pub_message_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_pub_message_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_pub_message_proto_goTypes = []any{
-	(PacketType)(0),             // 0: pub.PacketType
-	(Code)(0),                   // 1: pub.Code
-	(*ActiveConnReq)(nil),       // 2: pub.ActiveConnReq
-	(*ActiveConnResp)(nil),      // 3: pub.ActiveConnResp
-	(*SendMsgReq)(nil),          // 4: pub.SendMsgReq
-	(*SendMsgResp)(nil),         // 5: pub.SendMsgResp
-	(*DirectForwardMsgReq)(nil), // 6: pub.DirectForwardMsgReq
-	(*BrokerForwardMsgReq)(nil), // 7: pub.BrokerForwardMsgReq
-	(*AckRecvMsgReq)(nil),       // 8: pub.AckRecvMsgReq
-	(*AckRecvMsgResp)(nil),      // 9: pub.AckRecvMsgResp
+	(PacketType)(0),                 // 0: pub.PacketType
+	(Code)(0),                       // 1: pub.Code
+	(*ActiveConnReq)(nil),           // 2: pub.ActiveConnReq
+	(*ActiveConnResp)(nil),          // 3: pub.ActiveConnResp
+	(*ActiveConnProofReq)(nil),      // 4: pub.ActiveConnProofReq
+	(*ActiveConnChallengeResp)(nil), // 5: pub.ActiveConnChallengeResp
+	(*SendMsgReq)(nil),              // 6: pub.SendMsgReq
+	(*SendMsgResp)(nil),             // 7: pub.SendMsgResp
+	(*DirectForwardMsgReq)(nil),     // 8: pub.DirectForwardMsgReq
+	(*BrokerForwardMsgReq)(nil),     // 9: pub.BrokerForwardMsgReq
+	(*AckRecvMsgReq)(nil),           // 10: pub.AckRecvMsgReq
+	(*AckRecvMsgResp)(nil),          // 11: pub.AckRecvMsgResp
 }
 var file_pub_message_proto_depIdxs = []int32{
 	1, // 0: pub.ActiveConnResp.code:type_name -> pub.Code
@@ -724,7 +833,7 @@ func file_pub_message_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pub_message_proto_rawDesc), len(file_pub_message_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

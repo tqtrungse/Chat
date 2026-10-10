@@ -139,32 +139,43 @@ func (s *Server) OnTraffic(conn nio.Conn) nio.Action {
 	}
 
 	size := binary.LittleEndian.Uint16(header)
-	if size == 0 || size+2 > s.cfg.ReadBufferCap {
-		s.logger.Warn("invalid packet size, force close", zap.Uint16("size", size))
+	if size < 2 {
+		// The packet body must at least contain packet_type.
 		return nio.Close
 	}
 
-	if conn.InboundBuffered() < int(size+2) {
+	frameBytes := int(size) + 2
+	if frameBytes > int(s.cfg.ReadBufferCap) {
+		return nio.Close
+	}
+	if conn.InboundBuffered() < frameBytes {
 		return nio.None
 	}
 
 	// Error can return is io.ErrShortBuffer when needed bytes is larger than connection buffer.
 	// That will never happen because we checked it.
-	pack, _ := conn.Next(int(size + 2))
-	packType := binary.LittleEndian.Uint16(pack[2:4])
+	packet, err := conn.Next(frameBytes)
+	if err != nil || len(packet) != frameBytes {
+		return nio.Close
+	}
 
-	switch pub.PacketType(packType) {
+	pkgType := binary.LittleEndian.Uint16(packet[2:4])
+
+	switch pub.PacketType(pkgType) {
 	case pub.PacketType_REQ_ACTIVE_CONN:
-		return s.activator.Activate(s.ctx, conn, pack[4:])
+		return s.activator.Activate(conn, packet)
+
+	case pub.PacketType_REQ_ACTIVE_CONN_PROOF:
+		return s.activator.Prove(s.ctx, conn, packet)
 
 	case pub.PacketType_REQ_SEND_MSG:
-		return s.sender.Send(conn, pack[2:])
+		return s.sender.Send(conn, packet)
 
 	case pub.PacketType_REQ_ACK_RECV_MSG:
 		return nio.None
 
 	default:
-		s.logger.Error("invalid packet type, force close", zap.Uint16("type", packType))
+		s.logger.Error("invalid packet type, force close", zap.Uint16("type", pkgType))
 		return nio.Close
 	}
 }

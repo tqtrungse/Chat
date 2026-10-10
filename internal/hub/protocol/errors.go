@@ -9,8 +9,10 @@ package protocol
 import "errors"
 
 var (
-	ErrPkgSizeInvalid   = errors.New("invalid packet size")
-	ErrPkgTypeInvalid   = errors.New("invalid packet type")
-	ErrPkgCipherInvalid = errors.New("invalid cipher size")
-	ErrPkgModified      = errors.New("the packet is modified")
+	ErrPkgSizeInvalid          = errors.New("invalid packet size")
+	ErrPkgTypeInvalid          = errors.New("invalid packet type")
+	ErrPkgCipherInvalid        = errors.New("invalid cipher size")
+	ErrPkgModified             = errors.New("the packet is modified")
+	ErrHandshakePacketTooLarge = errors.New("handshake packet too large")
+	ErrPkgTooLarge             = errors.New("packet too large")
 )

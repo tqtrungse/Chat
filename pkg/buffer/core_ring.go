@@ -519,6 +519,7 @@ func (rb *coreRing) grow(newCap int) {
 	newBuf := slicepool.Get(newCap)
 	oldLen := rb.Buffered()
 	_, _ = rb.Read(newBuf)
+	clear(rb.buf[:cap(rb.buf)])
 	slicepool.Put(rb.buf)
 	rb.buf = newBuf
 	rb.r = 0

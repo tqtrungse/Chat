@@ -149,6 +149,7 @@ func (c *conn) Peek(n int) (buf []byte, err error) {
 
 func (c *conn) Discard(n int) (int, error) {
 	if len(c.cache) > 0 {
+		clear(c.cache[:cap(c.cache)])
 		slicepool.Put(c.cache)
 		c.cache = nil
 	}

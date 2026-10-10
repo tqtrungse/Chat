@@ -28,6 +28,7 @@ import (
 	"xxx/internal/hub/domain/session"
 	"xxx/internal/hub/protocol"
 	shareddevice "xxx/internal/shared/device"
+	sharedsession "xxx/internal/shared/session"
 
 	"xxx/pkg"
 	"xxx/pkg/collection/swiss"
@@ -130,24 +131,12 @@ func (r *Router) ActivateConn(
 	conn nio.Conn,
 	callback func(id shareddevice.ID),
 ) error {
-	deviceID := shareddevice.ID(binary.LittleEndian.Uint64(token))
-
-	t, err := r.ticketIssuer.Open(deviceID.Uint64(), ticket)
+	t, err := r.PrepareActivation(token, ticket, sign)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		clear(t.Keys.RecvEnc[:])
-		clear(t.Keys.SendEnc[:])
-		clear(t.Keys.RecvMac[:])
-		clear(t.Keys.SendMac[:])
-	}()
-
-	// The signature covers the ticket bytes: it's bound to this exchange
-	// (keys + expiry) and can't be replayed against another one.
-	if err = r.signer.Verify(t.IdentityPub[:], ticket, sign); err != nil {
-		return err
-	}
+	defer t.Clear()
+	deviceID := shareddevice.ID(t.DeviceID)
 
 	// Reserve a slot first; give it back if we end up replacing a conn.
 	meta := r.meta.Add(1)
@@ -170,6 +159,7 @@ func (r *Router) ActivateConn(
 	switch {
 	case existence && old == conn:
 		r.meta.Add(^uint32(0)) // activated twice on the same conn
+
 	case existence:
 		// If we flip the old session to Closed first, RemoveConn(old) becomes a
 		// no-op and its slot is inherited by the new conn. If RemoveConn won the
@@ -183,7 +173,7 @@ func (r *Router) ActivateConn(
 
 	// Sync device presence (device -> this hub) to cache.
 	return r.pool.Submit(func(_ *workerpool.Context) {
-		err := r.presence.Submit(
+		err2 := r.presence.Submit(
 			ctx,
 			deviceOp{
 				DeviceID:  deviceID,
@@ -199,11 +189,34 @@ func (r *Router) ActivateConn(
 				r.ForceClose(conn)
 			},
 		)
-		if err != nil {
-			r.logger.Error("failed to submit batch", zap.Error(err))
+		if err2 != nil {
+			r.logger.Error("failed to submit batch", zap.Error(err2))
 			r.ForceClose(conn)
 		}
 	})
+}
+
+// PrepareActivation opens the sealed ticket and verifies the device signature,
+// but does not register the connection. The caller must clear the returned
+// ticket and prove possession of its activation key before activating.
+func (r *Router) PrepareActivation(token, ticket, sign []byte) (*sharedsession.Ticket, error) {
+	if len(token) != 8 {
+		return nil, ErrActivationInvalid
+	}
+	deviceID := shareddevice.ID(binary.LittleEndian.Uint64(token))
+
+	t, err := r.ticketIssuer.Open(deviceID.Uint64(), ticket)
+	if err != nil {
+		return nil, err
+	}
+
+	// The signature authenticates the device identity. Freshness is provided
+	// separately by the per-connection challenge-response.
+	if err = r.signer.Verify(t.IdentityPub[:], ticket, sign); err != nil {
+		t.Clear()
+		return nil, err
+	}
+	return t, nil
 }
 
 func (r *Router) RemoveConn(ctx context.Context, conn nio.Conn) {
@@ -262,10 +275,12 @@ func (r *Router) Send(deviceID shareddevice.ID, data SendData) error {
 	if !existence {
 		return ErrSessionNotFound
 	}
+
 	ss, ok := conn.Context().(*session.Data)
 	if !ok || ss.State.Load() == uint32(session.StateClosed) {
 		return ErrSessionClosed
 	}
+
 	return send(
 		conn,
 		&ss.Keys.SendMac,

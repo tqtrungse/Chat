@@ -61,7 +61,7 @@ func TestIndex(t *testing.T) {
 // ---------------
 
 func TestGet_ZeroOrNegative(t *testing.T) {
-	var p Pool
+	var p pool
 
 	s := p.Get(0)
 	assert.Nil(t, s)
@@ -71,7 +71,7 @@ func TestGet_ZeroOrNegative(t *testing.T) {
 }
 
 func TestGet_LargerThanMaxInt32_AllocatesDirect(t *testing.T) {
-	var p Pool
+	var p pool
 
 	size := math.MaxInt32 + 1
 	s := p.Get(size)
@@ -79,7 +79,7 @@ func TestGet_LargerThanMaxInt32_AllocatesDirect(t *testing.T) {
 }
 
 func TestGet_LengthAndCapacity(t *testing.T) {
-	var p Pool
+	var p pool
 
 	cases := []struct {
 		size    int
@@ -103,36 +103,19 @@ func TestGet_LengthAndCapacity(t *testing.T) {
 	}
 }
 
-func TestGet_ReturnsZeroedSlice(t *testing.T) {
-	var p Pool
-
-	// Populate a slice with non-zero data, return it, then Get again —
-	// the slice coming back must be zeroed.
-	s := p.Get(64)
-	for i := range s {
-		s[i] = 0xFF
-	}
-	p.Put(s)
-
-	s2 := p.Get(64)
-	for _, b := range s2 {
-		assert.Zero(t, b)
-	}
-}
-
 // ---------------
 // SlicePool.Put()
 // ---------------
 
 func TestPut_ZeroCapIsIgnored(t *testing.T) {
-	var p Pool
+	var p pool
 	// Should not panic.
 	p.Put([]byte{})
 	p.Put(nil)
 }
 
 func TestPut_LargerThanMaxInt32_IsIgnored(t *testing.T) {
-	var p Pool
+	var p pool
 
 	// Build a slice header with a very large cap without actually allocating.
 	// We only test that Put does not panic; the GC-safety of the trick is not
@@ -155,70 +138,43 @@ func TestPut_LargerThanMaxInt32_IsIgnored(t *testing.T) {
 	hdr.Cap = origCap
 }
 
-func TestPut_NonPowerOfTwo_BucketDowngrade(t *testing.T) {
-	var p Pool
-
-	// Allocate from pool (cap = power-of-two), dirty it, return it, then
-	// manually create a slice with a non-power-of-two cap and Put that.
-	// After the Put it should be retrievable at the lower bucket size.
-	//
-	// We verify indirectly: Put(non-pow2 cap slice of cap 12) stores into
-	// bucket 3 (cap 8). A subsequent Get(8) should reuse that memory.
+func TestPut_NonPowerOfTwoCap_DoesNotPanic(t *testing.T) {
+	var p pool
 
 	buf := make([]byte, 12, 12) // cap 12, not a power of two
-	for i := range buf {
-		buf[i] = 0xAB
-	}
-
-	p.Put(buf) // should go into bucket for 8 (index 3)
+	p.Put(buf)
 
 	got := p.Get(8)
-	// The slice must be zeroed regardless of which pool path was taken.
-	for _, b := range got {
-		assert.Zero(t, b)
-	}
-	_ = got
+	assert.Len(t, got, 8)
+	assert.Equal(t, 8, cap(got))
 }
 
 // --------------------------------------
-// Round-trip: Put then Get reuses memory
+// Round-trip: Put then Get remains usable
 // --------------------------------------
-
-func TestRoundTrip_SameUnderlyingArray(t *testing.T) {
-	var p Pool
-
-	s := p.Get(64)
-	ptr := unsafe.SliceData(s)
-
-	p.Put(s)
-
-	s2 := p.Get(64)
-	ptr2 := unsafe.SliceData(s2)
-
-	assert.Equal(t, ptr, ptr2)
-}
 
 func TestRoundTrip_MultipleSizes(t *testing.T) {
-	var p Pool
+	var p pool
 
 	sizes := []int{1, 7, 8, 63, 64, 255, 256, 1023, 1024}
 	for _, size := range sizes {
 		s := p.Get(size)
 		assert.Len(t, s, size)
 
-		// Write a sentinel pattern.
+		// Write a sentinel pattern before returning the storage to the pool.
 		for i := range s {
-			s[i] = byte(i & 0xFF)
+			s[i] = byte((i % 255) + 1)
 		}
 
 		p.Put(s)
 
 		s2 := p.Get(size)
 		assert.Len(t, s2, size)
-		// Must come back zeroed.
-		for _, b := range s2 {
-			assert.Zero(t, b)
+		assert.Equal(t, 1<<index(uint32(size)), cap(s2))
+		for i := range s2 {
+			s2[i] = 0x55
 		}
+		p.Put(s2)
 	}
 }
 
@@ -236,9 +192,7 @@ func TestBuiltinGet_Put(t *testing.T) {
 	Put(s)
 
 	s2 := Get(32)
-	for _, b := range s2 {
-		assert.Zero(t, b)
-	}
+	assert.Len(t, s2, 32)
 }
 
 // -----------
@@ -246,7 +200,7 @@ func TestBuiltinGet_Put(t *testing.T) {
 // -----------
 
 func TestConcurrentGetPut(t *testing.T) {
-	var p Pool
+	var p pool
 	const goroutines = 64
 	const iterations = 1000
 
@@ -259,12 +213,7 @@ func TestConcurrentGetPut(t *testing.T) {
 				s := p.Get(size)
 				assert.Len(t, s, size)
 
-				for _, b := range s {
-					if !assert.Zerof(t, b, "Get(%d): returned non-zero byte", size) {
-						break
-					}
-				}
-				// Write and return.
+				// Initialize the slice before use; Get may return dirty storage.
 				for j := range s {
 					s[j] = 0x55
 				}
@@ -283,7 +232,7 @@ func TestConcurrentGetPut(t *testing.T) {
 // ----------
 
 func BenchmarkGet_PowerOfTwo(b *testing.B) {
-	var p Pool
+	var p pool
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -293,7 +242,7 @@ func BenchmarkGet_PowerOfTwo(b *testing.B) {
 }
 
 func BenchmarkGet_NonPowerOfTwo(b *testing.B) {
-	var p Pool
+	var p pool
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -303,7 +252,7 @@ func BenchmarkGet_NonPowerOfTwo(b *testing.B) {
 }
 
 func BenchmarkGetPut_Parallel(b *testing.B) {
-	var p Pool
+	var p pool
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

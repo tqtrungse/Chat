@@ -71,6 +71,7 @@ func newTicketTestTicket(t *testing.T, deviceID uint64, expiresAt int64) *Ticket
 		tk.Keys.SendEnc[:],
 		tk.Keys.RecvMac[:],
 		tk.Keys.SendMac[:],
+		tk.ActivationKey[:],
 		tk.IdentityPub[:],
 	} {
 		_, err := rand.Read(b)
@@ -331,11 +332,12 @@ func TestTicket_Seal_DoesNotLeakPlaintextOrMutateInput(t *testing.T) {
 	require.Equal(t, snapshot, *in, "Seal must not modify its input")
 
 	secrets := map[string][]byte{
-		"RecvEnc":     in.Keys.RecvEnc[:],
-		"SendEnc":     in.Keys.SendEnc[:],
-		"RecvMac":     in.Keys.RecvMac[:],
-		"SendMac":     in.Keys.SendMac[:],
-		"IdentityPub": in.IdentityPub[:],
+		"RecvEnc":       in.Keys.RecvEnc[:],
+		"SendEnc":       in.Keys.SendEnc[:],
+		"RecvMac":       in.Keys.RecvMac[:],
+		"SendMac":       in.Keys.SendMac[:],
+		"ActivationKey": in.ActivationKey[:],
+		"IdentityPub":   in.IdentityPub[:],
 	}
 	for name, secret := range secrets {
 		require.False(t, bytes.Contains(tk, secret), "%s appears in clear text in the ticket", name)
@@ -354,8 +356,8 @@ func TestTicket_SizeConstants(t *testing.T) {
 
 	require.Equal(t, 16, aead.Overhead(), "authTagSize must equal the GCM tag size")
 	require.Equal(t, ticketHeader-1, aead.NonceSize(), "header must hold keyID + a full GCM nonce")
-	require.Equal(t, 176, ticketPlainSize)
-	require.Equal(t, 205, ticketSize)
+	require.Equal(t, 208, ticketPlainSize)
+	require.Equal(t, 237, ticketSize)
 }
 
 // Pins the plaintext layout byte for byte. Tickets are issued by one hub
@@ -372,7 +374,8 @@ func TestTicket_MarshalLayout(t *testing.T) {
 	fill(in.Keys.SendEnc[:], 0xA2)
 	fill(in.Keys.RecvMac[:], 0xA3)
 	fill(in.Keys.SendMac[:], 0xA4)
-	fill(in.IdentityPub[:], 0xA5)
+	fill(in.ActivationKey[:], 0xA5)
+	fill(in.IdentityPub[:], 0xA6)
 
 	var b [ticketPlainSize]byte
 	marshalTicket(b[:], in)
@@ -383,7 +386,8 @@ func TestTicket_MarshalLayout(t *testing.T) {
 	require.Equal(t, bytes.Repeat([]byte{0xA2}, 32), b[48:80], "SendEnc")
 	require.Equal(t, bytes.Repeat([]byte{0xA3}, 32), b[80:112], "RecvMac")
 	require.Equal(t, bytes.Repeat([]byte{0xA4}, 32), b[112:144], "SendMac")
-	require.Equal(t, bytes.Repeat([]byte{0xA5}, 32), b[144:176], "IdentityPub")
+	require.Equal(t, bytes.Repeat([]byte{0xA5}, 32), b[144:176], "ActivationKey")
+	require.Equal(t, bytes.Repeat([]byte{0xA6}, 32), b[176:208], "IdentityPub")
 
 	require.Equal(t, in, unmarshalTicket(b[:]))
 }

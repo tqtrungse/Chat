@@ -79,14 +79,17 @@ func deriveExpected(t *testing.T, rawSecret, salt, baseInfo []byte, label string
 // deriveExpectedKeys derives the full session.Keys set the way the server
 // side is expected to hold it. Labels are directional: "c2s" (client to
 // server) is what the server receives, "s2c" is what it sends.
-func deriveExpectedKeys(t *testing.T, rawSecret, salt, info []byte) sharedsession.Keys {
+func deriveExpectedKeys(t *testing.T, rawSecret, salt, info []byte) exchange_key.DerivedKeys {
 	t.Helper()
 
-	return sharedsession.Keys{
-		RecvEnc: deriveExpected(t, rawSecret, salt, info, "c2s/enc"),
-		SendEnc: deriveExpected(t, rawSecret, salt, info, "s2c/enc"),
-		RecvMac: deriveExpected(t, rawSecret, salt, info, "c2s/mac"),
-		SendMac: deriveExpected(t, rawSecret, salt, info, "s2c/mac"),
+	return exchange_key.DerivedKeys{
+		Session: sharedsession.Keys{
+			RecvEnc: deriveExpected(t, rawSecret, salt, info, "c2s/enc"),
+			SendEnc: deriveExpected(t, rawSecret, salt, info, "s2c/enc"),
+			RecvMac: deriveExpected(t, rawSecret, salt, info, "c2s/mac"),
+			SendMac: deriveExpected(t, rawSecret, salt, info, "s2c/mac"),
+		},
+		Activation: deriveExpected(t, rawSecret, salt, info, "c2s/act"),
 	}
 }
 
@@ -95,18 +98,19 @@ type namedKey struct {
 	key  [32]byte
 }
 
-func namedKeys(k sharedsession.Keys) []namedKey {
+func namedKeys(k exchange_key.DerivedKeys) []namedKey {
 	return []namedKey{
-		{"RecvEnc", k.RecvEnc},
-		{"SendEnc", k.SendEnc},
-		{"RecvMac", k.RecvMac},
-		{"SendMac", k.SendMac},
+		{"RecvEnc", k.Session.RecvEnc},
+		{"SendEnc", k.Session.SendEnc},
+		{"RecvMac", k.Session.RecvMac},
+		{"SendMac", k.Session.SendMac},
+		{"Activation", k.Activation},
 	}
 }
 
 // requireAllDistinct asserts that no two of the four derived keys are equal
 // (the per-direction / per-purpose labels must actually separate them).
-func requireAllDistinct(t *testing.T, k sharedsession.Keys) {
+func requireAllDistinct(t *testing.T, k exchange_key.DerivedKeys) {
 	t.Helper()
 
 	nk := namedKeys(k)
@@ -119,7 +123,7 @@ func requireAllDistinct(t *testing.T, k sharedsession.Keys) {
 
 // requireEachDiffers asserts that every key in a differs from its
 // counterpart (same field) in b.
-func requireEachDiffers(t *testing.T, a, b sharedsession.Keys) {
+func requireEachDiffers(t *testing.T, a, b exchange_key.DerivedKeys) {
 	t.Helper()
 
 	na, nb := namedKeys(a), namedKeys(b)
@@ -212,7 +216,7 @@ func TestHkdfDeriver_DeriveKeys_DifferentInfoYieldsDifferentKeys(t *testing.T) {
 	// is the context-A derivation, so keyA differing from keyB means
 	// swapping info would genuinely have changed DeriveKeys' output too --
 	// info isn't being silently ignored.
-	require.Equal(t, keyA, keys.RecvEnc)
+	require.Equal(t, keyA, keys.Session.RecvEnc)
 }
 
 func TestHkdfDeriver_DeriveKeys_NilInfoIsAccepted(t *testing.T) {
@@ -239,7 +243,7 @@ func TestHkdfDeriver_DeriveKeys_RejectsLowOrderPeerKey(t *testing.T) {
 
 	keys, _, err := deriver.DeriveKeys(&lowOrderPub, []byte("info"))
 	require.ErrorIs(t, err, exchange_key.ErrRequestInvalid)
-	require.Equal(t, sharedsession.Keys{}, keys)
+	require.Equal(t, exchange_key.DerivedKeys{}, keys)
 }
 
 // TestHkdfDeriver_DeriveKeys_SecretIsBoundToIntendedPeer replaces what was
@@ -270,7 +274,7 @@ func TestHkdfDeriver_DeriveKeys_SecretIsBoundToIntendedPeer(t *testing.T) {
 	require.NoError(t, err)
 
 	salt := transcriptSalt(peerAPub, ephemeralPub)
-	deriveAs := func(priv [32]byte) sharedsession.Keys {
+	deriveAs := func(priv [32]byte) exchange_key.DerivedKeys {
 		raw, err := curve25519.X25519(priv[:], ephemeralPub[:])
 		require.NoError(t, err)
 		return deriveExpectedKeys(t, raw, salt, info)

@@ -270,6 +270,232 @@ var _ interface {
 	ErrorName() string
 } = ActiveConnRespValidationError{}
 
+// Validate checks the field values on ActiveConnProofReq with the rules
+// defined in the proto definition for this message. If any rules are
+// violated, the first error encountered is returned, or nil if there are no violations.
+func (m *ActiveConnProofReq) Validate() error {
+	return m.validate(false)
+}
+
+// ValidateAll checks the field values on ActiveConnProofReq with the rules
+// defined in the proto definition for this message. If any rules are
+// violated, the result is a list of violation errors wrapped in
+// ActiveConnProofReqMultiError, or nil if none found.
+func (m *ActiveConnProofReq) ValidateAll() error {
+	return m.validate(true)
+}
+
+func (m *ActiveConnProofReq) validate(all bool) error {
+	if m == nil {
+		return nil
+	}
+
+	var errors []error
+
+	if len(m.GetProof()) != 32 {
+		err := ActiveConnProofReqValidationError{
+			field:  "Proof",
+			reason: "value length must be 32 bytes",
+		}
+		if !all {
+			return err
+		}
+		errors = append(errors, err)
+	}
+
+	if len(errors) > 0 {
+		return ActiveConnProofReqMultiError(errors)
+	}
+
+	return nil
+}
+
+// ActiveConnProofReqMultiError is an error wrapping multiple validation errors
+// returned by ActiveConnProofReq.ValidateAll() if the designated constraints
+// aren't met.
+type ActiveConnProofReqMultiError []error
+
+// Error returns a concatenation of all the error messages it wraps.
+func (m ActiveConnProofReqMultiError) Error() string {
+	msgs := make([]string, 0, len(m))
+	for _, err := range m {
+		msgs = append(msgs, err.Error())
+	}
+	return strings.Join(msgs, "; ")
+}
+
+// AllErrors returns a list of validation violation errors.
+func (m ActiveConnProofReqMultiError) AllErrors() []error { return m }
+
+// ActiveConnProofReqValidationError is the validation error returned by
+// ActiveConnProofReq.Validate if the designated constraints aren't met.
+type ActiveConnProofReqValidationError struct {
+	field  string
+	reason string
+	cause  error
+	key    bool
+}
+
+// Field function returns field value.
+func (e ActiveConnProofReqValidationError) Field() string { return e.field }
+
+// Reason function returns reason value.
+func (e ActiveConnProofReqValidationError) Reason() string { return e.reason }
+
+// Cause function returns cause value.
+func (e ActiveConnProofReqValidationError) Cause() error { return e.cause }
+
+// Key function returns key value.
+func (e ActiveConnProofReqValidationError) Key() bool { return e.key }
+
+// ErrorName returns error name.
+func (e ActiveConnProofReqValidationError) ErrorName() string {
+	return "ActiveConnProofReqValidationError"
+}
+
+// Error satisfies the builtin error interface
+func (e ActiveConnProofReqValidationError) Error() string {
+	cause := ""
+	if e.cause != nil {
+		cause = fmt.Sprintf(" | caused by: %v", e.cause)
+	}
+
+	key := ""
+	if e.key {
+		key = "key for "
+	}
+
+	return fmt.Sprintf(
+		"invalid %sActiveConnProofReq.%s: %s%s",
+		key,
+		e.field,
+		e.reason,
+		cause)
+}
+
+var _ error = ActiveConnProofReqValidationError{}
+
+var _ interface {
+	Field() string
+	Reason() string
+	Key() bool
+	Cause() error
+	ErrorName() string
+} = ActiveConnProofReqValidationError{}
+
+// Validate checks the field values on ActiveConnChallengeResp with the rules
+// defined in the proto definition for this message. If any rules are
+// violated, the first error encountered is returned, or nil if there are no violations.
+func (m *ActiveConnChallengeResp) Validate() error {
+	return m.validate(false)
+}
+
+// ValidateAll checks the field values on ActiveConnChallengeResp with the
+// rules defined in the proto definition for this message. If any rules are
+// violated, the result is a list of violation errors wrapped in
+// ActiveConnChallengeRespMultiError, or nil if none found.
+func (m *ActiveConnChallengeResp) ValidateAll() error {
+	return m.validate(true)
+}
+
+func (m *ActiveConnChallengeResp) validate(all bool) error {
+	if m == nil {
+		return nil
+	}
+
+	var errors []error
+
+	if len(m.GetNonce()) != 32 {
+		err := ActiveConnChallengeRespValidationError{
+			field:  "Nonce",
+			reason: "value length must be 32 bytes",
+		}
+		if !all {
+			return err
+		}
+		errors = append(errors, err)
+	}
+
+	if len(errors) > 0 {
+		return ActiveConnChallengeRespMultiError(errors)
+	}
+
+	return nil
+}
+
+// ActiveConnChallengeRespMultiError is an error wrapping multiple validation
+// errors returned by ActiveConnChallengeResp.ValidateAll() if the designated
+// constraints aren't met.
+type ActiveConnChallengeRespMultiError []error
+
+// Error returns a concatenation of all the error messages it wraps.
+func (m ActiveConnChallengeRespMultiError) Error() string {
+	msgs := make([]string, 0, len(m))
+	for _, err := range m {
+		msgs = append(msgs, err.Error())
+	}
+	return strings.Join(msgs, "; ")
+}
+
+// AllErrors returns a list of validation violation errors.
+func (m ActiveConnChallengeRespMultiError) AllErrors() []error { return m }
+
+// ActiveConnChallengeRespValidationError is the validation error returned by
+// ActiveConnChallengeResp.Validate if the designated constraints aren't met.
+type ActiveConnChallengeRespValidationError struct {
+	field  string
+	reason string
+	cause  error
+	key    bool
+}
+
+// Field function returns field value.
+func (e ActiveConnChallengeRespValidationError) Field() string { return e.field }
+
+// Reason function returns reason value.
+func (e ActiveConnChallengeRespValidationError) Reason() string { return e.reason }
+
+// Cause function returns cause value.
+func (e ActiveConnChallengeRespValidationError) Cause() error { return e.cause }
+
+// Key function returns key value.
+func (e ActiveConnChallengeRespValidationError) Key() bool { return e.key }
+
+// ErrorName returns error name.
+func (e ActiveConnChallengeRespValidationError) ErrorName() string {
+	return "ActiveConnChallengeRespValidationError"
+}
+
+// Error satisfies the builtin error interface
+func (e ActiveConnChallengeRespValidationError) Error() string {
+	cause := ""
+	if e.cause != nil {
+		cause = fmt.Sprintf(" | caused by: %v", e.cause)
+	}
+
+	key := ""
+	if e.key {
+		key = "key for "
+	}
+
+	return fmt.Sprintf(
+		"invalid %sActiveConnChallengeResp.%s: %s%s",
+		key,
+		e.field,
+		e.reason,
+		cause)
+}
+
+var _ error = ActiveConnChallengeRespValidationError{}
+
+var _ interface {
+	Field() string
+	Reason() string
+	Key() bool
+	Cause() error
+	ErrorName() string
+} = ActiveConnChallengeRespValidationError{}
+
 // Validate checks the field values on SendMsgReq with the rules defined in the
 // proto definition for this message. If any rules are violated, the first
 // error encountered is returned, or nil if there are no violations.

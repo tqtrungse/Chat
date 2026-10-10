@@ -25,9 +25,10 @@ var (
 
 	// ErrCbOpen is returned when the circuit is open, or half-open with a probe
 	// already in flight, so the attempt did not run.
-	ErrCbOpen          = errors.New("cb: circuit breaker open")
-	ErrRouterClosed    = errors.New("router closed")
-	ErrConnReachMax    = errors.New("connection over")
-	ErrSessionNotFound = errors.New("session not found")
-	ErrSessionClosed   = errors.New("session is closed")
+	ErrCbOpen            = errors.New("cb: circuit breaker open")
+	ErrRouterClosed      = errors.New("router closed")
+	ErrConnReachMax      = errors.New("connection over")
+	ErrSessionNotFound   = errors.New("session not found")
+	ErrSessionClosed     = errors.New("session is closed")
+	ErrActivationInvalid = errors.New("invalid activation request")
 )

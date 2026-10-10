@@ -25,7 +25,6 @@ import (
 	"io"
 
 	"xxx/internal/iam/application/exchange_key"
-	sharedsession "xxx/internal/shared/session"
 
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/hkdf"
@@ -42,7 +41,8 @@ func NewHkdfDeriver() exchange_key.KeyDeriver {
 func (hd *hkdfDeriver) DeriveKeys(
 	peerPub *[32]byte,
 	info []byte,
-) (keys sharedsession.Keys, pubKey [32]byte, err error) {
+) (derived exchange_key.DerivedKeys, pubKey [32]byte, err error) {
+	//Don't need to check error because crypto/rand will panic if it error.
 	var privateKey [32]byte
 	_, _ = rand.Read(privateKey[:])
 	defer clear(privateKey[:])
@@ -73,17 +73,23 @@ func (hd *hkdfDeriver) DeriveKeys(
 	prk := hkdf.Extract(sha256.New, rawSecret, salt[:])
 	defer clear(prk)
 
-	for _, k := range []struct {
+	outputs := []struct {
 		label string
-		out   *[32]byte
+		dst   []byte
 	}{
-		{"c2s/enc", &keys.RecvEnc},
-		{"s2c/enc", &keys.SendEnc},
-		{"c2s/mac", &keys.RecvMac},
-		{"s2c/mac", &keys.SendMac},
-	} {
-		if _, err = io.ReadFull(hkdf.Expand(sha256.New, prk, withLabel(info, k.label)), k.out[:]); err != nil {
-			keys = sharedsession.Keys{}
+		{"c2s/enc", derived.Session.RecvEnc[:]},
+		{"s2c/enc", derived.Session.SendEnc[:]},
+		{"c2s/mac", derived.Session.RecvMac[:]},
+		{"s2c/mac", derived.Session.SendMac[:]},
+		{"c2s/act", derived.Activation[:]},
+	}
+
+	for _, out := range outputs {
+		if _, err = io.ReadFull(
+			hkdf.Expand(sha256.New, prk, withLabel(info, out.label)),
+			out.dst,
+		); err != nil {
+			derived = exchange_key.DerivedKeys{}
 			return
 		}
 	}

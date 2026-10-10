@@ -24,25 +24,29 @@ import (
 	"unsafe"
 )
 
-var builtinPool Pool
+var builtinPool pool
 
-// Get returns a byte slice with given length from the built-in pool.
+// Get returns a byte slice with length size, using pooled storage when available.
+// The returned bytes are not cleared and may contain data from a previous use.
+// The caller must initialize every byte it reads.
 func Get(size int) []byte {
 	return builtinPool.Get(size)
 }
 
-// Put returns the byte slice to the built-in pool.
+// Put returns buf to the pool when its capacity is eligible.
+// It does not clear or otherwise modify buf. If buf contains sensitive data,
+// callers must clear it before calling Put. Ownership of buf is transferred;
+// callers must not access it after Put.
 func Put(buf []byte) {
 	builtinPool.Put(buf)
 }
 
-// Pool consists of 32 sync.Pool, representing byte slices of length from 0 to 32 in powers of 2.
-type Pool struct {
+// pool consists of 32 sync.Pool, representing byte slices of length from 0 to 32 in powers of 2.
+type pool struct {
 	pools [32]sync.Pool
 }
 
-// Get retrieves a byte slice of the length requested by the caller from pool or allocates a new one.
-func (p *Pool) Get(size int) []byte {
+func (p *pool) Get(size int) []byte {
 	if size <= 0 {
 		return nil
 	}
@@ -57,13 +61,10 @@ func (p *Pool) Get(size int) []byte {
 		return make([]byte, size, 1<<idx)
 	}
 
-	slice := unsafe.Slice(ptr, 1<<idx)[:size]
-	clear(slice)
-	return slice
+	return unsafe.Slice(ptr, 1<<idx)[:size]
 }
 
-// Put returns the byte slice to the pool.
-func (p *Pool) Put(buf []byte) {
+func (p *pool) Put(buf []byte) {
 	size := cap(buf)
 	if size == 0 || size > math.MaxInt32 {
 		return

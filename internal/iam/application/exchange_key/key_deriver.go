@@ -18,9 +18,14 @@ package exchange_key
 
 import sharedsession "xxx/internal/shared/session"
 
+type DerivedKeys struct {
+	Session    sharedsession.Keys
+	Activation [32]byte
+}
+
 type KeyDeriver interface {
 	// DeriveKeys
-	// clientPub‖serverPub is bound into the HKDF salt by the implementation.
-	// info carries protocol version + device ID.
-	DeriveKeys(peerPub *[32]byte, info []byte) (keys sharedsession.Keys, pubKey [32]byte, err error)
+	// info contains the protocol version and device ID.
+	// Implementation binds clientPub || serverPub to the HKDF salt.
+	DeriveKeys(peerPub *[32]byte, info []byte) (derived DerivedKeys, pubKey [32]byte, err error)
 }

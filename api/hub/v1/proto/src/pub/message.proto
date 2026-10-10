@@ -11,14 +11,16 @@ enum PacketType {
   UNKNOWN = 0;
 
   REQ_ACTIVE_CONN = 1;
-  REQ_SEND_MSG = 2;
-  REQ_DIRECT_FORWARD_MSG = 3;
-  REQ_BROKER_FORWARD_MSG = 4;
-  REQ_ACK_RECV_MSG = 5;
+  REQ_ACTIVE_CONN_PROOF = 2;
+  REQ_SEND_MSG = 3;
+  REQ_DIRECT_FORWARD_MSG = 4;
+  REQ_BROKER_FORWARD_MSG = 5;
+  REQ_ACK_RECV_MSG = 6;
 
   RESP_ACTIVE_CONN = 501;
-  RESP_SEND_MSG = 502;
-  RESP_ACK_RECV_MSG = 503;
+  RESP_ACTIVE_CONN_CHALLENGE = 502;
+  RESP_SEND_MSG = 503;
+  RESP_ACK_RECV_MSG = 504;
 }
 
 enum Code {
@@ -42,6 +44,21 @@ message ActiveConnReq {
 
 message ActiveConnResp {
   Code code = 1;
+}
+
+message ActiveConnProofReq {
+  // proof = HMAC-SHA256(activation_key,
+  //   "xxx/hub/activate-proof/v1\0" || transcript || nonce).
+  bytes proof = 1 [(validate.rules).bytes = {len: 32}];
+}
+
+message ActiveConnChallengeResp {
+  // transcript = SHA256("xxx/hub/activate/v1\0" ||
+  //   LE32(len(token)) || token || LE32(len(ticket)) || ticket ||
+  //   LE32(len(sign)) || sign).
+  // nonce is fresh and valid only on the TCP connection that requested it.
+  // All integer lengths in this transcript use little-endian encoding.
+  bytes nonce = 1 [(validate.rules).bytes = {len: 32}];
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------

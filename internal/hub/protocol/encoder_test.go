@@ -10,9 +10,11 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/binary"
 	"testing"
 
 	pbpub "xxx/api/hub/v1/proto/gen/pub"
+	slicepool "xxx/pkg/pool/slice"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -31,6 +33,7 @@ func TestEncoder_Encode_OutputIncludesTrailingHMAC(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(packet), 32)
+	require.Equal(t, uint16(len(packet)-2), binary.LittleEndian.Uint16(packet[:2]))
 
 	body := packet[:len(packet)-32]
 	gotTag := packet[len(packet)-32:]
@@ -61,8 +64,22 @@ func TestEncoder_Encode_WithExpand(t *testing.T) {
 	pbBytes, err := proto.Marshal(msg)
 	require.NoError(t, err)
 
-	wantLen := 4 + len(pbBytes) + len(expand) + 32
+	wantLen := 38 + len(pbBytes) + len(expand)
 	require.Equal(t, wantLen, len(packet))
+	require.Equal(t, uint16(len(packet)-2), binary.LittleEndian.Uint16(packet[:2]))
+}
+
+func TestEncoder_Encode_RejectsFrameTooLarge(t *testing.T) {
+	encoder := NewEncoder(NewMockSecureChannel())
+	hmacKey := randomKey(t)
+
+	_, err := encoder.Encode(
+		hmacKey,
+		pbpub.PacketType_REQ_ACTIVE_CONN,
+		new(pbpub.ActiveConnReq),
+		make([]byte, maxFrameSize),
+	)
+	require.ErrorIs(t, err, ErrPkgTooLarge)
 }
 
 func TestEncoder_EncodeDecode_RoundTrip(t *testing.T) {
@@ -129,6 +146,7 @@ func TestEncoderDecoder_EncodeSDecodeS_RoundTrip(t *testing.T) {
 		expand,
 	)
 	require.NoError(t, err)
+	require.Equal(t, uint16(len(packet)-2), binary.LittleEndian.Uint16(packet[:2]))
 
 	gotMsg, gotExpand, code, err := decoder.DecodeS(secretKey, packet)
 	require.NoError(t, err)
@@ -182,5 +200,40 @@ func TestEncoderDecoder_EncodeS_NoncesAreUnpredictable(t *testing.T) {
 		nil,
 	)
 	require.NoError(t, err)
-	require.False(t, bytes.Equal(p1[2:14], p2[2:14]))
+	require.False(t, bytes.Equal(p1[4:16], p2[4:16]))
+}
+
+func TestSecurePacketAAD_BindsPacketTypeAndCipherSize(t *testing.T) {
+	expand := []byte("expand")
+	base := securePacketAAD(64, uint16(pbpub.PacketType_REQ_SEND_MSG), 48, expand)
+	wrongType := securePacketAAD(64, uint16(pbpub.PacketType_REQ_ACTIVE_CONN), 48, expand)
+	wrongCipherSize := securePacketAAD(64, uint16(pbpub.PacketType_REQ_SEND_MSG), 49, expand)
+	wrongFrameSize := securePacketAAD(65, uint16(pbpub.PacketType_REQ_SEND_MSG), 48, expand)
+	defer func() {
+		for _, aad := range [][]byte{base, wrongType, wrongCipherSize, wrongFrameSize} {
+			clear(aad[:cap(aad)])
+			slicepool.Put(aad)
+		}
+	}()
+
+	require.Equal(t, securePacketAADForTest(64, uint16(pbpub.PacketType_REQ_SEND_MSG), 48, expand), base)
+	require.NotEqual(t, base, wrongType)
+	require.NotEqual(t, base, wrongCipherSize)
+	require.NotEqual(t, base, wrongFrameSize)
+}
+
+func TestEncodeHandshake_NoSessionMAC(t *testing.T) {
+	secureChannel := NewMockSecureChannel()
+	encoder := NewEncoder(secureChannel)
+	want := &pbpub.ActiveConnChallengeResp{Nonce: make([]byte, 32)}
+	packet, err := encoder.EncodeHandshake(pbpub.PacketType_RESP_ACTIVE_CONN_CHALLENGE, want)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(packet), 6)
+	require.Equal(t, uint16(len(packet)-2), binary.LittleEndian.Uint16(packet[:2]))
+	require.Equal(t, uint16(pbpub.PacketType_RESP_ACTIVE_CONN_CHALLENGE), binary.LittleEndian.Uint16(packet[2:4]))
+	require.Equal(t, uint16(len(packet)-6), binary.LittleEndian.Uint16(packet[4:6]))
+
+	var got pbpub.ActiveConnChallengeResp
+	require.NoError(t, proto.Unmarshal(packet[6:], &got))
+	require.True(t, proto.Equal(want, &got))
 }
