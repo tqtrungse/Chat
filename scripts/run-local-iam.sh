@@ -35,6 +35,48 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
   exit 1
 fi
 
+# Read KEY from the config file (last assignment wins; CR and surrounding quotes stripped).
+get_config() {
+  local value
+  value="$(grep -E "^$1=" "$CONFIG_FILE" | tail -n 1 | cut -d= -f2- | tr -d '\r' || true)"
+  value="${value#\"}"
+  value="${value%\"}"
+  printf '%s' "$value"
+}
+
+# Set KEY="value" in the config file: replace the existing line (keeping CRLF if used) or append it.
+set_config() {
+  local key="$1" value="$2" tmp
+  tmp="$(mktemp "$CONFIG_FILE.XXXXXX")"
+  if grep -qE "^$key=" "$CONFIG_FILE"; then
+    awk -v key="$key" -v line="$key=\"$value\"" '
+      $0 ~ "^" key "=" { print line (($0 ~ /\r$/) ? "\r" : ""); next }
+      { print }
+    ' "$CONFIG_FILE" > "$tmp"
+  else
+    cat -- "$CONFIG_FILE" > "$tmp"
+    [[ -z "$(tail -c 1 -- "$CONFIG_FILE")" ]] || echo >> "$tmp"
+    printf '%s="%s"\n' "$key" "$value" >> "$tmp"
+  fi
+  mv -f -- "$tmp" "$CONFIG_FILE"
+}
+
+# Generate TICKET_KEYS (format: keyID:base64(32-byte key)) only when it is empty
+# or still the placeholder from the example env. An existing key is never
+# overwritten, because it must stay in sync with Hub and rotating it would
+# invalidate outstanding tickets.
+TICKET_KEY_ID="$(get_config TICKET_CURRENT_KEY_ID)"
+TICKET_KEY_ID="${TICKET_KEY_ID:-1}"
+TICKET_KEYS_VALUE="$(get_config TICKET_KEYS)"
+
+if [[ -z "$TICKET_KEYS_VALUE" || "$TICKET_KEYS_VALUE" == *"<"* ]]; then
+  TICKET_KEY="$(openssl rand -base64 32)"
+  set_config TICKET_KEYS "${TICKET_KEY_ID}:${TICKET_KEY}"
+  grep -qE '^TICKET_CURRENT_KEY_ID=' "$CONFIG_FILE" || set_config TICKET_CURRENT_KEY_ID "$TICKET_KEY_ID"
+  echo "Generated TICKET_KEYS (key id $TICKET_KEY_ID) in $CONFIG_FILE" >&2
+  echo "Copy the same TICKET_CURRENT_KEY_ID/TICKET_KEYS to Hub so it can open IAM tickets." >&2
+fi
+
 if [[ ! -s "$CERT_FILE" || ! -s "$KEY_FILE" ]]; then
   mkdir -p "$CERT_DIR"
   umask 077
