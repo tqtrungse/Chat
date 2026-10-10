@@ -17,8 +17,6 @@
 package boostrap
 
 import (
-	"xxx/internal/hub/infrastructure/crypto"
-
 	"xxx/pkg"
 	"xxx/pkg/log"
 
@@ -49,19 +47,4 @@ func Run() {
 			return
 		}
 	}
-
-	keys, err := crypto.ParseTicketKeys(cfgLoader.GetStringSlice("TICKET_KEYS"))
-	if err != nil {
-		logger.Error("failed to load ticket keys", zap.Error(err))
-		return
-	}
-
-	_, err = crypto.NewTicketSealer(cfgLoader.GetUint8("TICKET_CURRENT_KEY_ID"), keys)
-	if err != nil {
-		logger.Error("failed to load ticket current key ID", zap.Error(err))
-		return
-	}
-
-	//router := connection.NewRouter(ctx, cfg.Connection, signer, dCache, cb, logger, pool, encoder, tickets)
-	//keyExchanger := exchange_key.New(db, crypto.NewHkdfDeriver(), deviceMetaReader, tickets)
 }
