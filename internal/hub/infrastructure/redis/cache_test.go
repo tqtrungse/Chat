@@ -185,7 +185,7 @@ func TestBatchAddDevices_MultipleBuckets_AllDevicesOwnedCorrectly(t *testing.T) 
 	require.NoError(t, err)
 
 	for _, dev := range devices {
-		bucket := c.deviceBucket(dev)
+		bucket := c.bucketFor(dev.Uint64())
 		deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
 		bDeviceID := pkg.U64ToBytes(dev.Uint64())
 		owner := ""
@@ -221,7 +221,7 @@ func TestBatchAddDevices_MovesDevicesFromOldHub(t *testing.T) {
 	devices := []shareddevice.ID{10, 11, 12, 13}
 
 	for _, dev := range devices {
-		bucket := c.deviceBucket(dev)
+		bucket := c.bucketFor(dev.Uint64())
 		deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
 		bDeviceID := pkg.U64ToBytes(dev.Uint64())
 		hubDeviceKey := pkg.Concat(hubDevicesPrefix, uint64(1))
@@ -270,7 +270,7 @@ func TestBatchAddDevices_MovesDevicesFromOldHub(t *testing.T) {
 	require.Equal(t, int64(len(devices)), newCount)
 
 	for _, dev := range devices {
-		bucket := c.deviceBucket(dev)
+		bucket := c.bucketFor(dev.Uint64())
 		deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
 		bDeviceID := pkg.U64ToBytes(dev.Uint64())
 
@@ -307,7 +307,7 @@ func TestBatchAddDevices_DuplicateDeviceIDs(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, dev := range []shareddevice.ID{1, 5, 9} {
-		bucket := c.deviceBucket(dev)
+		bucket := c.bucketFor(dev.Uint64())
 		key := pkg.Concat(devicesPrefix, uint64(bucket))
 		field := pkg.U64ToBytes(dev.Uint64())
 
@@ -344,7 +344,7 @@ func TestListHubsByDevices_MixedFoundAndMissing_PreservesInputOrder(t *testing.T
 	// registered anywhere, so it must come back as 0.
 	owners := map[shareddevice.ID]uint64{0: 10, 1: 20, 2: 30, 3: 40, 5: 50}
 	for dev, hub := range owners {
-		bucket := c.deviceBucket(dev)
+		bucket := c.bucketFor(dev.Uint64())
 		deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
 		bDeviceID := pkg.U64ToBytes(dev.Uint64())
 		bHubID := pkg.U64ToBytes(hub)
@@ -394,7 +394,7 @@ func TestDelDevice_OwnedByCaller_RemovesAndPublishes(t *testing.T) {
 	err = c.BatchDelDevices(ctx, []shareddevice.ID{dev})
 	require.NoError(t, err)
 
-	bucket := c.deviceBucket(dev)
+	bucket := c.bucketFor(dev.Uint64())
 	deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
 	bDeviceID := pkg.U64ToBytes(dev.Uint64())
 	defer func() {
@@ -439,7 +439,7 @@ func TestDelDevice_NotOwner_NoOp(t *testing.T) {
 		c, _         = newTestCache(t, 2) // caller is hub 2
 		ctx          = ctxT(t)
 		dev          = shareddevice.ID(600)
-		bucket       = c.deviceBucket(dev)
+		bucket       = c.bucketFor(dev.Uint64())
 		hubDeviceKey = pkg.Concat(hubDevicesPrefix, uint64(1))
 		deviceKey    = pkg.Concat(devicesPrefix, uint64(bucket))
 		bDeviceID    = pkg.U64ToBytes(dev.Uint64())
@@ -562,7 +562,7 @@ func TestReapHub_DrainsDevicesAcrossBuckets(t *testing.T) {
 	require.Equal(t, int64(0), remaining)
 
 	for _, dev := range devices {
-		bucket := c.deviceBucket(dev)
+		bucket := c.bucketFor(dev.Uint64())
 		deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
 		bDeviceID := pkg.U64ToBytes(dev.Uint64())
 		exists, err := c.rdb.HExists(
@@ -588,7 +588,7 @@ func TestReapHub_LeavesReclaimedDeviceAlone(t *testing.T) {
 		c, _          = newTestCache(t, 1)
 		ctx           = ctxT(t)
 		dev           = shareddevice.ID(700)
-		bucket        = c.deviceBucket(dev)
+		bucket        = c.bucketFor(dev.Uint64())
 		hubDeviceKey  = pkg.Concat(hubDevicesPrefix, uint64(1))
 		hubDeviceKey2 = pkg.Concat(hubDevicesPrefix, uint64(2))
 		deviceKey     = pkg.Concat(devicesPrefix, uint64(bucket))
@@ -733,7 +733,7 @@ func TestReapHub_DrainsDevicesAcrossMultipleBatches(t *testing.T) {
 
 	// No device may still point to the reaped hub.
 	for _, dev := range devices {
-		bucket := c.deviceBucket(dev)
+		bucket := c.bucketFor(dev.Uint64())
 		deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
 		bDeviceID := pkg.U64ToBytes(dev.Uint64())
 

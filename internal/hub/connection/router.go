@@ -155,7 +155,7 @@ func (r *Router) ActivateConn(
 	ss.State.Store(uint32(session.StateActive))
 
 	conn.SetContext(ss)
-	old, existence := r.conns[deviceID&mask].Set(deviceID, conn)
+	old, existence := r.conns[r.bucketFor(deviceID)].Set(deviceID, conn)
 	switch {
 	case existence && old == conn:
 		r.meta.Add(^uint32(0)) // activated twice on the same conn
@@ -233,8 +233,8 @@ func (r *Router) RemoveConn(ctx context.Context, conn nio.Conn) {
 	if ss.State.Swap(uint32(session.StateClosed)) == uint32(session.StateClosed) {
 		return
 	}
-	if cur, ok := r.conns[ss.DeviceID&mask].Lookup(ss.DeviceID); ok && cur == conn {
-		r.conns[ss.DeviceID&mask].Delete(ss.DeviceID)
+	if cur, ok := r.conns[r.bucketFor(ss.DeviceID)].Lookup(ss.DeviceID); ok && cur == conn {
+		r.conns[r.bucketFor(ss.DeviceID)].Delete(ss.DeviceID)
 	}
 	r.meta.Add(^uint32(0))
 
@@ -271,7 +271,7 @@ func (r *Router) RemoveConn(ctx context.Context, conn nio.Conn) {
 }
 
 func (r *Router) Send(deviceID shareddevice.ID, data SendData) error {
-	conn, existence := r.conns[deviceID&mask].Lookup(deviceID)
+	conn, existence := r.conns[r.bucketFor(deviceID)].Lookup(deviceID)
 	if !existence {
 		return ErrSessionNotFound
 	}
@@ -336,4 +336,8 @@ func (r *Router) ForceClose(conn nio.Conn) {
 	} else {
 		r.logger.Info("forces close connection")
 	}
+}
+
+func (r *Router) bucketFor(deviceID shareddevice.ID) int {
+	return int(pkg.Mix64(deviceID.Uint64())) & mask
 }

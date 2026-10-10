@@ -207,8 +207,8 @@ func (c *cache) ListHubsByDevices(
 
 	// bucket -> indices into deviceIDs/result that fall in that bucket.
 	byBucket := make(map[uint32][]int)
-	for i, id := range deviceIDs {
-		bucket := c.deviceBucket(id)
+	for i, deviceID := range deviceIDs {
+		bucket := c.bucketFor(deviceID.Uint64())
 		byBucket[bucket] = append(byBucket[bucket], i)
 	}
 
@@ -395,8 +395,8 @@ func (c *cache) BatchAddDevices(
 		flattened    = make([]shareddevice.ID, 0, len(deviceIDs)) // The device order after flattening follows the bucket pattern, matching the ARGV.
 	)
 
-	for i, id := range deviceIDs {
-		b := c.deviceBucket(id)
+	for i, deviceID := range deviceIDs {
+		b := c.bucketFor(deviceID.Uint64())
 		if _, ok := byBucket[b]; !ok {
 			order = append(order, b)
 		}
@@ -523,8 +523,8 @@ func (c *cache) BatchDelDevices(
 		order        = make([]uint32, 0)
 	)
 
-	for i, id := range deviceIDs {
-		b := c.deviceBucket(id)
+	for i, deviceID := range deviceIDs {
+		b := c.bucketFor(deviceID.Uint64())
 		if _, ok := byBucket[b]; !ok {
 			order = append(order, b)
 		}
@@ -813,7 +813,7 @@ func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
 				// rather than failing the whole reap over it.
 				continue
 			}
-			bucket := uint32(id % uint64(c.deviceBucketCount))
+			bucket := uint32(c.bucketFor(id))
 			byBucket[bucket] = append(byBucket[bucket], deviceIDStr)
 		}
 
@@ -1024,8 +1024,8 @@ func (c *cache) handleEvents(ctx context.Context) {
 }
 
 // deviceBucket returns the registry bucket for deviceID.
-func (c *cache) deviceBucket(deviceID shareddevice.ID) uint32 {
-	return uint32(deviceID.Uint64() % uint64(c.deviceBucketCount))
+func (c *cache) bucketFor(id uint64) uint32 {
+	return uint32(pkg.Mix64(id) % uint64(c.deviceBucketCount))
 }
 
 // subscribe creates a Redis Pub/Sub subscription and waits until Redis

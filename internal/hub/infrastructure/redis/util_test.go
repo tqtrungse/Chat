@@ -19,8 +19,6 @@ package redis
 import (
 	"testing"
 
-	shareddevice "xxx/internal/shared/device"
-
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,11 +44,11 @@ func TestParseHeartbeatKey(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestDeviceBucket(t *testing.T) {
+func TestBucketFor(t *testing.T) {
 	c, _ := newTestCache(t, 1)
-	b := c.deviceBucket(shareddevice.ID(uint64(testBucketCount) * 7))
+	b := c.bucketFor(uint64(testBucketCount) * 7)
 	require.Equal(t, uint32(0), b)
 
-	b = c.deviceBucket(shareddevice.ID(uint64(testBucketCount)*7 + 1))
+	b = c.bucketFor(uint64(testBucketCount)*7 + 1)
 	require.Equal(t, uint32(1), b)
 }
