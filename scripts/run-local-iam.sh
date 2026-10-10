@@ -28,12 +28,16 @@ CERT_FILE="$CERT_DIR/iam.crt"
 KEY_FILE="$CERT_DIR/iam.key"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
-  echo "Missing $CONFIG_FILE; copy .example.env to ./.local/.config.env and configure it." >&2
+  mkdir -p "$(dirname -- "$CONFIG_FILE")"
+  echo "Missing local IAM config: $CONFIG_FILE" >&2
+  echo "Initialize it with:" >&2
+  echo "  cp \"$ROOT_DIR/cmd/iam/.example.env\" \"$CONFIG_FILE\"" >&2
   exit 1
 fi
 
 if [[ ! -s "$CERT_FILE" || ! -s "$KEY_FILE" ]]; then
   mkdir -p "$CERT_DIR"
+  umask 077
   openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 365 \
     -keyout "$KEY_FILE" \
     -out "$CERT_FILE" \

@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 #
 # Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
 #
@@ -15,4 +17,25 @@
 # limitations under the License.
 #
 
-docker compose --env-file ../infrastructure/redis/local/.local.env -f ../infrastructure/local-docker-compose.yaml up -d
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+COMPOSE_FILE="$ROOT_DIR/infrastructure/local-docker-compose.yaml"
+REDIS_ENV_FILE="$ROOT_DIR/infrastructure/redis/local/.local.env"
+
+if [[ ! -f "$COMPOSE_FILE" ]]; then
+  echo "Missing Docker Compose file: $COMPOSE_FILE" >&2
+  exit 1
+fi
+
+if [[ ! -f "$REDIS_ENV_FILE" ]]; then
+  echo "Missing Redis local environment file: $REDIS_ENV_FILE" >&2
+  exit 1
+fi
+
+exec docker compose \
+  --env-file "$REDIS_ENV_FILE" \
+  -f "$COMPOSE_FILE" \
+  up -d
