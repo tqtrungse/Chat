@@ -17,6 +17,7 @@
 package sql
 
 import (
+	"strings"
 	"time"
 
 	"xxx/pkg"
@@ -40,7 +41,10 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 	c.Passwd = loader.GetString("SQL_DATABASE_PASSWORD")
 	c.DBName = loader.GetString("SQL_DATABASE_NAME")
 	c.PrimaryAddr = loader.GetString("SQL_DATABASE_PRIMARY_ADDRESS")
-	c.ReplicaAddrs = loader.GetStringSlice("SQL_DATABASE_REPLICA_ADDRESSES")
+	c.ReplicaAddrs = strings.Split(loader.GetString("SQL_DATABASE_REPLICA_ADDRESSES"), ",")
+	for idx := range c.ReplicaAddrs {
+		c.ReplicaAddrs[idx] = strings.TrimSpace(c.ReplicaAddrs[idx])
+	}
 	c.MultiStatements = loader.GetBool("SQL_DATABASE_MULTI_STATEMENTS")
 	c.Pool.Load(loader)
 }

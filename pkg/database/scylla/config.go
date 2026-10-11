@@ -124,8 +124,8 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 		return
 	}
 	c.Hosts = strings.Split(loader.GetString("SCYLLA_DATABASE_HOSTS"), ",")
-	for _, host := range c.Hosts {
-		host = strings.TrimSpace(host)
+	for idx := range c.Hosts {
+		c.Hosts[idx] = strings.TrimSpace(c.Hosts[idx])
 	}
 
 	c.User = loader.GetString("SCYLLA_DATABASE_USER")
