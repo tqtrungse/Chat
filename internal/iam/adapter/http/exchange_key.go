@@ -42,22 +42,23 @@ func (s *Server) exchangeKey(w http.ResponseWriter, r *http.Request) {
 	// 4. Within 20 seconds: TCP sends ActiveConnReq{token=deviceID LE, ticket, sign=Ed25519(identityPriv, ticket)}.
 	// ======================================
 
-	var (
-		err  error
-		req  json.ExchangeKeyReq
-		resp *json.ExchangeKeyResp
-	)
+	claims, ok := r.Context().Value(claimsContextKey).(*pkg.JWTClaims)
+	if !ok {
+		s.respondErr(w, http.StatusUnauthorized, errAuthVerify)
+		return
+	}
 
-	claims := r.Context().Value(claimsKey).(*pkg.JWTClaims)
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
-	err = easyjson.UnmarshalFromReader(r.Body, &req)
+
+	var req  json.ExchangeKeyReq
+	err := easyjson.UnmarshalFromReader(r.Body, &req)
 	if err != nil {
 		s.logger.Error("failed to unmarshal request", zap.Error(err))
 		s.respondErr(w, http.StatusBadRequest, err)
 		return
 	}
 
-	resp, err = s.keyExchanger.Exchange(r.Context(), claims.Subject, req)
+	resp, err := s.keyExchanger.Exchange(r.Context(), claims.Subject, req)
 	defer slicepool.Put(req.ClientPubKey)
 	if err == nil {
 		s.respond(w, resp)

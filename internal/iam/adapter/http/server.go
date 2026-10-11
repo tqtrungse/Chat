@@ -36,7 +36,9 @@ import (
 	"go.uber.org/zap"
 )
 
-const claimsKey string = "claims"
+type contextKey uint8
+
+const claimsContextKey contextKey = iota
 
 var (
 	errAuthHeaderNotFound = errors.New("missing or invalid Authorization header")
@@ -131,7 +133,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		}
 
 		// Attach claims to the context.
-		ctx := context.WithValue(r.Context(), claimsKey, claims)
+		ctx := context.WithValue(r.Context(), claimsContextKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
