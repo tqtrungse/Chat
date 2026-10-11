@@ -17,6 +17,7 @@
 package nats
 
 import (
+	"strings"
 	"time"
 
 	"xxx/pkg"
@@ -59,11 +60,11 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 
 	var (
 		idx             = 0
-		strs            = loader.GetStringSlice("BROKER_DELIVERY_BACKOFF")
+		strs            = strings.Split(loader.GetString("BROKER_DELIVERY_BACKOFF"), ",")
 		deliveryBackOff = make([]time.Duration, len(strs))
 	)
 	for idx = range strs {
-		deliveryBackOff[idx], _ = time.ParseDuration(strs[idx])
+		deliveryBackOff[idx], _ = time.ParseDuration(strings.TrimSpace(strs[idx]))
 	}
 
 	c.HubSubjectPrefix = loader.GetString("BROKER_HUB_SUBJECT_PREFIX")

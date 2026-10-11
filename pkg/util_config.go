@@ -24,7 +24,6 @@ import (
 
 type ConfigLoader interface {
 	GetString(key string) string
-	GetStringSlice(key string) []string
 
 	GetInt(key string) int
 	GetUint8(key string) uint8

@@ -17,6 +17,7 @@
 package scylla
 
 import (
+	"strings"
 	"time"
 
 	"xxx/pkg"
@@ -122,7 +123,11 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 	if loader == nil {
 		return
 	}
-	c.Hosts = loader.GetStringSlice("SCYLLA_DATABASE_HOSTS")
+	c.Hosts = strings.Split(loader.GetString("SCYLLA_DATABASE_HOSTS"), ",")
+	for _, host := range c.Hosts {
+		host = strings.TrimSpace(host)
+	}
+
 	c.User = loader.GetString("SCYLLA_DATABASE_USER")
 	c.Passwd = loader.GetString("SCYLLA_DATABASE_PASSWORD")
 	c.Keyspace = loader.GetString("SCYLLA_DATABASE_KEYSPACE")
