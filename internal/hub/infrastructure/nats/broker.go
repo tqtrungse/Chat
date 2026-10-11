@@ -241,6 +241,11 @@ func (b *broker) handleInboxMessage(
 		return
 	}
 
+	if err := msg.Validate(); err != nil {
+		b.logger.Warn("invalid inbox message, ignore", zap.Error(err))
+		return
+	}
+
 	// Separate the shutdown-cancel signal from the I/O processing logic,
 	// but retain all TraceID/Logger data currently in ctx.
 	var (
