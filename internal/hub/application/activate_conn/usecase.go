@@ -45,8 +45,8 @@ const (
 )
 
 type Usecase interface {
-	// Begin is called from OnOpen. false means: close the connection.
-	Begin(conn nio.Conn) bool
+	// Admit is called from OnOpen. false means: close the connection.
+	Admit(conn nio.Conn) bool
 	Activate(conn nio.Conn, packet []byte) nio.Action
 	Prove(ctx context.Context, conn nio.Conn, packet []byte) nio.Action
 	Deactivate(ctx context.Context, conn nio.Conn) nio.Action
@@ -87,13 +87,18 @@ func New(
 	return ca
 }
 
-// Begin reserves a pre-auth slot and arms the deadline. Don't log per rejection:
+// Admit reserves a pre-auth slot and arms the deadline. Don't log per rejection:
 // under attack that becomes a log storm; export PreAuthConns() as a metric instead.
-func (ca *connActivator) Begin(conn nio.Conn) bool {
+func (ca *connActivator) Admit(conn nio.Conn) bool {
+	if ca.router.CurConns() > ca.router.MaxConns() {
+		return false
+	}
+
 	if ca.preAuth.Add(1) > ca.maxPreAuth {
 		ca.preAuth.Add(-1)
 		return false
 	}
+
 	p := &pendingActivation{
 		owner: ca,
 		stage: stageConnected,

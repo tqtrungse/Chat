@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"xxx/api/hub/v1/proto/gen/pub"
-	"xxx/internal/hub/application/accept_conn"
 	"xxx/internal/hub/application/activate_conn"
 	"xxx/internal/hub/application/send_message"
 	"xxx/internal/hub/domain/session"
@@ -44,7 +43,6 @@ type Server struct {
 	ready     chan struct{}
 	cfg       Config
 	logger    *log.Logger
-	acceptor  accept_conn.Usecase
 	activator activate_conn.Usecase
 	sender    send_message.Usecase
 	cleanup   func()
@@ -54,7 +52,6 @@ func NewServer(
 	ctx context.Context,
 	cfg Config,
 	logger *log.Logger,
-	connAcceptor accept_conn.Usecase,
 	connActivator activate_conn.Usecase,
 	msgSender send_message.Usecase,
 	cleanup func(),
@@ -64,7 +61,6 @@ func NewServer(
 		ready:     make(chan struct{}),
 		cfg:       cfg,
 		logger:    logger,
-		acceptor:  connAcceptor,
 		activator: connActivator,
 		sender:    msgSender,
 		cleanup:   cleanup,
@@ -137,10 +133,10 @@ func (s *Server) OnShutdown(_ nio.Engine) {
 }
 
 func (s *Server) OnOpen(conn nio.Conn) ([]byte, nio.Action) {
-	if !s.acceptor.Accept(conn) || !s.activator.Begin(conn) {
-		return nil, nio.Close
+	if s.activator.Admit(conn) {
+		return nil, nio.None
 	}
-	return nil, nio.None
+	return nil, nio.Close
 }
 
 func (s *Server) OnClose(conn nio.Conn, err error) nio.Action {

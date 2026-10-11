@@ -21,11 +21,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
 	iamhttp "xxx/internal/iam/adapter/http"
 	"xxx/internal/iam/application/exchange_key"
-	iamcrypto "xxx/internal/iam/infrastructure/crypto"
-	iammysql "xxx/internal/iam/infrastructure/datastore/mysql"
+	"xxx/internal/iam/infrastructure/crypto"
+	"xxx/internal/iam/infrastructure/datastore/mysql"
+	sharedsession "xxx/internal/shared/session"
 
 	"xxx/pkg"
 	"xxx/pkg/database/sql"
@@ -49,14 +52,14 @@ func Run(ctx context.Context) (retErr error) {
 		return fmt.Errorf("load IAM config: %w", err)
 	}
 
-	var httpConfig iamhttp.Config
-	httpConfig.Load(cfgLoader)
-	if err = validateHTTPConfig(httpConfig); err != nil {
+	var cfgHttp iamhttp.Config
+	cfgHttp.Load(cfgLoader)
+	if err = validateHTTPConfig(cfgHttp); err != nil {
 		return err
 	}
 
-	var dbConfig sql.Config
-	dbConfig.Load(cfgLoader)
+	var cfgDb sql.Config
+	cfgDb.Load(cfgLoader)
 
 	ticketSigner, err := loadTicketSigner(cfgLoader)
 	if err != nil {
@@ -64,7 +67,7 @@ func Run(ctx context.Context) (retErr error) {
 	}
 
 	db := sql.NewMySql()
-	if err = db.Open(ctx, dbConfig); err != nil {
+	if err = db.Open(ctx, cfgDb); err != nil {
 		return fmt.Errorf("open MySQL: %w", err)
 	}
 	defer func() {
@@ -79,11 +82,16 @@ func Run(ctx context.Context) (retErr error) {
 
 	keyExchanger := exchange_key.New(
 		db,
-		iamcrypto.NewHkdfDeriver(),
-		iammysql.NewDeviceMetaReader(),
+		crypto.NewHkdfDeriver(),
+		mysql.NewDeviceMetaReader(),
 		ticketSigner,
 	)
-	server, err := iamhttp.NewServer(ctx, httpConfig, logger, keyExchanger)
+	server, err := iamhttp.NewServer(
+		ctx,
+		cfgHttp,
+		logger,
+		keyExchanger,
+	)
 	if err != nil {
 		return fmt.Errorf("initialize IAM HTTP server: %w", err)
 	}
@@ -92,7 +100,7 @@ func Run(ctx context.Context) (retErr error) {
 	go func() {
 		serverResult <- server.Run()
 	}()
-	logger.Info("IAM HTTP server started", zap.String("address", httpConfig.Addr))
+	logger.Info("IAM HTTP server started", zap.String("address", cfgHttp.Addr))
 	_ = logger.Sync()
 
 	select {
@@ -105,6 +113,7 @@ func Run(ctx context.Context) (retErr error) {
 	case <-ctx.Done():
 		logger.Info("shutting down IAM HTTP server")
 		_ = logger.Sync()
+
 		shutdownErr := server.Shutdown()
 		serverErr := <-serverResult
 		if errors.Is(serverErr, http.ErrServerClosed) {
@@ -114,4 +123,63 @@ func Run(ctx context.Context) (retErr error) {
 		}
 		return errors.Join(shutdownErr, serverErr)
 	}
+}
+
+func validateHTTPConfig(cfg iamhttp.Config) error {
+	if cfg.Addr == "" {
+		return errors.New("HTTP_SERVER_ADDR is required")
+	}
+	if cfg.CertFile == "" || cfg.KeyFile == "" {
+		return errors.New("HTTP_SERVER_CERT_FILE and HTTP_SERVER_KEY_FILE are required; IAM serves HTTPS")
+	}
+	return nil
+}
+
+func loadTicketSigner(loader pkg.ConfigLoader) (*sharedsession.TicketSigner, error) {
+	keys, err := sharedsession.ParseTicketEncryptKeys(
+		strings.Split(loader.GetString("TICKET_ENCRYPT_KEYS"), ","),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("parse ticket encryption keys: %w", err)
+	}
+	defer func() {
+		for _, key := range keys {
+			clear(key)
+		}
+	}()
+
+	sealer, err := sharedsession.NewTicketSealer(
+		loader.GetUint8("TICKET_ENCRYPT_CURRENT_KEY_ID"),
+		keys,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialize ticket encryption: %w", err)
+	}
+
+	id, err := strconv.ParseUint(
+		strings.TrimSpace(loader.GetString("TICKET_SIGNING_KEY_ID")),
+		10,
+		8,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("parse TICKET_SIGNING_KEY_ID: %w", err)
+	}
+
+	seed, err := sharedsession.ParseTicketSigningPrivate(
+		loader.GetString("TICKET_SIGNING_PRIVATE_KEY"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	signer, err := sharedsession.NewTicketSigner(
+		sealer,
+		byte(id),
+		seed,
+	)
+	clear(seed)
+	if err != nil {
+		return nil, fmt.Errorf("initialize ticket signer: %w", err)
+	}
+	return signer, nil
 }

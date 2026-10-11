@@ -23,13 +23,12 @@ import (
 	"strings"
 	"time"
 
-	hubtcp "xxx/internal/hub/adapter/tcp"
-	"xxx/internal/hub/application/accept_conn"
+	"xxx/internal/hub/adapter/tcp"
 	"xxx/internal/hub/application/activate_conn"
 	"xxx/internal/hub/connection"
-	hubcb "xxx/internal/hub/infrastructure/cb"
-	hubcrypto "xxx/internal/hub/infrastructure/crypto"
-	hubredis "xxx/internal/hub/infrastructure/redis"
+	"xxx/internal/hub/infrastructure/cb"
+	"xxx/internal/hub/infrastructure/crypto"
+	"xxx/internal/hub/infrastructure/redis"
 	"xxx/internal/hub/protocol"
 	shareddevice "xxx/internal/shared/device"
 	sharedsession "xxx/internal/shared/session"
@@ -59,35 +58,35 @@ func Run(ctx context.Context) (retErr error) {
 		return err
 	}
 
-	var tcpConfig hubtcp.Config
-	tcpConfig.Load(cfgLoader)
-	tcpConfig.Addr = strings.TrimSpace(tcpConfig.Addr)
-	if tcpConfig.Addr == "" {
+	var cfgTcp tcp.Config
+	cfgTcp.Load(cfgLoader)
+	cfgTcp.Addr = strings.TrimSpace(cfgTcp.Addr)
+	if cfgTcp.Addr == "" {
 		return errors.New("TCP_SERVER_ADDRESS is required")
 	}
-	if !strings.Contains(tcpConfig.Addr, "://") {
-		tcpConfig.Addr = "tcp://" + tcpConfig.Addr
+	if !strings.Contains(cfgTcp.Addr, "://") {
+		cfgTcp.Addr = "tcp://" + cfgTcp.Addr
 	}
-	if tcpConfig.ReadBufferCap == 0 {
-		tcpConfig.ReadBufferCap = 4096
+	if cfgTcp.ReadBufferCap == 0 {
+		cfgTcp.ReadBufferCap = 4096
 	}
-	if tcpConfig.WriteBufferCap == 0 {
-		tcpConfig.WriteBufferCap = 4096
+	if cfgTcp.WriteBufferCap == 0 {
+		cfgTcp.WriteBufferCap = 4096
 	}
 
 	var (
-		routerConfig   connection.Config
-		activateConfig activate_conn.Config
-		cacheConfig    hubredis.Config
-		breakerConfig  hubcb.Config
-		workerConfig   workerpool.Config
+		cfgRouter   connection.Config
+		cfgActivate activate_conn.Config
+		cfgCache    redis.Config
+		cfgCb       cb.Config
+		cfgPool     workerpool.Config
 	)
-	routerConfig.Load(cfgLoader)
-	activateConfig.Load(cfgLoader)
-	cacheConfig.Load(cfgLoader)
-	breakerConfig.Load(cfgLoader)
-	workerConfig.Load(cfgLoader)
-	if strings.TrimSpace(cacheConfig.Addr) == "" {
+	cfgRouter.Load(cfgLoader)
+	cfgActivate.Load(cfgLoader)
+	cfgCache.Load(cfgLoader)
+	cfgCb.Load(cfgLoader)
+	cfgPool.Load(cfgLoader)
+	if strings.TrimSpace(cfgCache.Addr) == "" {
 		return errors.New("DISTRIBUTED_CACHE_ADDRESS is required for activation")
 	}
 
@@ -111,16 +110,20 @@ func Run(ctx context.Context) (retErr error) {
 
 	runCtx, cancelRun := context.WithCancelCause(ctx)
 	defer cancelRun(nil)
-	pool, closePool := workerpool.New(workerConfig, func(workerID int, recovered any, stack []byte) {
-		logger.Error("hub worker panicked",
-			zap.Int("workerID", workerID),
-			zap.Any("panic", recovered),
-			zap.ByteString("stack", stack),
-		)
-	})
+	pool, closePool := workerpool.New(
+		cfgPool,
+		func(workerID int, recovered any, stack []byte) {
+			logger.Error(
+				"hub worker panicked",
+				zap.Int("workerID", workerID),
+				zap.Any("panic", recovered),
+				zap.ByteString("stack", stack),
+			)
+		},
+	)
 	defer closePool()
 
-	dCache, startCache, closeCache, setCallbacks := hubredis.NewCache(hubID, cacheConfig, logger, pool)
+	dCache, startCache, closeCache, setCallbacks := redis.NewCache(hubID, cfgCache, logger, pool)
 	cacheStarted := false
 	defer func() {
 		// Drain queued cache operations while Redis is still available, then
@@ -139,35 +142,73 @@ func Run(ctx context.Context) (retErr error) {
 			retErr = errors.Join(retErr, fmt.Errorf("close Redis: %w", err2))
 		}
 	}()
-	setCallbacks(hubredis.Callbacks{
-		OnHubDeleted:    func(uint64) {},
-		OnDeviceDeleted: func(uint64, shareddevice.ID) {},
-		OnSelfReaped: func() {
-			logger.Error("hub registration was lost; shutting down", zap.Uint64("hubID", hubID))
-			cancelRun(errors.New("hub Redis registration was lost"))
+	setCallbacks(
+		redis.Callbacks{
+			OnHubDeleted:    func(uint64) {},
+			OnDeviceDeleted: func(uint64, shareddevice.ID) {},
+			OnSelfReaped: func() {
+				logger.Error("hub registration was lost; shutting down", zap.Uint64("hubID", hubID))
+				cancelRun(errors.New("hub Redis registration was lost"))
+			},
 		},
-	})
+	)
 	if err = startCache(runCtx); err != nil {
 		return fmt.Errorf("start Redis presence: %w", err)
 	}
 	cacheStarted = true
 
-	channel := hubcrypto.NewAesGcmChannel()
+	channel := crypto.NewAesGcmChannel()
 	encoder := protocol.NewEncoder(channel)
 	decoder := protocol.NewDecoder(channel)
-	breaker := hubcb.New(breakerConfig, dCache.IsInfraError, nil)
+	breaker := cb.New(
+		cfgCb,
+		dCache.IsInfraError,
+		nil,
+	)
 	router := connection.NewRouter(
-		runCtx, routerConfig, hubcrypto.NewEd25519Signer(), ticketVerifier,
-		dCache, breaker, logger, pool, encoder,
+		runCtx,
+		cfgRouter,
+		crypto.NewEd25519Signer(),
+		ticketVerifier,
+		dCache,
+		breaker,
+		logger,
+		pool,
+		encoder,
 	)
 	defer router.Close()
-	acceptor := accept_conn.New(router)
-	activator := activate_conn.New(activateConfig, logger, encoder, decoder, router)
-	server := hubtcp.NewServer(runCtx, tcpConfig, logger, acceptor, activator, nil, router.Close)
-	return runTCPServer(runCtx, server, logger, tcpConfig.Addr, hubID)
+
+	activator := activate_conn.New(
+		cfgActivate,
+		logger,
+		encoder,
+		decoder,
+		router,
+	)
+	server := tcp.NewServer(
+		runCtx,
+		cfgTcp,
+		logger,
+		activator,
+		nil,
+		router.Close,
+	)
+	return runTCPServer(
+		runCtx,
+		server,
+		logger,
+		cfgTcp.Addr,
+		hubID,
+	)
 }
 
-func runTCPServer(ctx context.Context, server *hubtcp.Server, logger *log.Logger, address string, hubID uint64) error {
+func runTCPServer(
+	ctx context.Context,
+	server *tcp.Server,
+	logger *log.Logger,
+	address string,
+	hubID uint64,
+) error {
 	serverResult := make(chan error, 1)
 	go func() { serverResult <- server.Run() }()
 
@@ -186,7 +227,12 @@ func runTCPServer(ctx context.Context, server *hubtcp.Server, logger *log.Logger
 	}
 
 	if ctx.Err() == nil {
-		logger.Info("hub TCP server started", zap.String("address", address), zap.Uint64("hubID", hubID))
+		logger.Info(
+			"hub TCP server started",
+			zap.String("address", address),
+			zap.Uint64("hubID", hubID),
+		)
+
 		select {
 		case err := <-serverResult:
 			return tcpServerError(err)

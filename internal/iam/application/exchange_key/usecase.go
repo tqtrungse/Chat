@@ -18,9 +18,7 @@ package exchange_key
 
 import (
 	"context"
-	"crypto/ed25519"
 	"encoding/binary"
-	"errors"
 	"time"
 
 	"xxx/api/iam/v1/json"
@@ -33,10 +31,7 @@ import (
 
 const ticketTTL = 15 * time.Second
 
-var (
-	keyDerivationInfo = []byte("xxx/iam/exchange-key/v1")
-	errIdentityPub    = errors.New("invalid device identity key")
-)
+var keyDerivationInfo = []byte("xxx/iam/exchange-key/v1")
 
 type Usecase interface {
 	Exchange(ctx context.Context, subject string, req json.ExchangeKeyReq) (*json.ExchangeKeyResp, error)
@@ -89,10 +84,6 @@ func (ke *keyExchanger) Exchange(
 
 	if meta.State != device.StateActive {
 		return nil, ErrDeviceUnactive
-	}
-
-	if len(meta.IdentityPub) != ed25519.PublicKeySize {
-		return nil, errIdentityPub
 	}
 
 	info := make([]byte, 0, len(keyDerivationInfo)+8)
