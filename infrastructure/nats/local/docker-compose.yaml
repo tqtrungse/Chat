@@ -1,0 +1,12 @@
+services:
+  nats:
+    image: nats:2.14.6
+    command: ["-c", "/etc/nats/nats.conf"]
+    ports:
+      - "127.0.0.1:4222:4222"
+    environment:
+      HUB_1_PASSWORD: ${HUB_1_PASSWORD:?Set HUB_1_PASSWORD}
+      HUB_2_PASSWORD: ${HUB_2_PASSWORD:?Set HUB_2_PASSWORD}
+    volumes:
+      - ./nats.conf:/etc/nats/nats.conf:ro
+    restart: unless-stopped

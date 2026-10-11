@@ -19,4 +19,5 @@ name: chat
 
 include:
   - ./auth/local/keycloak/docker-compose.yaml
+  - ./nats/local/docker-compose.yaml
   - ./redis/local/docker-compose.yaml

@@ -62,7 +62,7 @@ func Run(ctx context.Context) (retErr error) {
 	var dbConfig sql.Config
 	dbConfig.Load(loader)
 
-	keys, err := sharedsession.ParseTicketKeys(loader.GetStringSlice("TICKET_KEYS"))
+	keys, err := sharedsession.ParseTicketKeys(strings.Split(loader.GetString("TICKET_KEYS"), ","))
 	if err != nil {
 		return fmt.Errorf("parse ticket keys: %w", err)
 	}

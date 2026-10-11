@@ -1,2 +1,4 @@
 /infrastructure/root-ca/
 /cmd/iam/.local
+/infrastructure/redis/local/.local.env
+/infrastructure/nats/local/.local.env
