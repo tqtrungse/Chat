@@ -153,6 +153,12 @@ func (s *Server) OnClose(conn nio.Conn, err error) nio.Action {
 }
 
 func (s *Server) OnTraffic(conn nio.Conn) nio.Action {
+	// Protocol requirement: the client must send one request and wait until it
+	// has received the complete corresponding response before sending the next.
+	// A single unix.Read can contain multiple frames, but this callback handles
+	// at most one; nio.read moves leftover bytes into inboundBuffer afterward.
+	// In level-triggered mode those user-space bytes do not trigger another read
+	// callback, so the next frame could stall until more socket data arrives.
 	header, err := conn.Peek(2)
 	if err != nil {
 		return nio.None
