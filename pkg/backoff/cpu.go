@@ -20,10 +20,6 @@ import (
 	"runtime"
 	"time"
 	_ "unsafe"
-
-	// Automatically adjust GOMAXPROCS (the number of OS threads executing Go code concurrently)
-	// to match the CPU quota in a containerized environment such as Docker or Kubernetes.
-	_ "go.uber.org/automaxprocs"
 )
 
 const (

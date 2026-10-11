@@ -36,8 +36,14 @@ func NewEncoder(secureChannel SecureChannel) *Encoder {
 // | protobuf size | protobuf. It deliberately has no session HMAC because the session keys
 // have not been activated yet. Only public challenge data may use this path.
 func (e *Encoder) EncodeHandshake(pkgType pbpub.PacketType, msg proto.Message) ([]byte, error) {
+	// --------------------------------------------
+	// | Pkg Size |  Pkg Type |   Pb Size  |  Pb  |
+	// --------------------------------------------
+	// |  2 bytes |  2 bytes  |   2 bytes  | xxx  |
+	// --------------------------------------------
+
 	pbSize := e.pbMarshal.Size(msg)
-	frameSize := 4 + pbSize // packet type + protobuf length + protobuf
+	frameSize := 4 + pbSize
 
 	if pbSize > maxFrameSize || frameSize > maxFrameSize {
 		return nil, ErrHandshakePacketTooLarge

@@ -21,25 +21,14 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/binary"
-	"errors"
 	"fmt"
-	"strconv"
-	"strings"
-	"time"
 )
 
 const (
 	ticketPlainSize = 8 + 8 + 6*32                        // 208
 	ticketHeader    = 1 + 12                              // keyID | nonce
 	ticketSize      = ticketHeader + ticketPlainSize + 16 // 237
-	ticketMaxSkew   = 5 * time.Second
-)
-
-var (
-	ErrTicketInvalid = errors.New("invalid ticket")
-	ErrTicketExpired = errors.New("ticket expired")
 )
 
 type TicketSealer struct {
@@ -55,10 +44,12 @@ func NewTicketSealer(curID byte, keys map[byte][]byte) (*TicketSealer, error) {
 		if len(k) != 32 {
 			return nil, fmt.Errorf("ticket key %d: want 32 bytes, got %d", id, len(k))
 		}
+
 		block, err := aes.NewCipher(k)
 		if err != nil {
 			return nil, err
 		}
+
 		if s.aeads[id], err = cipher.NewGCM(block); err != nil {
 			return nil, err
 		}
@@ -69,28 +60,11 @@ func NewTicketSealer(curID byte, keys map[byte][]byte) (*TicketSealer, error) {
 	return s, nil
 }
 
-// ParseTicketKeys parses entries like "1:<base64 32 bytes>".
-func ParseTicketKeys(entries []string) (map[byte][]byte, error) {
-	out := make(map[byte][]byte, len(entries))
-	for _, e := range entries {
-		idStr, b64, ok := strings.Cut(strings.TrimSpace(e), ":")
-		if !ok {
-			return nil, fmt.Errorf("bad ticket key entry")
-		}
-		id, err := strconv.ParseUint(idStr, 10, 8)
-		if err != nil {
-			return nil, err
-		}
-		k, err := base64.StdEncoding.DecodeString(b64)
-		if err != nil {
-			return nil, err
-		}
-		out[byte(id)] = k
-	}
-	return out, nil
-}
-
 func (s *TicketSealer) Seal(t *Ticket) ([]byte, error) {
+	if t == nil {
+		return nil, ErrTicketInvalid
+	}
+
 	var pt [ticketPlainSize]byte
 	marshalTicket(pt[:], t)
 	defer clear(pt[:])
@@ -107,10 +81,12 @@ func (s *TicketSealer) Open(deviceID uint64, ticket []byte) (*Ticket, error) {
 	if len(ticket) != ticketSize {
 		return nil, ErrTicketInvalid
 	}
+
 	aead, ok := s.aeads[ticket[0]]
 	if !ok {
 		return nil, ErrTicketInvalid
 	}
+
 	// dst=nil: never mutates the caller's buffer (it aliases the nio read buffer).
 	pt, err := aead.Open(nil, ticket[1:ticketHeader], ticket[ticketHeader:], ticketAAD(deviceID))
 	if err != nil {
@@ -122,10 +98,6 @@ func (s *TicketSealer) Open(deviceID uint64, ticket []byte) (*Ticket, error) {
 	if t.DeviceID != deviceID {
 		t.Clear()
 		return nil, ErrTicketInvalid
-	}
-	if time.Now().Unix() > t.ExpiresAt+int64(ticketMaxSkew.Seconds()) {
-		t.Clear()
-		return nil, ErrTicketExpired
 	}
 	return t, nil
 }

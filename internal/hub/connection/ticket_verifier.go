@@ -17,8 +17,13 @@
 
 package connection
 
-import sharedsession "xxx/internal/shared/session"
+import (
+	"time"
 
-type TicketIssuer interface {
+	sharedsession "xxx/internal/shared/session"
+)
+
+type TicketVerifier interface {
 	Open(deviceID uint64, ticket []byte) (*sharedsession.Ticket, error)
+	CheckExpiry(ticket *sharedsession.Ticket, now time.Time) error
 }

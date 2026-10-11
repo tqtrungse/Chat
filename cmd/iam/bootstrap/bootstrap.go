@@ -21,15 +21,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 
 	iamhttp "xxx/internal/iam/adapter/http"
 	"xxx/internal/iam/application/exchange_key"
 	iamcrypto "xxx/internal/iam/infrastructure/crypto"
 	iammysql "xxx/internal/iam/infrastructure/datastore/mysql"
-	sharedsession "xxx/internal/shared/session"
 
 	"xxx/pkg"
 	"xxx/pkg/database/sql"
@@ -48,31 +44,23 @@ func Run(ctx context.Context) (retErr error) {
 		}
 	}()
 
-	loader, err := loadConfig()
+	cfgLoader, err := pkg.LoadConfig("iam")
 	if err != nil {
 		return fmt.Errorf("load IAM config: %w", err)
 	}
 
 	var httpConfig iamhttp.Config
-	httpConfig.Load(loader)
+	httpConfig.Load(cfgLoader)
 	if err = validateHTTPConfig(httpConfig); err != nil {
 		return err
 	}
 
 	var dbConfig sql.Config
-	dbConfig.Load(loader)
+	dbConfig.Load(cfgLoader)
 
-	keys, err := sharedsession.ParseTicketKeys(strings.Split(loader.GetString("TICKET_KEYS"), ","))
+	ticketSigner, err := loadTicketSigner(cfgLoader)
 	if err != nil {
-		return fmt.Errorf("parse ticket keys: %w", err)
-	}
-
-	ticketSealer, err := sharedsession.NewTicketSealer(
-		loader.GetUint8("TICKET_CURRENT_KEY_ID"),
-		keys,
-	)
-	if err != nil {
-		return fmt.Errorf("initialize ticket sealer: %w", err)
+		return err
 	}
 
 	db := sql.NewMySql()
@@ -93,7 +81,7 @@ func Run(ctx context.Context) (retErr error) {
 		db,
 		iamcrypto.NewHkdfDeriver(),
 		iammysql.NewDeviceMetaReader(),
-		ticketSealer,
+		ticketSigner,
 	)
 	server, err := iamhttp.NewServer(ctx, httpConfig, logger, keyExchanger)
 	if err != nil {
@@ -126,61 +114,4 @@ func Run(ctx context.Context) (retErr error) {
 		}
 		return errors.Join(shutdownErr, serverErr)
 	}
-}
-
-func validateHTTPConfig(cfg iamhttp.Config) error {
-	if cfg.Addr == "" {
-		return errors.New("HTTP_SERVER_ADDR is required")
-	}
-	if cfg.CertFile == "" || cfg.KeyFile == "" {
-		return errors.New("HTTP_SERVER_CERT_FILE and HTTP_SERVER_KEY_FILE are required; IAM serves HTTPS")
-	}
-	return nil
-}
-
-func loadConfig() (pkg.ConfigLoader, error) {
-	path, err := findConfigPath()
-	if err != nil {
-		return nil, err
-	}
-
-	fileName := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	return pkg.DefaultConfigLoader(filepath.Dir(path), fileName)
-}
-
-func findConfigPath() (string, error) {
-	if path := os.Getenv("IAM_CONFIG_FILE"); path != "" {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return "", err
-		}
-		if _, err := os.Stat(absPath); err != nil {
-			return "", fmt.Errorf("IAM_CONFIG_FILE %q: %w", absPath, err)
-		}
-		return absPath, nil
-	}
-
-	candidates := []string{
-		filepath.Join("cmd", "iam", ".prod.env"),
-		".prod.env",
-	}
-	if executable, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Join(filepath.Dir(executable), ".prod.env"))
-	}
-
-	for _, candidate := range candidates {
-		absPath, err := filepath.Abs(candidate)
-		if err != nil {
-			return "", err
-		}
-
-		_, err = os.Stat(absPath)
-		if err == nil {
-			return absPath, nil
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("inspect IAM config %q: %w", absPath, err)
-		}
-	}
-	return "", errors.New("IAM config not found; set IAM_CONFIG_FILE or provide cmd/iam/.prod.env")
 }

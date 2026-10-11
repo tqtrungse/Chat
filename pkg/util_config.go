@@ -17,6 +17,11 @@
 package pkg
 
 import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -39,7 +44,17 @@ type ConfigLoader interface {
 	GetDuration(key string) time.Duration
 }
 
-func DefaultConfigLoader(folderPath, fileName string) (ConfigLoader, error) {
+func LoadConfig(serviceName string) (ConfigLoader, error) {
+	path, err := findConfigPath(serviceName)
+	if err != nil {
+		return nil, err
+	}
+
+	fileName := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	return defaultConfigLoader(filepath.Dir(path), fileName)
+}
+
+func defaultConfigLoader(folderPath, fileName string) (ConfigLoader, error) {
 	v := viper.New()
 	v.AutomaticEnv()
 	if len(folderPath) == 0 || len(fileName) == 0 {
@@ -57,4 +72,51 @@ func DefaultConfigLoader(folderPath, fileName string) (ConfigLoader, error) {
 	// Watch config dynamically
 	v.WatchConfig()
 	return v, nil
+}
+
+func findConfigPath(serviceName string) (string, error) {
+	var (
+		envConfigFile = fmt.Sprintf("%s_CONFIG_FILE", strings.ToUpper(serviceName))
+		path          = os.Getenv(envConfigFile)
+	)
+
+	if len(path) > 0 {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return "", err
+		}
+		if _, err = os.Stat(absPath); err != nil {
+			return "", fmt.Errorf("%s %q: %w", envConfigFile, absPath, err)
+		}
+		return absPath, nil
+	}
+
+	serviceName = strings.ToLower(serviceName)
+	candidates := []string{
+		filepath.Join("cmd", serviceName, ".prod.env"),
+		".prod.env",
+	}
+	if executable, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(executable), ".prod.env"))
+	}
+
+	for _, candidate := range candidates {
+		absPath, err := filepath.Abs(candidate)
+		if err != nil {
+			return "", err
+		}
+
+		if _, err = os.Stat(absPath); err == nil {
+			return absPath, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("inspect %s config %q: %w", serviceName, absPath, err)
+		}
+	}
+	return "", fmt.Errorf(
+		"%s config not found; set %s or provide cmd/%s/.prod.env",
+		serviceName,
+		envConfigFile,
+		serviceName,
+	)
 }

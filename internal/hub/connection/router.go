@@ -68,7 +68,7 @@ type Router struct {
 	_    [pkg.CacheLineSize - 4]byte
 
 	signer         Signer
-	ticketIssuer   TicketIssuer
+	ticketVerifier TicketVerifier
 	tickerDuration time.Duration
 	maxConns       uint32
 	logger         *log.Logger
@@ -82,7 +82,7 @@ func NewRouter(
 	rootCtx context.Context,
 	cfg Config,
 	signer Signer,
-	ticketIssuer TicketIssuer,
+	ticketVerifier TicketVerifier,
 	dCache DistributedCache,
 	cb CircuitBreaker,
 	logger *log.Logger,
@@ -91,7 +91,7 @@ func NewRouter(
 ) *Router {
 	r := &Router{
 		signer:         signer,
-		ticketIssuer:   ticketIssuer,
+		ticketVerifier: ticketVerifier,
 		tickerDuration: cfg.Router.TickerDuration,
 		logger:         logger,
 		pool:           pool,
@@ -125,17 +125,18 @@ func NewRouter(
 	return r
 }
 
+// ActivateConn registers conn for the device in t. t must come from PrepareActivation;
+// the caller keeps ownership and must Clear it (session keys are copied by value).
 func (r *Router) ActivateConn(
 	ctx context.Context,
-	token, ticket, sign []byte,
+	t *sharedsession.Ticket,
 	conn nio.Conn,
 	callback func(id shareddevice.ID),
 ) error {
-	t, err := r.PrepareActivation(token, ticket, sign)
-	if err != nil {
+	if err := r.ticketVerifier.CheckExpiry(t, time.Now()); err != nil {
 		return err
 	}
-	defer t.Clear()
+
 	deviceID := shareddevice.ID(t.DeviceID)
 
 	// Reserve a slot first; give it back if we end up replacing a conn.
@@ -205,7 +206,7 @@ func (r *Router) PrepareActivation(token, ticket, sign []byte) (*sharedsession.T
 	}
 	deviceID := shareddevice.ID(binary.LittleEndian.Uint64(token))
 
-	t, err := r.ticketIssuer.Open(deviceID.Uint64(), ticket)
+	t, err := r.ticketVerifier.Open(deviceID.Uint64(), ticket)
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +335,7 @@ func (r *Router) ForceClose(conn nio.Conn) {
 	if err := conn.Close(); err != nil {
 		r.logger.Error("failed to force close connection", zap.Error(err))
 	} else {
-		r.logger.Info("forces close connection")
+		r.logger.Debug("forces close connection")
 	}
 }
 

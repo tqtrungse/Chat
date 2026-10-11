@@ -29,6 +29,7 @@ import (
 	"xxx/internal/hub/application/accept_conn"
 	"xxx/internal/hub/application/activate_conn"
 	"xxx/internal/hub/application/send_message"
+	"xxx/internal/hub/domain/session"
 
 	"xxx/pkg/log"
 	"xxx/pkg/nio"
@@ -40,6 +41,7 @@ type Server struct {
 	nio.BuiltinEventEngine
 	eng       nio.Engine
 	ctx       context.Context
+	ready     chan struct{}
 	cfg       Config
 	logger    *log.Logger
 	acceptor  accept_conn.Usecase
@@ -59,6 +61,7 @@ func NewServer(
 ) *Server {
 	return &Server{
 		ctx:       ctx,
+		ready:     make(chan struct{}),
 		cfg:       cfg,
 		logger:    logger,
 		acceptor:  connAcceptor,
@@ -107,13 +110,25 @@ func (s *Server) Run() error {
 }
 
 func (s *Server) Shutdown() error {
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), 10*time.Second)
 	defer cancel()
+	select {
+	case <-s.ready:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	return s.eng.Stop(ctx)
+}
+
+// Ready closes after OnBoot has published the engine for Shutdown.
+// Startup failures are reported by Run instead.
+func (s *Server) Ready() <-chan struct{} {
+	return s.ready
 }
 
 func (s *Server) OnBoot(eng nio.Engine) nio.Action {
 	s.eng = eng
+	close(s.ready)
 	return nio.None
 }
 
@@ -122,10 +137,10 @@ func (s *Server) OnShutdown(_ nio.Engine) {
 }
 
 func (s *Server) OnOpen(conn nio.Conn) ([]byte, nio.Action) {
-	if s.acceptor.Accept(conn) {
-		return nil, nio.None
+	if !s.acceptor.Accept(conn) || !s.activator.Begin(conn) {
+		return nil, nio.Close
 	}
-	return nil, nio.Close
+	return nil, nio.None
 }
 
 func (s *Server) OnClose(conn nio.Conn, err error) nio.Action {
@@ -174,15 +189,20 @@ func (s *Server) OnTraffic(conn nio.Conn) nio.Action {
 		return s.activator.Prove(s.ctx, conn, packet)
 
 	case pub.PacketType_REQ_SEND_MSG:
-		return s.sender.Send(conn, packet)
+		if _, ok := conn.Context().(*session.Data); !ok { // not activated yet
+			return nio.Close
+		}
 
 	case pub.PacketType_REQ_ACK_RECV_MSG:
-		return nio.None
+		if _, ok := conn.Context().(*session.Data); !ok {
+			return nio.Close
+		}
 
 	default:
 		s.logger.Error("invalid packet type, force close", zap.Uint16("type", pkgType))
 		return nio.Close
 	}
+	return nio.None
 }
 
 func (s *Server) OnTick() (delay time.Duration, action nio.Action) {

@@ -20,7 +20,6 @@ package session
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"math"
 	"reflect"
@@ -31,10 +30,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ---------------------------------------------------------------------------
-// helpers (prefixed with "ticket" to avoid clashing with other test files in
-// package crypto)
-// ---------------------------------------------------------------------------
+// ------------------------------------------
+// Helpers shared by the session ticket tests
+// ------------------------------------------
 
 func ticketTestKey(t *testing.T) []byte {
 	t.Helper()
@@ -77,6 +75,7 @@ func newTicketTestTicket(t *testing.T, deviceID uint64, expiresAt int64) *Ticket
 		_, err := rand.Read(b)
 		require.NoError(t, err)
 	}
+	t.Cleanup(tk.Clear)
 	return tk
 }
 
@@ -102,12 +101,11 @@ func requireTicketOpenFails(
 }
 
 // ----------------------------------------
-// Seal / Open: round trip, tamper, expiry
+// Seal / Open: round trip and tamper
 // ----------------------------------------
 
 func TestTicket_RoundTripAndTamper(t *testing.T) {
-	key := make([]byte, 32)
-	_, _ = rand.Read(key)
+	key := ticketTestKey(t)
 	s, err := NewTicketSealer(1, map[byte][]byte{1: key})
 	require.NoError(t, err)
 
@@ -119,6 +117,7 @@ func TestTicket_RoundTripAndTamper(t *testing.T) {
 
 	out, err := s.Open(42, tk)
 	require.NoError(t, err)
+	defer out.Clear()
 	require.Equal(t, in, out)
 
 	_, err = s.Open(43, tk) // wrong device -> AAD does not match
@@ -130,9 +129,12 @@ func TestTicket_RoundTripAndTamper(t *testing.T) {
 	require.ErrorIs(t, err, ErrTicketInvalid)
 
 	in.ExpiresAt = time.Now().Add(-time.Minute).Unix()
-	tk, _ = s.Seal(in)
-	_, err = s.Open(42, tk)
-	require.ErrorIs(t, err, ErrTicketExpired)
+	tk, err = s.Seal(in)
+	require.NoError(t, err)
+	out, err = s.Open(42, tk)
+	require.NoError(t, err, "the AES sealer does not enforce ticket expiration")
+	defer out.Clear()
+	require.Equal(t, in, out)
 }
 
 func TestTicket_RoundTrip_DeviceIDBoundaries(t *testing.T) {
@@ -183,23 +185,20 @@ func TestTicket_Open_RejectsWrongLength(t *testing.T) {
 	requireTicketOpenFails(t, s, 42, append(bytes.Clone(tk), tk...), ErrTicketInvalid, "doubled")
 }
 
-// Timestamps are compared with second granularity and ticketMaxSkew of
-// tolerance. The cases keep a 2s margin on each side of the boundary so the
-// test is not sensitive to the clock ticking over mid-test.
-func TestTicket_Open_ExpiryAndSkew(t *testing.T) {
+// The AES sealer preserves timestamps; TicketVerifier owns the expiry policy.
+func TestTicket_Open_DoesNotEnforceExpiry(t *testing.T) {
 	s := newTicketTestSealer(t, 1, 1)
-	skew := int64(ticketMaxSkew.Seconds())
-	now := time.Now().Unix()
 
 	cases := []struct {
 		name      string
 		expiresAt int64
-		wantErr   error
 	}{
-		{"not yet expired", now + 20, nil},
-		{"expired but inside skew", now - (skew - 2), nil},
-		{"expired beyond skew", now - (skew + 2), ErrTicketExpired},
-		{"long expired", now - 3600, ErrTicketExpired},
+		{"future", ticketExpiry(time.Hour)},
+		{"expired", ticketExpiry(-time.Hour)},
+		{"zero", 0},
+		{"negative", -1},
+		{"minimum timestamp", math.MinInt64},
+		{"maximum timestamp", math.MaxInt64},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -207,27 +206,25 @@ func TestTicket_Open_ExpiryAndSkew(t *testing.T) {
 			tk, err := s.Seal(in)
 			require.NoError(t, err)
 
-			if tc.wantErr != nil {
-				requireTicketOpenFails(t, s, 42, tk, tc.wantErr)
-				return
-			}
 			out, err := s.Open(42, tk)
 			require.NoError(t, err)
+			defer out.Clear()
 			require.Equal(t, in, out)
 		})
 	}
 }
 
-// Authentication must come first: a forged/tampered/wrong-device ticket has
-// to look "invalid" even when its (unauthenticated) contents would say
-// "expired", so Open never reports expiry state for something it could not
-// authenticate.
-func TestTicket_Open_AuthenticatesBeforeExpiry(t *testing.T) {
+// Expired payloads must still pass AES authentication and device binding.
+func TestTicket_Open_AuthenticatesExpiredPayload(t *testing.T) {
 	s := newTicketTestSealer(t, 1, 1)
-	tk, err := s.Seal(newTicketTestTicket(t, 42, ticketExpiry(-time.Hour)))
+	in := newTicketTestTicket(t, 42, ticketExpiry(-time.Hour))
+	tk, err := s.Seal(in)
 	require.NoError(t, err)
 
-	requireTicketOpenFails(t, s, 42, tk, ErrTicketExpired) // control: genuine but expired
+	out, err := s.Open(42, tk)
+	require.NoError(t, err)
+	defer out.Clear()
+	require.Equal(t, in, out)
 
 	requireTicketOpenFails(t, s, 43, tk, ErrTicketInvalid) // wrong device
 
@@ -294,6 +291,13 @@ func TestTicket_Open_DoesNotMutateInput(t *testing.T) {
 // Seal: nonce, confidentiality, input handling
 // --------------------------------------------
 
+func TestTicket_Seal_RejectsNilTicket(t *testing.T) {
+	sealer := newTicketTestSealer(t, 1, 1)
+	wire, err := sealer.Seal(nil)
+	require.ErrorIs(t, err, ErrTicketInvalid)
+	require.Nil(t, wire)
+}
+
 func TestTicket_Seal_UsesFreshNonce(t *testing.T) {
 	s := newTicketTestSealer(t, 1, 1)
 	in := newTicketTestTicket(t, 42, ticketExpiry(20*time.Second))
@@ -348,21 +352,18 @@ func TestTicket_Seal_DoesNotLeakPlaintextOrMutateInput(t *testing.T) {
 // Wire format
 // -----------
 
-// Pins the documented sizes. authTagSize is defined elsewhere in the package,
-// so also check it matches the real GCM overhead.
+// Pin the documented sizes against the real GCM overhead and nonce size.
 func TestTicket_SizeConstants(t *testing.T) {
 	s := newTicketTestSealer(t, 1, 1)
 	aead := s.aeads[1]
 
-	require.Equal(t, 16, aead.Overhead(), "authTagSize must equal the GCM tag size")
+	require.Equal(t, 16, aead.Overhead(), "AES ticket uses a 16-byte GCM tag")
 	require.Equal(t, ticketHeader-1, aead.NonceSize(), "header must hold keyID + a full GCM nonce")
 	require.Equal(t, 208, ticketPlainSize)
 	require.Equal(t, 237, ticketSize)
 }
 
-// Pins the plaintext layout byte for byte. Tickets are issued by one hub
-// instance and opened by another (and across deploys), so a silently changed
-// layout would invalidate live tickets.
+// Pin the plaintext layout shared by IAM and Hub across deployments.
 func TestTicket_MarshalLayout(t *testing.T) {
 	in := &Ticket{DeviceID: 0x0102030405060708, ExpiresAt: 0x1112131415161718}
 	fill := func(dst []byte, v byte) {
@@ -412,6 +413,13 @@ func TestTicket_MarshalRoundTripExtremes(t *testing.T) {
 			require.Equal(t, in, unmarshalTicket(b[:]))
 		})
 	}
+}
+
+func TestTicket_AADUsesDeviceID(t *testing.T) {
+	require.Equal(t,
+		[]byte{0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01},
+		ticketAAD(0x0102030405060708),
+	)
 }
 
 // --------------------------------------------------------------
@@ -538,102 +546,6 @@ func TestNewTicketSealer_Validation(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, in, out)
 		})
-	}
-}
-
-// ---------------
-// ParseTicketKeys
-// ---------------
-
-func TestParseTicketKeys_Valid(t *testing.T) {
-	k1, k2 := ticketTestKey(t), ticketTestKey(t)
-	enc := base64.StdEncoding.EncodeToString
-
-	got, err := ParseTicketKeys([]string{
-		"1:" + enc(k1),
-		"  2:" + enc(k2) + "\n", // surrounding whitespace is trimmed
-		"255:" + enc(k1),
-	})
-	require.NoError(t, err)
-	require.Equal(t, map[byte][]byte{1: k1, 2: k2, 255: k1}, got)
-}
-
-func TestParseTicketKeys_EmptyListYieldsEmptyMap(t *testing.T) {
-	for _, in := range [][]string{nil, {}} {
-		got, err := ParseTicketKeys(in)
-		require.NoError(t, err)
-		require.Len(t, got, 0)
-
-		// Such a config must not produce a usable sealer.
-		s, err := NewTicketSealer(1, got)
-		require.Error(t, err)
-		require.Nil(t, s)
-	}
-}
-
-func TestParseTicketKeys_RejectsMalformedEntries(t *testing.T) {
-	enc := base64.StdEncoding.EncodeToString
-	good := enc(ticketTestKey(t))
-	// 0xfb 0xff ... encodes to '-'/'_' in the URL-safe alphabet.
-	urlSafe := base64.URLEncoding.EncodeToString(bytes.Repeat([]byte{0xfb, 0xff}, 16))
-
-	cases := []struct {
-		name  string
-		entry string
-	}{
-		{"empty entry", ""},
-		{"missing separator", good},
-		{"empty id", ":" + good},
-		{"non-numeric id", "x:" + good},
-		{"negative id", "-1:" + good},
-		{"id above byte range", "256:" + good},
-		{"invalid base64", "1:***not-base64***"},
-		{"url-safe base64 alphabet", "1:" + urlSafe},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := ParseTicketKeys([]string{tc.entry})
-			require.Error(t, err)
-			require.Nil(t, got)
-
-			// One bad entry poisons the whole list, even after a good one.
-			got, err = ParseTicketKeys([]string{"1:" + good, tc.entry})
-			require.Error(t, err)
-			require.Nil(t, got)
-		})
-	}
-}
-
-// ParseTicketKeys only decodes; key-length policy is NewTicketSealer's job.
-func TestParseTicketKeys_FeedsNewTicketSealer(t *testing.T) {
-	enc := base64.StdEncoding.EncodeToString
-
-	keys, err := ParseTicketKeys([]string{
-		"1:" + enc(ticketTestKey(t)),
-		"2:" + enc(ticketTestKey(t)),
-	})
-	require.NoError(t, err)
-
-	s, err := NewTicketSealer(2, keys)
-	require.NoError(t, err)
-
-	in := newTicketTestTicket(t, 42, ticketExpiry(20*time.Second))
-	tk, err := s.Seal(in)
-	require.NoError(t, err)
-	out, err := s.Open(42, tk)
-	require.NoError(t, err)
-	require.Equal(t, in, out)
-
-	for name, entry := range map[string]string{
-		"16-byte key": "1:" + enc(make([]byte, 16)),
-		"empty key":   "1:",
-	} {
-		keys, err := ParseTicketKeys([]string{entry})
-		require.NoError(t, err, name)
-
-		s, err := NewTicketSealer(1, keys)
-		require.Error(t, err, name)
-		require.Nil(t, s, name)
 	}
 }
 

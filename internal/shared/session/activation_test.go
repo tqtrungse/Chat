@@ -18,6 +18,7 @@
 package session
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"testing"
@@ -25,7 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestActivationTranscriptUsesUnambiguousLittleEndianLengthPrefixes(t *testing.T) {
+func TestActivationTranscript_UsesUnambiguousLengthPrefixes(t *testing.T) {
 	token, ticket, sign := []byte("ab"), []byte("c"), []byte("d")
 	one := ActivationTranscript(token, ticket, sign)
 	two := ActivationTranscript([]byte("a"), []byte("bc"), []byte("d"))
@@ -33,7 +34,7 @@ func TestActivationTranscriptUsesUnambiguousLittleEndianLengthPrefixes(t *testin
 	require.NotEqual(t, one, two)
 
 	// The uint32 field lengths are encoded little-endian.
-	encoded := append([]byte(activationTranscriptDomain), 2, 0, 0, 0)
+	encoded := append([]byte("xxx/hub/activate/v1\x00"), 2, 0, 0, 0)
 	encoded = append(encoded, token...)
 	encoded = append(encoded, 1, 0, 0, 0)
 	encoded = append(encoded, ticket...)
@@ -42,7 +43,32 @@ func TestActivationTranscriptUsesUnambiguousLittleEndianLengthPrefixes(t *testin
 	require.Equal(t, sha256.Sum256(encoded), one)
 }
 
-func TestActivationProofBindsKeyTranscriptAndNonce(t *testing.T) {
+func TestActivationTranscript_BindsEveryFieldWithoutMutatingInputs(t *testing.T) {
+	token, ticket, signature := []byte("token"), []byte("ticket"), []byte("signature")
+	beforeToken, beforeTicket, beforeSignature := bytes.Clone(token), bytes.Clone(ticket), bytes.Clone(signature)
+	original := ActivationTranscript(token, ticket, signature)
+
+	require.NotEqual(t, original, ActivationTranscript([]byte("other"), ticket, signature))
+	require.NotEqual(t, original, ActivationTranscript(token, []byte("other"), signature))
+	require.NotEqual(t, original, ActivationTranscript(token, ticket, []byte("other")))
+	require.NotEqual(t, original, ActivationTranscript(ticket, token, signature))
+	require.Equal(t, original, ActivationTranscript(token, ticket, signature))
+	require.Equal(t, beforeToken, token)
+	require.Equal(t, beforeTicket, ticket)
+	require.Equal(t, beforeSignature, signature)
+}
+
+func TestActivationTranscript_EmptyFields(t *testing.T) {
+	nilFields := ActivationTranscript(nil, nil, nil)
+	emptyFields := ActivationTranscript([]byte{}, []byte{}, []byte{})
+	require.Equal(t, nilFields, emptyFields)
+
+	// Even empty fields contribute their three uint32 little-endian lengths.
+	encoded := append([]byte("xxx/hub/activate/v1\x00"), make([]byte, 12)...)
+	require.Equal(t, sha256.Sum256(encoded), nilFields)
+}
+
+func TestActivationProof_BindsKeyTranscriptAndNonce(t *testing.T) {
 	var keyA, keyB, nonceA, nonceB [32]byte
 	for i := range keyA {
 		keyA[i] = byte(i + 1)
@@ -63,4 +89,23 @@ func TestActivationProofBindsKeyTranscriptAndNonce(t *testing.T) {
 	require.False(t, hmac.Equal(proof[:], wrongKeyProof[:]))
 	require.False(t, hmac.Equal(proof[:], wrongTranscriptProof[:]))
 	require.False(t, hmac.Equal(proof[:], wrongNonceProof[:]))
+
+	// Pin the domain and field order against an independent HMAC assembly.
+	mac := hmac.New(sha256.New, keyA[:])
+	_, _ = mac.Write([]byte("xxx/hub/activate-proof/v1\x00"))
+	_, _ = mac.Write(transcriptA[:])
+	_, _ = mac.Write(nonceA[:])
+	require.Equal(t, mac.Sum(nil), proof[:])
+}
+
+func TestActivationProof_DoesNotMutateInputs(t *testing.T) {
+	var key, transcript, nonce [32]byte
+	for i := range key {
+		key[i], transcript[i], nonce[i] = byte(i+1), byte(i+2), byte(i+3)
+	}
+	beforeKey, beforeTranscript, beforeNonce := key, transcript, nonce
+	_ = ActivationProof(&key, transcript, nonce)
+	require.Equal(t, beforeKey, key)
+	require.Equal(t, beforeTranscript, transcript)
+	require.Equal(t, beforeNonce, nonce)
 }

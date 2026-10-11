@@ -16,58 +16,23 @@
 
 package main
 
-import "xxx/cmd/hub/boostrap"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"xxx/cmd/hub/bootstrap"
+)
 
 func main() {
-	boostrap.Run()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	//logger := log.NewLogger(nil)
-	//framePool := pool.NewFramePool(200)
-	//workerPool := pool.NewWorkerPool(
-	//	"worker-pool",
-	//	10*runtime.GOMAXPROCS(0),
-	//	pool.Config{
-	//		ScaleThreshold: 1,
-	//	},
-	//)
-	//workerPool.SetPanicHandler(func(ctx context.Context, r any) {
-	//	logger.Panic(
-	//		log.TraceID(0),
-	//		"panic in pool",
-	//		zap.String("pool_name", workerPool.Name()),
-	//		zap.Any("panic_reason", r),
-	//		zap.Stack("stack_trace"),
-	//	)
-	//})
-	//
-	//inactiveSessions := infraSession.NewInactiveSessions(5)
-	//secureChannel := infraCrypto.NewAesGcmChannel(framePool)
-	//
-	//connActivator := usecase.NewConnActivator(
-	//	workerPool,
-	//	inactiveSessions,
-	//	secureChannel,
-	//)
-	//
-	//connRouter := usecase.NewConnListener(
-	//	connActivator,
-	//	nil,
-	//)
-	//
-	//server := tcp.NewServer(
-	//	&tcp.Config{
-	//		Addr:            "tcp://:9000",
-	//		Multicore:       true,
-	//		NumEventLoop:    runtime.GOMAXPROCS(0),
-	//		TCPKeepAlive:    30 * time.Second,
-	//		TCPKeepInterval: 5 * time.Second,
-	//		TCPKeepCount:    3,
-	//	},
-	//	connRouter,
-	//)
-	//
-	//err := server.Run()
-	//if err != nil {
-	//	panic(err)
-	//}
+	if err := bootstrap.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		_, _ = fmt.Fprintln(os.Stderr, "hub stopped:", err)
+		os.Exit(1)
+	}
 }
