@@ -19,6 +19,9 @@ package tcp
 import (
 	"context"
 	"encoding/binary"
+	"errors"
+	"io"
+	"net"
 	"runtime"
 	"time"
 
@@ -126,7 +129,9 @@ func (s *Server) OnOpen(conn nio.Conn) ([]byte, nio.Action) {
 }
 
 func (s *Server) OnClose(conn nio.Conn, err error) nio.Action {
-	if err != nil {
+	if err != nil &&
+		!errors.Is(err, io.EOF) &&
+		!errors.Is(err, net.ErrClosed) {
 		s.logger.Warn("connection closed", zap.Error(err))
 	}
 	return s.activator.Deactivate(s.ctx, conn)
