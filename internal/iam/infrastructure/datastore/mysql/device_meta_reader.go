@@ -45,11 +45,11 @@ func (d *deviceMetaReader) FindDeviceMeta(
 	}
 
 	var (
-		tx        = val.(*gorm.DB)
+		db        = val.(*gorm.DB)
 		entDevice = &entity.Device{ID: deviceID}
 	)
 
-	err = tx.
+	err = db.
 		WithContext(dbCtx).
 		Select("external_id", "state", "identity_pub").
 		Take(entDevice).

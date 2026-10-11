@@ -72,24 +72,25 @@ func (ke *keyExchanger) Exchange(
 		return nil, ErrRequestInvalid
 	}
 
-	var (
-		meta *DeviceMeta
-		err  error
-	)
-	err = ke.db.Transaction(ctx, sql.TxSourcePrimary, func(dbCtx context.Context) error {
-		meta, err = ke.deviceMetaReader.FindDeviceMeta(dbCtx, shareddevice.ID(req.DeviceID))
-		return err
+	var meta *DeviceMeta
+	err := ke.db.WithDB(ctx, sql.TxSourcePrimary, func(dbCtx context.Context) error {
+		var findErr error
+		meta, findErr = ke.deviceMetaReader.FindDeviceMeta(dbCtx, shareddevice.ID(req.DeviceID))
+		return findErr
 	})
 	if err != nil {
 		return nil, err
 	}
+
 	// Same error for "not found" and "not yours": no device enumeration.
 	if meta == nil || meta.ExternalID != subject {
 		return nil, ErrDeviceNotFound
 	}
+
 	if meta.State != device.StateActive {
 		return nil, ErrDeviceUnactive
 	}
+
 	if len(meta.IdentityPub) != ed25519.PublicKeySize {
 		return nil, errIdentityPub
 	}

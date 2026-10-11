@@ -151,7 +151,6 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 				func() {
 					tc.prepare(f)
 				},
-				tc.wantErr,
 			)
 			defer doneSqlMock()
 
@@ -161,7 +160,7 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 				reader = NewDeviceMetaReader()
 			)
 
-			err = db.Transaction(f.ctx, sql.TxSourcePrimary, func(dbCtx context.Context) error {
+			err = db.WithDB(f.ctx, sql.TxSourcePrimary, func(dbCtx context.Context) error {
 				resp, err = reader.FindDeviceMeta(dbCtx, tc.args)
 				return err
 			})

@@ -170,3 +170,24 @@ func (m *mysql) Transaction(
 			return fn(AttachDB(ctx, tx))
 		})
 }
+
+func (m *mysql) WithDB(
+	ctx context.Context,
+	source TxSource,
+	fn func(ctx context.Context) error,
+) error {
+	db := m.db
+
+	switch source {
+	case TxSourcePrimary:
+		db = db.Clauses(dbresolver.Write)
+
+	case TxSourceReplicas:
+		db = db.Clauses(dbresolver.Read)
+	default:
+		return ErrInvalidTxSource
+	}
+
+	dbCtx := AttachDB(ctx, db.WithContext(ctx))
+	return fn(dbCtx)
+}

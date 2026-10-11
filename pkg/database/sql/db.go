@@ -46,4 +46,10 @@ type DB interface {
 		source TxSource,
 		fn func(ctx context.Context) error,
 	) error
+
+	WithDB(
+		ctx context.Context,
+		source TxSource,
+		fn func(ctx context.Context) error,
+	) error
 }

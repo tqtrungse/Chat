@@ -47,7 +47,7 @@ func Setup(t *testing.T, db sql.DB) {
 	})
 }
 
-func ExpectSqlMock(
+func ExpectTransactionSqlMock(
 	t *testing.T,
 	sqlMock sqlmock.Sqlmock,
 	prepare func(),
@@ -63,6 +63,24 @@ func ExpectSqlMock(
 		sqlMock.ExpectRollback()
 	} else {
 		sqlMock.ExpectCommit()
+	}
+
+	return func() {
+		err := sqlMock.ExpectationsWereMet()
+		if err != nil {
+			t.Errorf("there were unfulfilled expectations: %s", err)
+		}
+		sqlMock.ExpectClose()
+	}
+}
+
+func ExpectSqlMock(
+	t *testing.T,
+	sqlMock sqlmock.Sqlmock,
+	prepare func(),
+) func() {
+	if prepare != nil {
+		prepare()
 	}
 
 	return func() {
