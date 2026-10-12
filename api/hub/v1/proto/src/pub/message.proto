@@ -7,7 +7,7 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "./gen/pub";
 
-enum PacketType {
+enum MsgType {
   UNKNOWN = 0;
 
   REQ_ACTIVE_CONN = 1;
@@ -18,7 +18,7 @@ enum PacketType {
   REQ_ACK_RECV_MSG = 6;
 
   RESP_ACTIVE_CONN = 501;
-  RESP_ACTIVE_CONN_CHALLENGE = 502;
+  RESP_ACTIVE_CONN_PROOF = 502;
   RESP_SEND_MSG = 503;
   RESP_ACK_RECV_MSG = 504;
 }
@@ -26,12 +26,12 @@ enum PacketType {
 enum Code {
   SUCCESS = 0;
 
-  ERR_INVALID_PACK_TYPE = 1; // Wrong packet type
-  ERR_INVALID_PACK_SIZE = 2; // Wrong packet size
-  ERR_INVALID_PACK_CIPHER = 3; // Wrong packet cipher
-  ERR_MODIFIED_PACK = 4; // Packet is modified
-  ERR_DECRYPT = 5; // Packet decryption error
-  ERR_DESERIALIZE = 6; // Packet parsing error
+  ERR_INVALID_PACK_TYPE = 1; // Wrong message type
+  ERR_INVALID_PACK_SIZE = 2; // Wrong message size
+  ERR_INVALID_PACK_CIPHER = 3; // Wrong message cipher
+  ERR_MODIFIED_PACK = 4; // message is modified
+  ERR_DECRYPT = 5; // message decryption error
+  ERR_DESERIALIZE = 6; // message parsing error
   ERR_INTERNAL = 7; // Server error
 }
 
@@ -43,7 +43,12 @@ message ActiveConnReq {
 }
 
 message ActiveConnResp {
-  Code code = 1;
+  // transcript = SHA256("xxx/hub/activate/v1\0" ||
+  //   LE32(len(token)) || token || LE32(len(ticket)) || ticket ||
+  //   LE32(len(sign)) || sign).
+  // nonce is fresh and valid only on the TCP connection that requested it.
+  // All integer lengths in this transcript use little-endian encoding.
+  bytes nonce = 1 [(validate.rules).bytes = {len: 32}];
 }
 
 message ActiveConnProofReq {
@@ -52,13 +57,8 @@ message ActiveConnProofReq {
   bytes proof = 1 [(validate.rules).bytes = {len: 32}];
 }
 
-message ActiveConnChallengeResp {
-  // transcript = SHA256("xxx/hub/activate/v1\0" ||
-  //   LE32(len(token)) || token || LE32(len(ticket)) || ticket ||
-  //   LE32(len(sign)) || sign).
-  // nonce is fresh and valid only on the TCP connection that requested it.
-  // All integer lengths in this transcript use little-endian encoding.
-  bytes nonce = 1 [(validate.rules).bytes = {len: 32}];
+message ActiveConnProofResp {
+  Code code = 1;
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------

@@ -226,7 +226,7 @@ func TestExecute_PanicAlwaysCountsAsFailureEvenIfClassifierWouldExcludeIt(t *tes
 
 	for range 2 {
 		func() {
-			defer func() { recover() }()
+			defer func() { _ = recover() }()
 			_ = cb.Execute(context.Background(), func(context.Context) error {
 				panic("boom")
 			})

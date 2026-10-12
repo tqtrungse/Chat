@@ -59,11 +59,10 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 	}
 
 	var (
-		idx             = 0
 		strs            = strings.Split(loader.GetString("BROKER_DELIVERY_BACKOFF"), ",")
 		deliveryBackOff = make([]time.Duration, len(strs))
 	)
-	for idx = range strs {
+	for idx := range strs {
 		deliveryBackOff[idx], _ = time.ParseDuration(strings.TrimSpace(strs[idx]))
 	}
 

@@ -141,7 +141,7 @@ func TestPut_LargerThanMaxInt32_IsIgnored(t *testing.T) {
 func TestPut_NonPowerOfTwoCap_DoesNotPanic(t *testing.T) {
 	var p pool
 
-	buf := make([]byte, 12, 12) // cap 12, not a power of two
+	buf := make([]byte, 12) // cap 12, not a power of two
 	p.Put(buf)
 
 	got := p.Get(8)

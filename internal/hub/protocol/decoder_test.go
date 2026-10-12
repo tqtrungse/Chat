@@ -44,9 +44,10 @@ func randomNonce(t *testing.T) [12]byte {
 func buildPlainPacket(
 	t *testing.T,
 	hmacKey *[32]byte,
-	packType pbpub.PacketType,
+	msgType pbpub.MsgType,
 	msg proto.Message,
 	expand []byte,
+	seqs ...uint64,
 ) []byte {
 	t.Helper()
 	pbBytes, err := proto.Marshal(msg)
@@ -57,12 +58,19 @@ func buildPlainPacket(
 	frameSize := 36 + len(pbBytes) + len(expand)
 	buf := make([]byte, 6, 6+len(pbBytes)+len(expand)+32)
 	binary.LittleEndian.PutUint16(buf[:2], uint16(frameSize))
-	binary.LittleEndian.PutUint16(buf[2:4], uint16(packType))
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(msgType))
 	binary.LittleEndian.PutUint16(buf[4:6], uint16(len(pbBytes)))
 	buf = append(buf, pbBytes...)
 	buf = append(buf, expand...)
 
+	var seq uint64
+	if len(seqs) > 0 {
+		seq = seqs[0]
+	}
+	var seqLE [8]byte
+	binary.LittleEndian.PutUint64(seqLE[:], seq)
 	mac := hmac.New(sha256.New, hmacKey[:])
+	mac.Write(seqLE[:])
 	mac.Write(buf)
 	buf = mac.Sum(buf)
 	return buf
@@ -75,9 +83,10 @@ func buildSecurePacket(
 	ch SecureChannel,
 	secretKey *[32]byte,
 	nonce [12]byte,
-	packType pbpub.PacketType,
+	msgType pbpub.MsgType,
 	msg proto.Message,
 	expand []byte,
+	seqs ...uint64,
 ) []byte {
 	t.Helper()
 	pbBytes, err := proto.Marshal(msg)
@@ -86,7 +95,11 @@ func buildSecurePacket(
 	}
 	cipherSize := ch.Size(len(pbBytes))
 	frameSize := 16 + cipherSize + len(expand)
-	aad := securePacketAADForTest(uint16(frameSize), uint16(packType), uint16(cipherSize), expand)
+	var seq uint64
+	if len(seqs) > 0 {
+		seq = seqs[0]
+	}
+	aad := securePacketAADForTest(uint16(frameSize), uint16(msgType), uint16(cipherSize), seq, expand)
 	sealed, err := ch.Seal(secretKey, &nonce, pbBytes, aad)
 	if err != nil {
 		t.Fatalf("Seal failed: %v", err)
@@ -94,7 +107,7 @@ func buildSecurePacket(
 
 	buf := make([]byte, 18, 18+len(sealed)+len(expand))
 	binary.LittleEndian.PutUint16(buf[:2], uint16(frameSize))
-	binary.LittleEndian.PutUint16(buf[2:4], uint16(packType))
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(msgType))
 	copy(buf[4:16], nonce[:])
 	binary.LittleEndian.PutUint16(buf[16:18], uint16(len(sealed)))
 	buf = append(buf, sealed...)
@@ -102,21 +115,22 @@ func buildSecurePacket(
 	return buf
 }
 
-func securePacketAADForTest(frameSize, packType, cipherSize uint16, expand []byte) []byte {
+func securePacketAADForTest(frameSize, packType, cipherSize uint16, seq uint64, expand []byte) []byte {
 	const domain = "xxx/hub/packet/gcm/v1\x00"
-	aad := make([]byte, len(domain)+6+len(expand))
+	aad := make([]byte, len(domain)+6+8+len(expand))
 	copy(aad, domain)
 	header := aad[len(domain) : len(domain)+6]
 	binary.LittleEndian.PutUint16(header[:2], frameSize)
 	binary.LittleEndian.PutUint16(header[2:4], packType)
 	binary.LittleEndian.PutUint16(header[4:6], cipherSize)
-	copy(aad[len(domain)+6:], expand)
+	binary.LittleEndian.PutUint64(aad[len(domain)+6:len(domain)+14], seq)
+	copy(aad[len(domain)+14:], expand)
 	return aad
 }
 
 // buildActivationPacket matches the TCP activation framing: frame length |
 // packet type | protobuf, without an inner protobuf-size field.
-func buildActivationPacket(t *testing.T, packType pbpub.PacketType, msg proto.Message) []byte {
+func buildActivationPacket(t *testing.T, msgType pbpub.MsgType, msg proto.Message) []byte {
 	t.Helper()
 	pbBytes, err := proto.Marshal(msg)
 	if err != nil {
@@ -124,7 +138,7 @@ func buildActivationPacket(t *testing.T, packType pbpub.PacketType, msg proto.Me
 	}
 	packet := make([]byte, 4, 4+len(pbBytes))
 	binary.LittleEndian.PutUint16(packet[:2], uint16(2+len(pbBytes)))
-	binary.LittleEndian.PutUint16(packet[2:4], uint16(packType))
+	binary.LittleEndian.PutUint16(packet[2:4], uint16(msgType))
 	return append(packet, pbBytes...)
 }
 
@@ -149,17 +163,17 @@ func TestDecoder_DecodeActivePack_Success(t *testing.T) {
 		Sign:   bytes.Repeat([]byte{1}, 64),
 		Ticket: []byte{2},
 	}
-	packet := buildActivationPacket(t, pbpub.PacketType_REQ_ACTIVE_CONN, in)
+	packet := buildActivationPacket(t, pbpub.MsgType_REQ_ACTIVE_CONN, in)
 
 	out := new(pbpub.ActiveConnReq)
-	require.NoError(t, d.DecodeActivePack(packet[4:], out))
+	require.NoError(t, d.DecodeActivePacket(packet[4:], out))
 	require.True(t, proto.Equal(in, out))
 }
 
 func TestDecoder_DecodeActiveProofPack_Success(t *testing.T) {
 	d := NewDecoder(NewMockSecureChannel())
 	in := &pbpub.ActiveConnProofReq{Proof: bytes.Repeat([]byte{1}, 32)}
-	packet := buildActivationPacket(t, pbpub.PacketType_REQ_ACTIVE_CONN_PROOF, in)
+	packet := buildActivationPacket(t, pbpub.MsgType_REQ_ACTIVE_CONN_PROOF, in)
 
 	out := new(pbpub.ActiveConnProofReq)
 	require.NoError(t, d.DecodeActiveProofPack(packet[4:], out))
@@ -169,7 +183,7 @@ func TestDecoder_DecodeActiveProofPack_Success(t *testing.T) {
 func TestDecoder_DecodeActivePack_InvalidBytes(t *testing.T) {
 	d := NewDecoder(NewMockSecureChannel())
 	out := new(pbpub.ActiveConnReq)
-	err := d.DecodeActivePack([]byte{0xFF, 0xFF, 0xFF}, out)
+	err := d.DecodeActivePacket([]byte{0xFF, 0xFF, 0xFF}, out)
 	require.Error(t, err)
 }
 
@@ -182,16 +196,38 @@ func TestDecoder_Decode_ParsesHeaderAndPayload(t *testing.T) {
 	packet := buildPlainPacket(
 		t,
 		hmacKey,
-		pbpub.PacketType_REQ_ACTIVE_CONN,
+		pbpub.MsgType_REQ_ACTIVE_CONN,
 		msg,
 		expand,
 	)
 
-	gotMsg, gotExpand, code, err := d.Decode(hmacKey, packet)
+	gotMsg, gotExpand, code, err := d.Decode(hmacKey, 0, packet)
 	require.NoError(t, err)
 	require.Equal(t, pbpub.Code_SUCCESS, code)
 	require.True(t, proto.Equal(gotMsg, msg))
 	require.True(t, bytes.Equal(gotExpand, expand))
+}
+
+func TestDecoder_Decode_RejectsFrameWhenExpectedSequenceDiffers(t *testing.T) {
+	d := NewDecoder(NewMockSecureChannel())
+	hmacKey := randomKey(t)
+	seq := uint64(17)
+	packet := buildPlainPacket(
+		t,
+		hmacKey,
+		pbpub.MsgType_REQ_ACTIVE_CONN,
+		new(pbpub.ActiveConnReq),
+		[]byte("expand"),
+		seq,
+	)
+
+	_, _, code, err := d.Decode(hmacKey, seq, packet)
+	require.NoError(t, err)
+	require.Equal(t, pbpub.Code_SUCCESS, code)
+
+	_, _, code, err = d.Decode(hmacKey, seq+1, packet)
+	require.Error(t, err)
+	require.Equal(t, pbpub.Code_ERR_MODIFIED_PACK, code)
 }
 
 func TestDecoder_Decode_NoExpand(t *testing.T) {
@@ -205,12 +241,12 @@ func TestDecoder_Decode_NoExpand(t *testing.T) {
 	packet := buildPlainPacket(
 		t,
 		hmacKey,
-		pbpub.PacketType_REQ_ACTIVE_CONN,
+		pbpub.MsgType_REQ_ACTIVE_CONN,
 		msg,
 		nil,
 	)
 
-	_, gotExpand, code, err := d.Decode(hmacKey, packet)
+	_, gotExpand, code, err := d.Decode(hmacKey, 0, packet)
 	require.NoError(t, err)
 	require.Equal(t, pbpub.Code_SUCCESS, code)
 	require.Empty(t, gotExpand)
@@ -224,13 +260,13 @@ func TestDecoder_Decode_RejectsTamperedHMAC(t *testing.T) {
 	packet := buildPlainPacket(
 		t,
 		hmacKey,
-		pbpub.PacketType_REQ_ACTIVE_CONN,
+		pbpub.MsgType_REQ_ACTIVE_CONN,
 		msg,
 		[]byte("x"),
 	)
 	packet[2] ^= 0xFF // tamper the packet type, which is covered by the HMAC
 
-	_, _, code, err := d.Decode(hmacKey, packet)
+	_, _, code, err := d.Decode(hmacKey, 0, packet)
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_MODIFIED_PACK, code)
 }
@@ -247,12 +283,12 @@ func TestDecoder_Decode_WrongHmacKey(t *testing.T) {
 	packet := buildPlainPacket(
 		t,
 		hmacKey,
-		pbpub.PacketType_REQ_ACTIVE_CONN,
+		pbpub.MsgType_REQ_ACTIVE_CONN,
 		msg,
 		nil,
 	)
 
-	_, _, code, err := d.Decode(wrongKey, packet)
+	_, _, code, err := d.Decode(wrongKey, 0, packet)
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_MODIFIED_PACK, code)
 }
@@ -265,12 +301,12 @@ func TestDecoder_Decode_UnrecognizedPacketType(t *testing.T) {
 	packet := buildPlainPacket(
 		t,
 		hmacKey,
-		pbpub.PacketType(9999),
+		pbpub.MsgType(9999),
 		msg,
 		nil,
 	)
 
-	_, _, code, err := d.Decode(hmacKey, packet)
+	_, _, code, err := d.Decode(hmacKey, 0, packet)
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_TYPE, code)
 }
@@ -285,7 +321,7 @@ func TestDecoder_Decode_TooShortPacket_ReturnsErrorNotPanic(t *testing.T) {
 		err  error
 	)
 	runRecovered(t, "Decode", func() {
-		_, _, code, err = d.Decode(hmacKey, shortPacket)
+		_, _, code, err = d.Decode(hmacKey, 0, shortPacket)
 	})
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_SIZE, code)
@@ -297,13 +333,13 @@ func TestDecoder_Decode_RejectsInconsistentFrameLength(t *testing.T) {
 	packet := buildPlainPacket(
 		t,
 		hmacKey,
-		pbpub.PacketType_REQ_ACTIVE_CONN,
+		pbpub.MsgType_REQ_ACTIVE_CONN,
 		new(pbpub.ActiveConnReq),
 		nil,
 	)
 	binary.LittleEndian.PutUint16(packet[:2], uint16(len(packet)-1))
 
-	_, _, code, err := d.Decode(hmacKey, packet)
+	_, _, code, err := d.Decode(hmacKey, 0, packet)
 	require.ErrorIs(t, err, ErrPkgSizeInvalid)
 	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_SIZE, code)
 }
@@ -319,7 +355,7 @@ func TestDecoder_Decode_PbSizeLiesAboutLength(t *testing.T) {
 	packet := buildPlainPacket(
 		t,
 		hmacKey,
-		pbpub.PacketType_REQ_ACTIVE_CONN,
+		pbpub.MsgType_REQ_ACTIVE_CONN,
 		msg,
 		[]byte("expand"),
 	)
@@ -334,7 +370,7 @@ func TestDecoder_Decode_PbSizeLiesAboutLength(t *testing.T) {
 		err  error
 	)
 	runRecovered(t, "Decode", func() {
-		_, _, code, err = d.Decode(hmacKey, packet)
+		_, _, code, err = d.Decode(hmacKey, 0, packet)
 	})
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_MODIFIED_PACK, code)
@@ -355,16 +391,41 @@ func TestDecoder_DecodeS_ParsesHeaderAndDecrypts(t *testing.T) {
 		ch,
 		secretKey,
 		nonce,
-		pbpub.PacketType_REQ_SEND_MSG,
+		pbpub.MsgType_REQ_SEND_MSG,
 		msg,
 		expand,
 	)
 
-	gotMsg, gotExpand, code, err := d.DecodeS(secretKey, packet)
+	gotMsg, gotExpand, code, err := d.DecodeS(secretKey, 0, packet)
 	require.NoError(t, err)
 	require.Equal(t, pbpub.Code_SUCCESS, code)
 	require.True(t, proto.Equal(gotMsg, msg))
 	require.True(t, bytes.Equal(gotExpand, expand))
+}
+
+func TestDecoder_DecodeS_RejectsFrameWhenExpectedSequenceDiffers(t *testing.T) {
+	ch := NewMockSecureChannel()
+	d := NewDecoder(ch)
+	secretKey := randomKey(t)
+	seq := uint64(23)
+	packet := buildSecurePacket(
+		t,
+		ch,
+		secretKey,
+		randomNonce(t),
+		pbpub.MsgType_REQ_SEND_MSG,
+		&pbpub.SendMsgReq{ChannelId: 1},
+		[]byte("expand"),
+		seq,
+	)
+
+	_, _, code, err := d.DecodeS(secretKey, seq, packet)
+	require.NoError(t, err)
+	require.Equal(t, pbpub.Code_SUCCESS, code)
+
+	_, _, code, err = d.DecodeS(secretKey, seq+1, packet)
+	require.Error(t, err)
+	require.Equal(t, pbpub.Code_ERR_DECRYPT, code)
 }
 
 func TestDecoder_DecodeS_RejectsTamperedCiphertext(t *testing.T) {
@@ -381,13 +442,13 @@ func TestDecoder_DecodeS_RejectsTamperedCiphertext(t *testing.T) {
 		ch,
 		secretKey,
 		nonce,
-		pbpub.PacketType_REQ_SEND_MSG,
+		pbpub.MsgType_REQ_SEND_MSG,
 		msg,
 		nil,
 	)
 	packet[18] ^= 0xFF // flip a bit inside the ciphertext
 
-	_, _, code, err := Decoder.DecodeS(secretKey, packet)
+	_, _, code, err := Decoder.DecodeS(secretKey, 0, packet)
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_DECRYPT, code)
 }
@@ -411,7 +472,7 @@ func TestDecoder_DecodeS_RejectsTamperedExpand(t *testing.T) {
 		ch,
 		secretKey,
 		nonce,
-		pbpub.PacketType_REQ_SEND_MSG,
+		pbpub.MsgType_REQ_SEND_MSG,
 		msg,
 		expand,
 	)
@@ -419,7 +480,7 @@ func TestDecoder_DecodeS_RejectsTamperedExpand(t *testing.T) {
 	tampered := append([]byte(nil), packet...)
 	copy(tampered[len(tampered)-len(expand):], "tampered-expand!")
 
-	_, _, code, err := Decoder.DecodeS(secretKey, tampered)
+	_, _, code, err := Decoder.DecodeS(secretKey, 0, tampered)
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_DECRYPT, code)
 }
@@ -439,12 +500,12 @@ func TestDecoder_DecodeS_WrongSecretKey(t *testing.T) {
 		ch,
 		secretKey,
 		nonce,
-		pbpub.PacketType_REQ_SEND_MSG,
+		pbpub.MsgType_REQ_SEND_MSG,
 		msg,
 		nil,
 	)
 
-	_, _, code, err := d.DecodeS(wrongKey, packet)
+	_, _, code, err := d.DecodeS(wrongKey, 0, packet)
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_DECRYPT, code)
 }
@@ -461,12 +522,12 @@ func TestDecoder_DecodeS_UnrecognizedPacketType(t *testing.T) {
 		ch,
 		secretKey,
 		nonce,
-		pbpub.PacketType(9999),
+		pbpub.MsgType(9999),
 		msg,
 		nil,
 	)
 
-	_, _, code, err := d.DecodeS(secretKey, packet)
+	_, _, code, err := d.DecodeS(secretKey, 0, packet)
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_TYPE, code)
 }
@@ -483,13 +544,13 @@ func TestDecoder_DecodeS_InvalidCipherSize_TooSmall(t *testing.T) {
 		ch,
 		secretKey,
 		nonce,
-		pbpub.PacketType_REQ_SEND_MSG,
+		pbpub.MsgType_REQ_SEND_MSG,
 		msg,
 		nil,
 	)
 	binary.LittleEndian.PutUint16(packet[16:18], 10) // <= fakeTagSize, must be rejected
 
-	_, _, code, err := d.DecodeS(secretKey, packet)
+	_, _, code, err := d.DecodeS(secretKey, 0, packet)
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_CIPHER, code)
 }
@@ -505,7 +566,7 @@ func TestDecoder_DecodeS_TooShortPacket_ReturnsErrorNotPanic(t *testing.T) {
 		err  error
 	)
 	runRecovered(t, "DecodeS", func() {
-		_, _, code, err = d.DecodeS(secretKey, shortPacket)
+		_, _, code, err = d.DecodeS(secretKey, 0, shortPacket)
 	})
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_SIZE, code)
@@ -520,13 +581,13 @@ func TestDecoder_DecodeS_RejectsInconsistentFrameLength(t *testing.T) {
 		ch,
 		secretKey,
 		randomNonce(t),
-		pbpub.PacketType_REQ_SEND_MSG,
+		pbpub.MsgType_REQ_SEND_MSG,
 		new(pbpub.SendMsgReq),
 		nil,
 	)
 	binary.LittleEndian.PutUint16(packet[:2], uint16(len(packet)-1))
 
-	_, _, code, err := d.DecodeS(secretKey, packet)
+	_, _, code, err := d.DecodeS(secretKey, 0, packet)
 	require.ErrorIs(t, err, ErrPkgSizeInvalid)
 	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_SIZE, code)
 }
@@ -543,7 +604,7 @@ func TestDecoder_DecodeS_CipherSizeExceedsPacket_ReturnsErrorNotPanic(t *testing
 		ch,
 		secretKey,
 		nonce,
-		pbpub.PacketType_REQ_SEND_MSG,
+		pbpub.MsgType_REQ_SEND_MSG,
 		msg,
 		nil,
 	)
@@ -554,7 +615,7 @@ func TestDecoder_DecodeS_CipherSizeExceedsPacket_ReturnsErrorNotPanic(t *testing
 		err  error
 	)
 	runRecovered(t, "DecodeS", func() {
-		_, _, code, err = b.DecodeS(secretKey, packet)
+		_, _, code, err = b.DecodeS(secretKey, 0, packet)
 	})
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_CIPHER, code)

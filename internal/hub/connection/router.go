@@ -35,6 +35,7 @@ import (
 	"xxx/pkg/hash"
 	"xxx/pkg/log"
 	"xxx/pkg/nio"
+	slicepool "xxx/pkg/pool/slice"
 	workerpool "xxx/pkg/pool/worker"
 
 	"go.uber.org/zap"
@@ -56,9 +57,9 @@ const (
 )
 
 type SendData struct {
-	PackType pbpub.PacketType
-	Msg      proto.Message
-	Expand   []byte
+	MsgType pbpub.MsgType
+	Msg     proto.Message
+	Expand  []byte
 }
 
 // Router is a plain connection registry: it tracks live connections per
@@ -115,7 +116,7 @@ func NewRouter(
 		pool,
 	)
 
-	nItemsPerShard := math.Ceil(float64(r.maxConns / nShards))
+	nItemsPerShard := math.Ceil(float64(r.maxConns) / float64(nShards))
 	for i := range nShards {
 		r.conns[i] = swiss.NewTableC2WithCap[shareddevice.ID, nio.Conn](
 			int(nItemsPerShard),
@@ -271,25 +272,72 @@ func (r *Router) RemoveConn(ctx context.Context, conn nio.Conn) {
 	}
 }
 
-func (r *Router) Send(deviceID shareddevice.ID, data SendData) error {
+// AsyncSend encodes and queues a frame for the current connection of deviceID.
+func (r *Router) AsyncSend(secure bool, deviceID shareddevice.ID, data SendData) error {
 	conn, existence := r.conns[r.bucketFor(deviceID)].Lookup(deviceID)
 	if !existence {
 		return ErrSessionNotFound
 	}
+	return r.AsyncSendConn(secure, conn, data)
+}
 
+// AsyncSendConn queues a frame for conn only. It is useful for callbacks tied
+// to one activation so a delayed callback cannot send to a replacement
+// connection for the same device.
+func (r *Router) AsyncSendConn(secure bool, conn nio.Conn, data SendData) error {
 	ss, ok := conn.Context().(*session.Data)
 	if !ok || ss.State.Load() == uint32(session.StateClosed) {
 		return ErrSessionClosed
 	}
 
-	return send(
-		conn,
-		&ss.Keys.SendMac,
-		r.encoder,
-		data.PackType,
-		data.Msg,
-		data.Expand,
-	)
+	current, exists := r.conns[r.bucketFor(ss.DeviceID)].Lookup(ss.DeviceID)
+	if !exists || current != conn {
+		return ErrSessionClosed
+	}
+
+	var packet []byte
+	err := ss.WithSendSeq(func(seq uint64) (bool, error) {
+		var err error
+		if secure {
+			packet, err = r.encoder.EncodeS(
+				&ss.Keys.SendEnc,
+				seq,
+				data.MsgType,
+				data.Msg,
+				data.Expand,
+			)
+		} else {
+			packet, err = r.encoder.Encode(
+				&ss.Keys.SendMac,
+				seq,
+				data.MsgType,
+				data.Msg,
+				data.Expand,
+			)
+		}
+		if err != nil {
+			return false, err
+		}
+
+		err = conn.AsyncWrite(packet, func(_ nio.Conn, writeErr error) error {
+			clear(packet[:cap(packet)])
+			slicepool.Put(packet)
+			if writeErr != nil {
+				ss.MarkSendFailed()
+				r.logger.Error("failed to write session frame", zap.Error(writeErr))
+				r.ForceClose(conn)
+			}
+			return nil
+		})
+		return true, err
+	})
+	if err != nil {
+		if ss.SendFailed() {
+			r.ForceClose(conn)
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *Router) MaxConns() uint32 {

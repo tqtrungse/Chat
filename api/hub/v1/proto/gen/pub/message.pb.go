@@ -23,25 +23,25 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type PacketType int32
+type MsgType int32
 
 const (
-	PacketType_UNKNOWN                    PacketType = 0
-	PacketType_REQ_ACTIVE_CONN            PacketType = 1
-	PacketType_REQ_ACTIVE_CONN_PROOF      PacketType = 2
-	PacketType_REQ_SEND_MSG               PacketType = 3
-	PacketType_REQ_DIRECT_FORWARD_MSG     PacketType = 4
-	PacketType_REQ_BROKER_FORWARD_MSG     PacketType = 5
-	PacketType_REQ_ACK_RECV_MSG           PacketType = 6
-	PacketType_RESP_ACTIVE_CONN           PacketType = 501
-	PacketType_RESP_ACTIVE_CONN_CHALLENGE PacketType = 502
-	PacketType_RESP_SEND_MSG              PacketType = 503
-	PacketType_RESP_ACK_RECV_MSG          PacketType = 504
+	MsgType_UNKNOWN                MsgType = 0
+	MsgType_REQ_ACTIVE_CONN        MsgType = 1
+	MsgType_REQ_ACTIVE_CONN_PROOF  MsgType = 2
+	MsgType_REQ_SEND_MSG           MsgType = 3
+	MsgType_REQ_DIRECT_FORWARD_MSG MsgType = 4
+	MsgType_REQ_BROKER_FORWARD_MSG MsgType = 5
+	MsgType_REQ_ACK_RECV_MSG       MsgType = 6
+	MsgType_RESP_ACTIVE_CONN       MsgType = 501
+	MsgType_RESP_ACTIVE_CONN_PROOF MsgType = 502
+	MsgType_RESP_SEND_MSG          MsgType = 503
+	MsgType_RESP_ACK_RECV_MSG      MsgType = 504
 )
 
-// Enum value maps for PacketType.
+// Enum value maps for MsgType.
 var (
-	PacketType_name = map[int32]string{
+	MsgType_name = map[int32]string{
 		0:   "UNKNOWN",
 		1:   "REQ_ACTIVE_CONN",
 		2:   "REQ_ACTIVE_CONN_PROOF",
@@ -50,49 +50,49 @@ var (
 		5:   "REQ_BROKER_FORWARD_MSG",
 		6:   "REQ_ACK_RECV_MSG",
 		501: "RESP_ACTIVE_CONN",
-		502: "RESP_ACTIVE_CONN_CHALLENGE",
+		502: "RESP_ACTIVE_CONN_PROOF",
 		503: "RESP_SEND_MSG",
 		504: "RESP_ACK_RECV_MSG",
 	}
-	PacketType_value = map[string]int32{
-		"UNKNOWN":                    0,
-		"REQ_ACTIVE_CONN":            1,
-		"REQ_ACTIVE_CONN_PROOF":      2,
-		"REQ_SEND_MSG":               3,
-		"REQ_DIRECT_FORWARD_MSG":     4,
-		"REQ_BROKER_FORWARD_MSG":     5,
-		"REQ_ACK_RECV_MSG":           6,
-		"RESP_ACTIVE_CONN":           501,
-		"RESP_ACTIVE_CONN_CHALLENGE": 502,
-		"RESP_SEND_MSG":              503,
-		"RESP_ACK_RECV_MSG":          504,
+	MsgType_value = map[string]int32{
+		"UNKNOWN":                0,
+		"REQ_ACTIVE_CONN":        1,
+		"REQ_ACTIVE_CONN_PROOF":  2,
+		"REQ_SEND_MSG":           3,
+		"REQ_DIRECT_FORWARD_MSG": 4,
+		"REQ_BROKER_FORWARD_MSG": 5,
+		"REQ_ACK_RECV_MSG":       6,
+		"RESP_ACTIVE_CONN":       501,
+		"RESP_ACTIVE_CONN_PROOF": 502,
+		"RESP_SEND_MSG":          503,
+		"RESP_ACK_RECV_MSG":      504,
 	}
 )
 
-func (x PacketType) Enum() *PacketType {
-	p := new(PacketType)
+func (x MsgType) Enum() *MsgType {
+	p := new(MsgType)
 	*p = x
 	return p
 }
 
-func (x PacketType) String() string {
+func (x MsgType) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (PacketType) Descriptor() protoreflect.EnumDescriptor {
+func (MsgType) Descriptor() protoreflect.EnumDescriptor {
 	return file_pub_message_proto_enumTypes[0].Descriptor()
 }
 
-func (PacketType) Type() protoreflect.EnumType {
+func (MsgType) Type() protoreflect.EnumType {
 	return &file_pub_message_proto_enumTypes[0]
 }
 
-func (x PacketType) Number() protoreflect.EnumNumber {
+func (x MsgType) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use PacketType.Descriptor instead.
-func (PacketType) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use MsgType.Descriptor instead.
+func (MsgType) EnumDescriptor() ([]byte, []int) {
 	return file_pub_message_proto_rawDescGZIP(), []int{0}
 }
 
@@ -100,12 +100,12 @@ type Code int32
 
 const (
 	Code_SUCCESS                 Code = 0
-	Code_ERR_INVALID_PACK_TYPE   Code = 1 // Wrong packet type
-	Code_ERR_INVALID_PACK_SIZE   Code = 2 // Wrong packet size
-	Code_ERR_INVALID_PACK_CIPHER Code = 3 // Wrong packet cipher
-	Code_ERR_MODIFIED_PACK       Code = 4 // Packet is modified
-	Code_ERR_DECRYPT             Code = 5 // Packet decryption error
-	Code_ERR_DESERIALIZE         Code = 6 // Packet parsing error
+	Code_ERR_INVALID_PACK_TYPE   Code = 1 // Wrong message type
+	Code_ERR_INVALID_PACK_SIZE   Code = 2 // Wrong message size
+	Code_ERR_INVALID_PACK_CIPHER Code = 3 // Wrong message cipher
+	Code_ERR_MODIFIED_PACK       Code = 4 // message is modified
+	Code_ERR_DECRYPT             Code = 5 // message decryption error
+	Code_ERR_DESERIALIZE         Code = 6 // message parsing error
 	Code_ERR_INTERNAL            Code = 7 // Server error
 )
 
@@ -222,8 +222,13 @@ func (x *ActiveConnReq) GetTicket() []byte {
 }
 
 type ActiveConnResp struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Code          Code                   `protobuf:"varint,1,opt,name=code,proto3,enum=pub.Code" json:"code,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// transcript = SHA256("xxx/hub/activate/v1\0" ||
+	//   LE32(len(token)) || token || LE32(len(ticket)) || ticket ||
+	//   LE32(len(sign)) || sign).
+	// nonce is fresh and valid only on the TCP connection that requested it.
+	// All integer lengths in this transcript use little-endian encoding.
+	Nonce         []byte `protobuf:"bytes,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -258,11 +263,11 @@ func (*ActiveConnResp) Descriptor() ([]byte, []int) {
 	return file_pub_message_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *ActiveConnResp) GetCode() Code {
+func (x *ActiveConnResp) GetNonce() []byte {
 	if x != nil {
-		return x.Code
+		return x.Nonce
 	}
-	return Code_SUCCESS
+	return nil
 }
 
 type ActiveConnProofReq struct {
@@ -311,32 +316,27 @@ func (x *ActiveConnProofReq) GetProof() []byte {
 	return nil
 }
 
-type ActiveConnChallengeResp struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// transcript = SHA256("xxx/hub/activate/v1\0" ||
-	//   LE32(len(token)) || token || LE32(len(ticket)) || ticket ||
-	//   LE32(len(sign)) || sign).
-	// nonce is fresh and valid only on the TCP connection that requested it.
-	// All integer lengths in this transcript use little-endian encoding.
-	Nonce         []byte `protobuf:"bytes,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
+type ActiveConnProofResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Code          Code                   `protobuf:"varint,1,opt,name=code,proto3,enum=pub.Code" json:"code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ActiveConnChallengeResp) Reset() {
-	*x = ActiveConnChallengeResp{}
+func (x *ActiveConnProofResp) Reset() {
+	*x = ActiveConnProofResp{}
 	mi := &file_pub_message_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ActiveConnChallengeResp) String() string {
+func (x *ActiveConnProofResp) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ActiveConnChallengeResp) ProtoMessage() {}
+func (*ActiveConnProofResp) ProtoMessage() {}
 
-func (x *ActiveConnChallengeResp) ProtoReflect() protoreflect.Message {
+func (x *ActiveConnProofResp) ProtoReflect() protoreflect.Message {
 	mi := &file_pub_message_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -348,16 +348,16 @@ func (x *ActiveConnChallengeResp) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ActiveConnChallengeResp.ProtoReflect.Descriptor instead.
-func (*ActiveConnChallengeResp) Descriptor() ([]byte, []int) {
+// Deprecated: Use ActiveConnProofResp.ProtoReflect.Descriptor instead.
+func (*ActiveConnProofResp) Descriptor() ([]byte, []int) {
 	return file_pub_message_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *ActiveConnChallengeResp) GetNonce() []byte {
+func (x *ActiveConnProofResp) GetCode() Code {
 	if x != nil {
-		return x.Nonce
+		return x.Code
 	}
-	return nil
+	return Code_SUCCESS
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------
@@ -728,11 +728,11 @@ const file_pub_message_proto_rawDesc = "" +
 	"\x06ticket\x18\x03 \x01(\fB\n" +
 	"\xfaB\az\x05\x10\x01\x18\x80\x04R\x06ticket\"/\n" +
 	"\x0eActiveConnResp\x12\x1d\n" +
-	"\x04code\x18\x01 \x01(\x0e2\t.pub.CodeR\x04code\"3\n" +
+	"\x05nonce\x18\x01 \x01(\fB\a\xfaB\x04z\x02h R\x05nonce\"3\n" +
 	"\x12ActiveConnProofReq\x12\x1d\n" +
-	"\x05proof\x18\x01 \x01(\fB\a\xfaB\x04z\x02h R\x05proof\"8\n" +
-	"\x17ActiveConnChallengeResp\x12\x1d\n" +
-	"\x05nonce\x18\x01 \x01(\fB\a\xfaB\x04z\x02h R\x05nonce\"\x8e\x01\n" +
+	"\x05proof\x18\x01 \x01(\fB\a\xfaB\x04z\x02h R\x05proof\"4\n" +
+	"\x13ActiveConnProofResp\x12\x1d\n" +
+	"\x04code\x18\x01 \x01(\x0e2\t.pub.CodeR\x04code\"\x8e\x01\n" +
 	"\n" +
 	"SendMsgReq\x12&\n" +
 	"\n" +
@@ -760,9 +760,8 @@ const file_pub_message_proto_rawDesc = "" +
 	"channel_id\x18\x01 \x01(\x04B\a\xfaB\x042\x02(\x01R\tchannelId\x12\x1e\n" +
 	"\x06msg_id\x18\x02 \x01(\x04B\a\xfaB\x042\x02(\x01R\x05msgId\"/\n" +
 	"\x0eAckRecvMsgResp\x12\x1d\n" +
-	"\x04code\x18\x01 \x01(\x0e2\t.pub.CodeR\x04code*\x8d\x02\n" +
-	"\n" +
-	"PacketType\x12\v\n" +
+	"\x04code\x18\x01 \x01(\x0e2\t.pub.CodeR\x04code*\x86\x02\n" +
+	"\aMsgType\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x13\n" +
 	"\x0fREQ_ACTIVE_CONN\x10\x01\x12\x19\n" +
 	"\x15REQ_ACTIVE_CONN_PROOF\x10\x02\x12\x10\n" +
@@ -770,8 +769,8 @@ const file_pub_message_proto_rawDesc = "" +
 	"\x16REQ_DIRECT_FORWARD_MSG\x10\x04\x12\x1a\n" +
 	"\x16REQ_BROKER_FORWARD_MSG\x10\x05\x12\x14\n" +
 	"\x10REQ_ACK_RECV_MSG\x10\x06\x12\x15\n" +
-	"\x10RESP_ACTIVE_CONN\x10\xf5\x03\x12\x1f\n" +
-	"\x1aRESP_ACTIVE_CONN_CHALLENGE\x10\xf6\x03\x12\x12\n" +
+	"\x10RESP_ACTIVE_CONN\x10\xf5\x03\x12\x1b\n" +
+	"\x16RESP_ACTIVE_CONN_PROOF\x10\xf6\x03\x12\x12\n" +
 	"\rRESP_SEND_MSG\x10\xf7\x03\x12\x16\n" +
 	"\x11RESP_ACK_RECV_MSG\x10\xf8\x03*\xb5\x01\n" +
 	"\x04Code\x12\v\n" +
@@ -799,21 +798,21 @@ func file_pub_message_proto_rawDescGZIP() []byte {
 var file_pub_message_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_pub_message_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_pub_message_proto_goTypes = []any{
-	(PacketType)(0),                 // 0: pub.PacketType
-	(Code)(0),                       // 1: pub.Code
-	(*ActiveConnReq)(nil),           // 2: pub.ActiveConnReq
-	(*ActiveConnResp)(nil),          // 3: pub.ActiveConnResp
-	(*ActiveConnProofReq)(nil),      // 4: pub.ActiveConnProofReq
-	(*ActiveConnChallengeResp)(nil), // 5: pub.ActiveConnChallengeResp
-	(*SendMsgReq)(nil),              // 6: pub.SendMsgReq
-	(*SendMsgResp)(nil),             // 7: pub.SendMsgResp
-	(*DirectForwardMsgReq)(nil),     // 8: pub.DirectForwardMsgReq
-	(*BrokerForwardMsgReq)(nil),     // 9: pub.BrokerForwardMsgReq
-	(*AckRecvMsgReq)(nil),           // 10: pub.AckRecvMsgReq
-	(*AckRecvMsgResp)(nil),          // 11: pub.AckRecvMsgResp
+	(MsgType)(0),                // 0: pub.MsgType
+	(Code)(0),                   // 1: pub.Code
+	(*ActiveConnReq)(nil),       // 2: pub.ActiveConnReq
+	(*ActiveConnResp)(nil),      // 3: pub.ActiveConnResp
+	(*ActiveConnProofReq)(nil),  // 4: pub.ActiveConnProofReq
+	(*ActiveConnProofResp)(nil), // 5: pub.ActiveConnProofResp
+	(*SendMsgReq)(nil),          // 6: pub.SendMsgReq
+	(*SendMsgResp)(nil),         // 7: pub.SendMsgResp
+	(*DirectForwardMsgReq)(nil), // 8: pub.DirectForwardMsgReq
+	(*BrokerForwardMsgReq)(nil), // 9: pub.BrokerForwardMsgReq
+	(*AckRecvMsgReq)(nil),       // 10: pub.AckRecvMsgReq
+	(*AckRecvMsgResp)(nil),      // 11: pub.AckRecvMsgResp
 }
 var file_pub_message_proto_depIdxs = []int32{
-	1, // 0: pub.ActiveConnResp.code:type_name -> pub.Code
+	1, // 0: pub.ActiveConnProofResp.code:type_name -> pub.Code
 	1, // 1: pub.AckRecvMsgResp.code:type_name -> pub.Code
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type

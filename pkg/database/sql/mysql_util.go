@@ -144,9 +144,5 @@ func IsMySQLInfraError(role Role, err error) bool {
 	// Below the MySQL protocol: raw network failure while reaching the
 	// server (dial refused, i/o timeout, connection reset).
 	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-
-	return false
+	return errors.As(err, &netErr)
 }

@@ -64,7 +64,6 @@ func IsInfraError(err error) bool {
 		errors.Is(err, gocql.ErrNoConnectionsStarted),
 		errors.Is(err, gocql.ErrHostQueryFailed),
 		errors.Is(err, gocql.ErrTimeoutNoResponse),
-		errors.Is(err, gocql.ErrTooManyTimeouts),
 		errors.Is(err, gocql.ErrConnectionClosed),
 		errors.Is(err, gocql.ErrNoStreams):
 		return true
@@ -90,9 +89,5 @@ func IsInfraError(err error) bool {
 	// Below the CQL protocol: raw network failure while reaching a node
 	// (dial refused, i/o timeout, connection reset).
 	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-
-	return false
+	return errors.As(err, &netErr)
 }

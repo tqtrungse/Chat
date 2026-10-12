@@ -119,7 +119,7 @@ func (ca *connActivator) Activate(conn nio.Conn, packet []byte) nio.Action {
 	}
 
 	var req pbpub.ActiveConnReq
-	if err := ca.decoder.DecodeActivePack(packet[4:], &req); err != nil {
+	if err := ca.decoder.DecodeActivePacket(packet[4:], &req); err != nil {
 		ca.logger.Error("failed to decode active request, force close", zap.Error(err))
 		return ca.reject(pending)
 	}
@@ -153,8 +153,8 @@ func (ca *connActivator) Activate(conn nio.Conn, packet []byte) nio.Action {
 	pending.stage = stageChallenged
 
 	frame, err := ca.encoder.EncodeHandshake(
-		pbpub.PacketType_RESP_ACTIVE_CONN_CHALLENGE,
-		&pbpub.ActiveConnChallengeResp{Nonce: pending.nonce[:]},
+		pbpub.MsgType_RESP_ACTIVE_CONN,
+		&pbpub.ActiveConnResp{Nonce: pending.nonce[:]},
 	)
 	if err == nil {
 		defer func() {
@@ -207,7 +207,7 @@ func (ca *connActivator) Prove(ctx context.Context, conn nio.Conn, packet []byte
 		ctx,
 		pending.ticket,
 		conn,
-		ca.onActivated(conn),
+		ca.onAck(conn),
 	)
 	pending.clear()
 
@@ -231,13 +231,14 @@ func (ca *connActivator) Tick() (time.Duration, nio.Action) {
 	return ca.router.Tick(), nio.None
 }
 
-func (ca *connActivator) onActivated(conn nio.Conn) func(id shareddevice.ID) {
-	return func(deviceID shareddevice.ID) {
-		err := ca.router.Send(
-			deviceID,
+func (ca *connActivator) onAck(conn nio.Conn) func(id shareddevice.ID) {
+	return func(_ shareddevice.ID) {
+		err := ca.router.AsyncSendConn(
+			false,
+			conn,
 			connection.SendData{
-				PackType: pbpub.PacketType_RESP_ACTIVE_CONN,
-				Msg:      &pbpub.ActiveConnResp{Code: pbpub.Code_SUCCESS},
+				MsgType: pbpub.MsgType_RESP_ACTIVE_CONN_PROOF,
+				Msg:     &pbpub.ActiveConnProofResp{Code: pbpub.Code_SUCCESS},
 			},
 		)
 		if err != nil {

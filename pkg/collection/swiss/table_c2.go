@@ -575,7 +575,6 @@ func (t *TableC2[K, V]) resize() {
 	t.resizeWait.Store(nil)
 	// SIGNAL: Close the channel to wake everyone up at once.
 	close(ch)
-	return
 }
 
 func (t *TableC2[K, V]) wait() {

@@ -17,131 +17,15 @@
 package connection
 
 import (
-	"xxx/api/hub/v1/proto/gen/pub"
-	"xxx/internal/hub/protocol"
 	shareddevice "xxx/internal/shared/device"
 
 	"xxx/pkg/batcher"
-	"xxx/pkg/nio"
-	slicepool "xxx/pkg/pool/slice"
-
-	"google.golang.org/protobuf/proto"
 )
-
-//func RespondStatus(
-//	codec *Codec,
-//	conn *Conn,
-//	code pb.Code,
-//) error {
-//	buf, err := codec.Encode(
-//		&conn.hmacKey,
-//		pb.PacketType_RESP_STATUS,
-//		&pb.StatusResp{Code: code},
-//		nil,
-//	)
-//	if err != nil {
-//		return err
-//	}
-//
-//	_, err = conn.gconn.Write(buf)
-//	slicepool.Put(buf)
-//	return err
-//}
-//
-//func AsyncRespondStatus(
-//	logger *pkg.Logger,
-//	codec *Codec,
-//	conn *Conn,
-//	code pb.Code,
-//) error {
-//	buf, err := codec.Encode(
-//		&conn.hmacKey,
-//		pb.PacketType_RESP_STATUS,
-//		&pb.StatusResp{Code: code},
-//		nil,
-//	)
-//	if err != nil {
-//		return err
-//	}
-//
-//	err = conn.gconn.AsyncWrite(buf, func(c gnet.Conn, err error) error {
-//		HandleErrCallback(logger, c, err)
-//		slicepool.Put(buf)
-//		return nil
-//	})
-//	if err != nil {
-//		slicepool.Put(buf)
-//	}
-//	return err
-//}
-//
-//func HandleErrCallback(
-//	logger *pkg.Logger,
-//	conn nio.Conn,
-//	err error,
-//) {
-//	if errors.Is(err, net.ErrClosed) {
-//		return
-//	}
-//	logger.Error("nio.Conn.AsyncWrite callback failed", zap.Error(err))
-//
-//	var errno syscall.Errno
-//	if errors.As(err, &errno) {
-//		err = conn.Close()
-//		if err != nil {
-//			logger.Error("failed to close nio.Conn", zap.Error(err))
-//		}
-//	}
-//}
 
 type deviceOp struct {
 	DeviceID  shareddevice.ID
 	Timestamp int64
 	Op        Op
-}
-
-func send(
-	conn nio.Conn,
-	hmacKey *[32]byte,
-	encoder *protocol.Encoder,
-	packType pub.PacketType,
-	msg proto.Message,
-	expand []byte,
-) error {
-	buf, err := encoder.Encode(
-		hmacKey,
-		packType,
-		msg,
-		expand,
-	)
-	if err != nil {
-		return err
-	}
-	_, err = conn.Write(buf)
-	slicepool.Put(buf)
-	return err
-}
-
-func sendS(
-	conn nio.Conn,
-	secretKey *[32]byte,
-	encoder *protocol.Encoder,
-	packType pub.PacketType,
-	msg proto.Message,
-	expand []byte,
-) error {
-	buf, err := encoder.EncodeS(
-		secretKey,
-		packType,
-		msg,
-		expand,
-	)
-	if err != nil {
-		return err
-	}
-	_, err = conn.Write(buf)
-	slicepool.Put(buf)
-	return err
 }
 
 // dedupeDeviceOps keeps only the latest operation for each device.

@@ -35,9 +35,9 @@ func NewEncoder(secureChannel SecureChannel) *Encoder {
 // EncodeHandshake encodes a pre-session packet as frame length | packet type
 // | protobuf size | protobuf. It deliberately has no session HMAC because the session keys
 // have not been activated yet. Only public challenge data may use this path.
-func (e *Encoder) EncodeHandshake(pkgType pbpub.PacketType, msg proto.Message) ([]byte, error) {
+func (e *Encoder) EncodeHandshake(msgType pbpub.MsgType, msg proto.Message) ([]byte, error) {
 	// --------------------------------------------
-	// | Pkg Size |  Pkg Type |   Pb Size  |  Pb  |
+	// | Pkg Size |  Msg Type |   Pb Size  |  Pb  |
 	// --------------------------------------------
 	// |  2 bytes |  2 bytes  |   2 bytes  | xxx  |
 	// --------------------------------------------
@@ -52,7 +52,7 @@ func (e *Encoder) EncodeHandshake(pkgType pbpub.PacketType, msg proto.Message) (
 	needed := 2 + frameSize
 	buf := slicepool.Get(needed)
 	binary.LittleEndian.PutUint16(buf[:2], uint16(needed-2))
-	binary.LittleEndian.PutUint16(buf[2:4], uint16(pkgType))
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(msgType))
 	binary.LittleEndian.PutUint16(buf[4:6], uint16(pbSize))
 
 	buf, err := e.pbMarshal.MarshalAppend(buf[:6], msg)
@@ -69,17 +69,25 @@ func (e *Encoder) EncodeHandshake(pkgType pbpub.PacketType, msg proto.Message) (
 	return nil, err
 }
 
+// Encode builds an HMAC-authenticated frame.
+//
+// seq is the sender's next per-direction sequence number. It is not written to
+// the wire; it is authenticated as HMAC(macKey, seq(8, LE) || frame).
+// The caller must allocate it and hand frames to the socket in the same order.
 func (e *Encoder) Encode(
 	macKey *[32]byte,
-	pkgType pbpub.PacketType,
+	seq uint64,
+	msgType pbpub.MsgType,
 	msg proto.Message,
 	expand []byte,
 ) ([]byte, error) {
 	// -------------------------------------------------------------------
-	// | Pkg Size |  Pkg Type |   Pb Size  |  Pb  |  Expand  |    HMAC   |
+	// | Pkg Size |  Msg Type |   Pb Size  |  Pb  |  Expand  |    HMAC   |
 	// -------------------------------------------------------------------
 	// |  2 bytes |  2 bytes  |   2 bytes  | xxx  |    xxx   |  32 bytes |
 	// -------------------------------------------------------------------
+	//
+	// HMAC input = seq (8 bytes LE, implicit) || everything before the HMAC.
 	var (
 		pbSize     = e.pbMarshal.Size(msg)
 		expandSize = len(expand)
@@ -93,7 +101,7 @@ func (e *Encoder) Encode(
 	buf := slicepool.Get(needed)
 
 	binary.LittleEndian.PutUint16(buf[:2], uint16(needed-2))
-	binary.LittleEndian.PutUint16(buf[2:4], uint16(pkgType))
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(msgType))
 	binary.LittleEndian.PutUint16(buf[4:6], uint16(pbSize))
 
 	buf, err := e.pbMarshal.MarshalAppend(buf[:6], msg)
@@ -112,20 +120,28 @@ func (e *Encoder) Encode(
 		buf = append(buf, expand...)
 	}
 
+	sb := seqBytes(seq)
 	mac := hmac.New(sha256.New, macKey[:])
+	mac.Write(sb[:])
 	mac.Write(buf)
 	buf = mac.Sum(buf)
 	return buf, nil
 }
 
+// EncodeS builds an AEAD-encrypted frame.
+//
+// seq is the sender's next per-direction sequence number. It is not written to
+// the wire; it is bound into the AEAD associated data (see securePacketAAD).
+// The caller must hand frames to the socket in the same order seq was issued.
 func (e *Encoder) EncodeS(
 	secretKey *[32]byte,
-	pkgType pbpub.PacketType,
+	seq uint64,
+	msgType pbpub.MsgType,
 	msg proto.Message,
 	expand []byte,
 ) ([]byte, error) {
 	// -------------------------------------------------------------------
-	// | Pkg Size | Pkg Type |   Nonce   | Cipher Size | Cipher | Expand |
+	// | Pkg Size | Msg Type |   Nonce   | Cipher Size | Cipher | Expand |
 	// -------------------------------------------------------------------
 	// | 2 bytes  | 2 bytes  |  12 bytes |   2 bytes   |   Pb   |   xxx  |
 	// -------------------------------------------------------------------
@@ -143,7 +159,7 @@ func (e *Encoder) EncodeS(
 	buf := slicepool.Get(needed)
 
 	binary.LittleEndian.PutUint16(buf[:2], uint16(needed-2))
-	binary.LittleEndian.PutUint16(buf[2:4], uint16(pkgType))
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(msgType))
 	if _, err := rand.Read(buf[4:16]); err != nil {
 		clear(buf)
 		slicepool.Put(buf)
@@ -165,8 +181,9 @@ func (e *Encoder) EncodeS(
 
 	aad := securePacketAAD(
 		uint16(frameSize),
-		uint16(pkgType),
+		uint16(msgType),
 		uint16(cipherSize),
+		seq,
 		expand,
 	)
 	sealed, err := e.secureChannel.Seal(

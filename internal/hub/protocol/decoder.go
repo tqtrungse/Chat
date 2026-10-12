@@ -10,6 +10,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
+
 	pbpub "xxx/api/hub/v1/proto/gen/pub"
 	slicepool "xxx/pkg/pool/slice"
 
@@ -28,7 +29,7 @@ func NewDecoder(secureChannel SecureChannel) *Decoder {
 	}
 }
 
-func (d *Decoder) DecodeActivePack(
+func (d *Decoder) DecodeActivePacket(
 	plain []byte,
 	outReq *pbpub.ActiveConnReq,
 ) error {
@@ -44,6 +45,7 @@ func (d *Decoder) DecodeActiveProofPack(
 
 func (d *Decoder) Decode(
 	hmacKey *[32]byte,
+	seq uint64,
 	packet []byte,
 ) (proto.Message, []byte, pbpub.Code, error) {
 	// -------------------------------------------------------------------
@@ -56,7 +58,9 @@ func (d *Decoder) Decode(
 	}
 
 	size := len(packet) - 32
+	sb := seqBytes(seq)
 	mac := hmac.New(sha256.New, hmacKey[:])
+	mac.Write(sb[:])
 	mac.Write(packet[:size])
 
 	if ok := hmac.Equal(mac.Sum(nil), packet[size:]); !ok {
@@ -64,7 +68,7 @@ func (d *Decoder) Decode(
 	}
 
 	var (
-		pkgType = binary.LittleEndian.Uint16(packet[2:4])
+		msgType = binary.LittleEndian.Uint16(packet[2:4])
 		pbSize  = binary.LittleEndian.Uint16(packet[4:6])
 		msg     proto.Message
 	)
@@ -73,14 +77,11 @@ func (d *Decoder) Decode(
 		return nil, nil, pbpub.Code_ERR_INVALID_PACK_SIZE, ErrPkgSizeInvalid
 	}
 
-	switch pbpub.PacketType(pkgType) {
-	case pbpub.PacketType_REQ_ACTIVE_CONN:
-		msg = new(pbpub.ActiveConnReq)
-
-	case pbpub.PacketType_REQ_DIRECT_FORWARD_MSG:
+	switch pbpub.MsgType(msgType) {
+	case pbpub.MsgType_REQ_DIRECT_FORWARD_MSG:
 		msg = new(pbpub.DirectForwardMsgReq)
 
-	case pbpub.PacketType_REQ_BROKER_FORWARD_MSG:
+	case pbpub.MsgType_REQ_BROKER_FORWARD_MSG:
 		msg = new(pbpub.BrokerForwardMsgReq)
 
 	default:
@@ -96,6 +97,7 @@ func (d *Decoder) Decode(
 
 func (d *Decoder) DecodeS(
 	secretKey *[32]byte,
+	seq uint64,
 	packet []byte,
 ) (proto.Message, []byte, pbpub.Code, error) {
 	// -------------------------------------------------------------------
@@ -108,12 +110,12 @@ func (d *Decoder) DecodeS(
 	}
 
 	var (
-		pkgType = binary.LittleEndian.Uint16(packet[2:4])
+		msgType = binary.LittleEndian.Uint16(packet[2:4])
 		msg     proto.Message
 	)
 
-	switch pbpub.PacketType(pkgType) {
-	case pbpub.PacketType_REQ_SEND_MSG:
+	switch pbpub.MsgType(msgType) {
+	case pbpub.MsgType_REQ_SEND_MSG:
 		msg = new(pbpub.SendMsgReq)
 
 	default:
@@ -129,8 +131,9 @@ func (d *Decoder) DecodeS(
 	cipherEnd := 18 + int(cipherSize)
 	aad := securePacketAAD(
 		binary.LittleEndian.Uint16(packet[:2]),
-		pkgType,
+		msgType,
 		cipherSize,
+		seq,
 		packet[cipherEnd:],
 	)
 	plain, err := d.secureChannel.Open(

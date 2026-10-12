@@ -181,27 +181,27 @@ func (s *Server) OnTraffic(conn nio.Conn) nio.Action {
 		return nio.Close
 	}
 
-	pkgType := binary.LittleEndian.Uint16(packet[2:4])
+	msgType := binary.LittleEndian.Uint16(packet[2:4])
 
-	switch pub.PacketType(pkgType) {
-	case pub.PacketType_REQ_ACTIVE_CONN:
+	switch pub.MsgType(msgType) {
+	case pub.MsgType_REQ_ACTIVE_CONN:
 		return s.activator.Activate(conn, packet)
 
-	case pub.PacketType_REQ_ACTIVE_CONN_PROOF:
+	case pub.MsgType_REQ_ACTIVE_CONN_PROOF:
 		return s.activator.Prove(s.ctx, conn, packet)
 
-	case pub.PacketType_REQ_SEND_MSG:
+	case pub.MsgType_REQ_SEND_MSG:
 		if _, ok := conn.Context().(*session.Data); !ok { // not activated yet
 			return nio.Close
 		}
 
-	case pub.PacketType_REQ_ACK_RECV_MSG:
+	case pub.MsgType_REQ_ACK_RECV_MSG:
 		if _, ok := conn.Context().(*session.Data); !ok {
 			return nio.Close
 		}
 
 	default:
-		s.logger.Error("invalid packet type, force close", zap.Uint16("type", pkgType))
+		s.logger.Error("invalid packet type, force close", zap.Uint16("type", msgType))
 		return nio.Close
 	}
 	return nio.None

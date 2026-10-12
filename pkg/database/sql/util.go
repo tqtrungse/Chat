@@ -23,6 +23,10 @@ import (
 	"fmt"
 )
 
+type ctxKey int
+
+const dbKey ctxKey = 1
+
 // Role identifies which kind of connection produced the error. A 1290
 // (read-only) error means something different depending on which pool hit
 // it — see IsInfraError.
@@ -38,11 +42,11 @@ const (
 )
 
 func AttachDB(ctx context.Context, db any) context.Context {
-	return context.WithValue(ctx, "db", db)
+	return context.WithValue(ctx, dbKey, db)
 }
 
 func ExtractDB(dbCtx context.Context) (any, error) {
-	if val := dbCtx.Value("db"); val != nil {
+	if val := dbCtx.Value(dbKey); val != nil {
 		return val, nil
 	}
 	return nil, ErrExtractDB

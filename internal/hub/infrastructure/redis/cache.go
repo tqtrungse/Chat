@@ -241,8 +241,6 @@ func (c *cache) ListHubsByDevices(
 			slicepool.Put(pkg.StringToBytes(field))
 		}
 	}
-	arrKeys = nil
-	arrFields = nil
 
 	if err != nil {
 		return nil, err
@@ -914,8 +912,8 @@ func (c *cache) verifyTurnOnExpiredNotifications(ctx context.Context) error {
 
 	got := verify["notify-keyspace-events"]
 	if !strings.Contains(got, "E") ||
-		!(strings.Contains(got, "A") ||
-			strings.Contains(got, "x")) {
+		(!strings.Contains(got, "A") &&
+			!strings.Contains(got, "x")) {
 		return fmt.Errorf("notify-keyspace-events did not take effect: got %q", got)
 	}
 	return nil

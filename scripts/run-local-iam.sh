@@ -23,9 +23,18 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 CONFIG_FILE="$ROOT_DIR/cmd/iam/.local/.config.env"
+HUB_CONFIG_FILE="$ROOT_DIR/cmd/hub/.local/.config.env"
 CERT_DIR="$ROOT_DIR/cmd/iam/.local/certs"
 CERT_FILE="$CERT_DIR/iam.crt"
 KEY_FILE="$CERT_DIR/iam.key"
+SIGNING_KEY_PEM=""
+
+cleanup_signing_key() {
+  if [[ -n "$SIGNING_KEY_PEM" ]]; then
+    rm -f -- "$SIGNING_KEY_PEM"
+  fi
+}
+trap cleanup_signing_key EXIT
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   mkdir -p "$(dirname -- "$CONFIG_FILE")"
@@ -37,8 +46,8 @@ fi
 
 # Read KEY from the config file (last assignment wins; CR and surrounding quotes stripped).
 get_config() {
-  local value
-  value="$(grep -E "^$1=" "$CONFIG_FILE" | tail -n 1 | cut -d= -f2- | tr -d '\r' || true)"
+  local key="$1" config_file="${2:-$CONFIG_FILE}" value
+  value="$(grep -E "^$key=" "$config_file" | tail -n 1 | cut -d= -f2- | tr -d '\r' || true)"
   value="${value#\"}"
   value="${value%\"}"
   printf '%s' "$value"
@@ -46,36 +55,140 @@ get_config() {
 
 # Set KEY="value" in the config file: replace the existing line (keeping CRLF if used) or append it.
 set_config() {
-  local key="$1" value="$2" tmp
-  tmp="$(mktemp "$CONFIG_FILE.XXXXXX")"
-  if grep -qE "^$key=" "$CONFIG_FILE"; then
+  local key="$1" value="$2" config_file="${3:-$CONFIG_FILE}" tmp
+  tmp="$(mktemp "$config_file.XXXXXX")"
+  if grep -qE "^$key=" "$config_file"; then
     awk -v key="$key" -v line="$key=\"$value\"" '
       $0 ~ "^" key "=" { print line (($0 ~ /\r$/) ? "\r" : ""); next }
       { print }
-    ' "$CONFIG_FILE" > "$tmp"
+    ' "$config_file" > "$tmp"
   else
-    cat -- "$CONFIG_FILE" > "$tmp"
-    [[ -z "$(tail -c 1 -- "$CONFIG_FILE")" ]] || echo >> "$tmp"
+    cat -- "$config_file" > "$tmp"
+    [[ -z "$(tail -c 1 -- "$config_file")" ]] || echo >> "$tmp"
     printf '%s="%s"\n' "$key" "$value" >> "$tmp"
   fi
-  mv -f -- "$tmp" "$CONFIG_FILE"
+  mv -f -- "$tmp" "$config_file"
 }
 
-# Generate TICKET_KEYS (format: keyID:base64(32-byte key)) only when it is empty
-# or still the placeholder from the example env. An existing key is never
-# overwritten, because it must stay in sync with Hub and rotating it would
-# invalidate outstanding tickets.
-TICKET_KEY_ID="$(get_config TICKET_CURRENT_KEY_ID)"
-TICKET_KEY_ID="${TICKET_KEY_ID:-1}"
-TICKET_KEYS_VALUE="$(get_config TICKET_KEYS)"
+# Add or replace one ID:base64 entry while preserving other key IDs. This keeps
+# Hub's old verification/decryption keys available during local key rotation.
+set_key_entry() {
+  local key="$1" id="$2" encoded="$3" config_file="$4"
+  local current entry entry_id merged="" replaced=false
+  local -a entries
 
-if [[ -z "$TICKET_KEYS_VALUE" || "$TICKET_KEYS_VALUE" == *"<"* ]]; then
-  TICKET_KEY="$(openssl rand -base64 32)"
-  set_config TICKET_KEYS "${TICKET_KEY_ID}:${TICKET_KEY}"
-  grep -qE '^TICKET_CURRENT_KEY_ID=' "$CONFIG_FILE" || set_config TICKET_CURRENT_KEY_ID "$TICKET_KEY_ID"
-  echo "Generated TICKET_KEYS (key id $TICKET_KEY_ID) in $CONFIG_FILE" >&2
-  echo "Copy the same TICKET_CURRENT_KEY_ID/TICKET_KEYS to Hub so it can open IAM tickets." >&2
+  current="$(get_config "$key" "$config_file")"
+  IFS=',' read -r -a entries <<< "$current"
+  for entry in "${entries[@]}"; do
+    entry="${entry#"${entry%%[![:space:]]*}"}"
+    entry="${entry%"${entry##*[![:space:]]}"}"
+    [[ -z "$entry" || "$entry" == *"<"* ]] && continue
+
+    entry_id="${entry%%:*}"
+    if [[ "$entry_id" == "$id" ]]; then
+      if [[ "$replaced" == false ]]; then
+        entry="$id:$encoded"
+        replaced=true
+      else
+        continue
+      fi
+    fi
+
+    if [[ -n "$merged" ]]; then
+      merged+=","
+    fi
+    merged+="$entry"
+  done
+
+  if [[ "$replaced" == false ]]; then
+    [[ -z "$merged" ]] || merged+=","
+    merged+="$id:$encoded"
+  fi
+  set_config "$key" "$merged" "$config_file"
+}
+
+merge_key_entries() {
+  local key="$1" source_entries="$2" config_file="$3" entry
+  local -a entries
+
+  IFS=',' read -r -a entries <<< "$source_entries"
+  for entry in "${entries[@]}"; do
+    entry="${entry#"${entry%%[![:space:]]*}"}"
+    entry="${entry%"${entry##*[![:space:]]}"}"
+    [[ -z "$entry" ]] && continue
+    if [[ "$entry" != *:* ]]; then
+      echo "Invalid $key entry: $entry" >&2
+      return 1
+    fi
+    set_key_entry "$key" "${entry%%:*}" "${entry#*:}" "$config_file"
+  done
+}
+
+derive_ticket_signing_public_key() {
+  local seed="$1"
+  {
+    printf '\x30\x2e\x02\x01\x00\x30\x05\x06\x03\x2b\x65\x70\x04\x22\x04\x20'
+    printf '%s' "$seed" | openssl base64 -d -A
+  } | openssl pkey -inform DER -pubout -outform DER | tail -c 32 | openssl base64 -A
+}
+
+# Generate the shared AES ticket key only when it is empty or still the
+# example placeholder. Existing keys are preserved so IAM and Hub stay in sync.
+TICKET_ENCRYPT_KEY_ID="$(get_config TICKET_ENCRYPT_CURRENT_KEY_ID)"
+TICKET_ENCRYPT_KEY_ID="${TICKET_ENCRYPT_KEY_ID:-1}"
+TICKET_ENCRYPT_KEYS="$(get_config TICKET_ENCRYPT_KEYS)"
+
+if [[ -z "$TICKET_ENCRYPT_KEYS" || "$TICKET_ENCRYPT_KEYS" == *"<"* ]]; then
+  TICKET_ENCRYPT_KEY="$(openssl rand -base64 32)"
+  set_config TICKET_ENCRYPT_KEYS "${TICKET_ENCRYPT_KEY_ID}:${TICKET_ENCRYPT_KEY}"
+  TICKET_ENCRYPT_KEYS="${TICKET_ENCRYPT_KEY_ID}:${TICKET_ENCRYPT_KEY}"
+  echo "Generated TICKET_ENCRYPT_KEYS (key id $TICKET_ENCRYPT_KEY_ID) in $CONFIG_FILE" >&2
 fi
+
+if [[ -z "$(get_config TICKET_ENCRYPT_CURRENT_KEY_ID)" ]]; then
+  set_config TICKET_ENCRYPT_CURRENT_KEY_ID "$TICKET_ENCRYPT_KEY_ID"
+fi
+
+# IAM signs tickets with an Ed25519 seed; Hub receives only its public key.
+# Keep configured signing keys stable, and generate a keypair only for the
+# empty/example placeholder values.
+TICKET_SIGNING_KEY_ID="$(get_config TICKET_SIGNING_KEY_ID)"
+TICKET_SIGNING_KEY_ID="${TICKET_SIGNING_KEY_ID:-1}"
+TICKET_SIGNING_PRIVATE_KEY="$(get_config TICKET_SIGNING_PRIVATE_KEY)"
+
+if [[ -z "$TICKET_SIGNING_PRIVATE_KEY" || "$TICKET_SIGNING_PRIVATE_KEY" == *"<"* ]]; then
+  mkdir -p "$CERT_DIR"
+  umask 077
+  SIGNING_KEY_PEM="$(mktemp "$CERT_DIR/ticket-signing.XXXXXX.pem")"
+  openssl genpkey -algorithm ED25519 -out "$SIGNING_KEY_PEM"
+  TICKET_SIGNING_PRIVATE_KEY="$(openssl pkey -in "$SIGNING_KEY_PEM" -outform DER | tail -c 32 | openssl base64 -A)"
+  TICKET_SIGNING_PUBLIC_KEY="$(openssl pkey -in "$SIGNING_KEY_PEM" -pubout -outform DER | tail -c 32 | openssl base64 -A)"
+  rm -f -- "$SIGNING_KEY_PEM"
+  SIGNING_KEY_PEM=""
+
+  set_config TICKET_SIGNING_PRIVATE_KEY "$TICKET_SIGNING_PRIVATE_KEY"
+  echo "Generated TICKET_SIGNING_PRIVATE_KEY (key id $TICKET_SIGNING_KEY_ID) in $CONFIG_FILE" >&2
+fi
+
+if [[ -z "$(get_config TICKET_SIGNING_KEY_ID)" ]]; then
+  set_config TICKET_SIGNING_KEY_ID "$TICKET_SIGNING_KEY_ID"
+fi
+
+if [[ -z "$TICKET_SIGNING_PUBLIC_KEY" ]]; then
+  TICKET_SIGNING_PUBLIC_KEY="$(derive_ticket_signing_public_key "$TICKET_SIGNING_PRIVATE_KEY")"
+fi
+
+# Keep Hub's local verifier config in sync with IAM. Start it from the example
+# when it does not exist, then merge entries by key ID so older keys survive.
+if [[ ! -f "$HUB_CONFIG_FILE" ]]; then
+  mkdir -p "$(dirname -- "$HUB_CONFIG_FILE")"
+  cp -- "$ROOT_DIR/cmd/hub/.example.env" "$HUB_CONFIG_FILE"
+fi
+
+set_config TICKET_ENCRYPT_CURRENT_KEY_ID "$TICKET_ENCRYPT_KEY_ID" "$HUB_CONFIG_FILE"
+merge_key_entries TICKET_ENCRYPT_KEYS "$TICKET_ENCRYPT_KEYS" "$HUB_CONFIG_FILE"
+set_key_entry TICKET_SIGNNING_PUBLIC_KEYS "$TICKET_SIGNING_KEY_ID" "$TICKET_SIGNING_PUBLIC_KEY" "$HUB_CONFIG_FILE"
+echo "Synchronized IAM ticket keys to $HUB_CONFIG_FILE" >&2
 
 if [[ ! -s "$CERT_FILE" || ! -s "$KEY_FILE" ]]; then
   mkdir -p "$CERT_DIR"

@@ -32,7 +32,6 @@ import (
 	workerpool "xxx/pkg/pool/worker"
 
 	"github.com/nats-io/nats.go"
-	natscore "github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
@@ -173,7 +172,7 @@ func (b *broker) RunInboxConsumer(ctx context.Context) error {
 		subject = fmt.Sprintf("%s%d", b.hubSubjectPrefix, b.hubID)
 	)
 
-	sub, err := b.nc.Subscribe(subject, func(msg *natscore.Msg) {
+	sub, err := b.nc.Subscribe(subject, func(msg *nats.Msg) {
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
@@ -205,7 +204,7 @@ func (b *broker) RunInboxConsumer(ctx context.Context) error {
 	// Drain stops the server from delivering any new message to this
 	// subscription; whatever's already buffered may still reach the
 	// callback above briefly in the background.
-	statusCh := sub.StatusChanged(natscore.SubscriptionClosed)
+	statusCh := sub.StatusChanged(nats.SubscriptionClosed)
 	if dErr := sub.Drain(); dErr != nil {
 		b.logger.Error("failed to drain subscription", zap.Error(dErr))
 		_ = sub.Unsubscribe()
@@ -231,7 +230,7 @@ func (b *broker) RunInboxConsumer(ctx context.Context) error {
 
 func (b *broker) handleInboxMessage(
 	ctx context.Context,
-	natMsg *natscore.Msg,
+	natMsg *nats.Msg,
 ) {
 	var msg pbpriv.Message
 	if err := proto.Unmarshal(natMsg.Data, &msg); err != nil {

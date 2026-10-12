@@ -24,10 +24,12 @@ func TestEncoder_Encode_OutputIncludesTrailingHMAC(t *testing.T) {
 	encoder := NewEncoder(NewMockSecureChannel())
 	hmacKey := randomKey(t)
 	msg := new(pbpub.ActiveConnReq)
+	seq := uint64(0x0807060504030201)
 
 	packet, err := encoder.Encode(
 		hmacKey,
-		pbpub.PacketType_REQ_ACTIVE_CONN,
+		seq,
+		pbpub.MsgType_REQ_ACTIVE_CONN,
 		msg,
 		nil,
 	)
@@ -39,6 +41,9 @@ func TestEncoder_Encode_OutputIncludesTrailingHMAC(t *testing.T) {
 	gotTag := packet[len(packet)-32:]
 
 	mac := hmac.New(sha256.New, hmacKey[:])
+	var seqLE [8]byte
+	binary.LittleEndian.PutUint64(seqLE[:], seq)
+	mac.Write(seqLE[:])
 	mac.Write(body)
 	wantTag := mac.Sum(nil)
 
@@ -50,10 +55,12 @@ func TestEncoder_Encode_WithExpand(t *testing.T) {
 	hmacKey := randomKey(t)
 	msg := new(pbpub.ActiveConnReq)
 	expand := []byte("expand-payload")
+	seq := uint64(1)
 
 	packet, err := encoder.Encode(
 		hmacKey,
-		pbpub.PacketType_REQ_ACTIVE_CONN,
+		seq,
+		pbpub.MsgType_REQ_ACTIVE_CONN,
 		msg,
 		expand,
 	)
@@ -75,7 +82,8 @@ func TestEncoder_Encode_RejectsFrameTooLarge(t *testing.T) {
 
 	_, err := encoder.Encode(
 		hmacKey,
-		pbpub.PacketType_REQ_ACTIVE_CONN,
+		0,
+		pbpub.MsgType_REQ_ACTIVE_CONN,
 		new(pbpub.ActiveConnReq),
 		make([]byte, maxFrameSize),
 	)
@@ -89,16 +97,18 @@ func TestEncoder_EncodeDecode_RoundTrip(t *testing.T) {
 	hmacKey := randomKey(t)
 	msg := new(pbpub.ActiveConnReq)
 	expand := []byte("expand-payload")
+	seq := uint64(42)
 
 	packet, err := encoder.Encode(
 		hmacKey,
-		pbpub.PacketType_REQ_ACTIVE_CONN,
+		seq,
+		pbpub.MsgType_REQ_ACTIVE_CONN,
 		msg,
 		expand,
 	)
 	require.NoError(t, err)
 
-	gotMsg, gotExpand, code, err := decoder.Decode(hmacKey, packet)
+	gotMsg, gotExpand, code, err := decoder.Decode(hmacKey, seq, packet)
 	require.NoError(t, err)
 	require.Equal(t, pbpub.Code_SUCCESS, code)
 	require.True(t, proto.Equal(gotMsg, msg))
@@ -114,16 +124,18 @@ func TestEnCoder_EncodeDecode_RoundTrip_ForwardSendMsg(t *testing.T) {
 		SendDeviceId: uint64(1),
 		MsgId:        uint64(1),
 	}
+	seq := uint64(1)
 
 	packet, err := encoder.Encode(
 		hmacKey,
-		pbpub.PacketType_REQ_BROKER_FORWARD_MSG,
+		seq,
+		pbpub.MsgType_REQ_BROKER_FORWARD_MSG,
 		msg,
 		nil,
 	)
 	require.NoError(t, err)
 
-	gotMsg, _, code, err := decoder.Decode(hmacKey, packet)
+	gotMsg, _, code, err := decoder.Decode(hmacKey, seq, packet)
 	require.NoError(t, err)
 	require.Equal(t, pbpub.Code_SUCCESS, code)
 	require.True(t, proto.Equal(gotMsg, msg))
@@ -138,17 +150,19 @@ func TestEncoderDecoder_EncodeSDecodeS_RoundTrip(t *testing.T) {
 		ChannelId: uint64(1),
 	}
 	expand := []byte("expand-payload")
+	seq := uint64(9)
 
 	packet, err := encoder.EncodeS(
 		secretKey,
-		pbpub.PacketType_REQ_SEND_MSG,
+		seq,
+		pbpub.MsgType_REQ_SEND_MSG,
 		msg,
 		expand,
 	)
 	require.NoError(t, err)
 	require.Equal(t, uint16(len(packet)-2), binary.LittleEndian.Uint16(packet[:2]))
 
-	gotMsg, gotExpand, code, err := decoder.DecodeS(secretKey, packet)
+	gotMsg, gotExpand, code, err := decoder.DecodeS(secretKey, seq, packet)
 	require.NoError(t, err)
 	require.Equal(t, pbpub.Code_SUCCESS, code)
 	require.True(t, proto.Equal(gotMsg, msg))
@@ -163,20 +177,54 @@ func TestEncoderDecoder_EncodeSDecodeS_RoundTrip_NoExpand(t *testing.T) {
 	msg := &pbpub.SendMsgReq{
 		ChannelId: uint64(1),
 	}
+	seq := uint64(0)
 
 	packet, err := encoder.EncodeS(
 		secretKey,
-		pbpub.PacketType_REQ_SEND_MSG,
+		seq,
+		pbpub.MsgType_REQ_SEND_MSG,
 		msg,
 		nil,
 	)
 	require.NoError(t, err)
 
-	gotMsg, gotExpand, code, err := decoder.DecodeS(secretKey, packet)
+	gotMsg, gotExpand, code, err := decoder.DecodeS(secretKey, seq, packet)
 	require.NoError(t, err)
 	require.Equal(t, pbpub.Code_SUCCESS, code)
 	require.True(t, proto.Equal(gotMsg, msg))
 	require.Empty(t, gotExpand)
+}
+
+func TestEncoderDecoder_MixedFrameTypesShareSequence(t *testing.T) {
+	secureChannel := NewMockSecureChannel()
+	encoder := NewEncoder(secureChannel)
+	decoder := NewDecoder(secureChannel)
+	hmacKey := randomKey(t)
+	secretKey := randomKey(t)
+
+	plainFrame, err := encoder.Encode(
+		hmacKey,
+		0,
+		pbpub.MsgType_REQ_ACTIVE_CONN,
+		new(pbpub.ActiveConnReq),
+		nil,
+	)
+	require.NoError(t, err)
+	_, _, code, err := decoder.Decode(hmacKey, 0, plainFrame)
+	require.NoError(t, err)
+	require.Equal(t, pbpub.Code_SUCCESS, code)
+
+	secureFrame, err := encoder.EncodeS(
+		secretKey,
+		1,
+		pbpub.MsgType_REQ_SEND_MSG,
+		&pbpub.SendMsgReq{ChannelId: 1},
+		nil,
+	)
+	require.NoError(t, err)
+	_, _, code, err = decoder.DecodeS(secretKey, 1, secureFrame)
+	require.NoError(t, err)
+	require.Equal(t, pbpub.Code_SUCCESS, code)
 }
 
 func TestEncoderDecoder_EncodeS_NoncesAreUnpredictable(t *testing.T) {
@@ -184,10 +232,12 @@ func TestEncoderDecoder_EncodeS_NoncesAreUnpredictable(t *testing.T) {
 	encoder := NewEncoder(secureChannel)
 	secretKey := randomKey(t)
 	msg := new(pbpub.SendMsgReq)
+	seq := uint64(0)
 
 	p1, err := encoder.EncodeS(
 		secretKey,
-		pbpub.PacketType_REQ_SEND_MSG,
+		seq,
+		pbpub.MsgType_REQ_SEND_MSG,
 		msg,
 		nil,
 	)
@@ -195,7 +245,8 @@ func TestEncoderDecoder_EncodeS_NoncesAreUnpredictable(t *testing.T) {
 
 	p2, err := encoder.EncodeS(
 		secretKey,
-		pbpub.PacketType_REQ_SEND_MSG,
+		seq,
+		pbpub.MsgType_REQ_SEND_MSG,
 		msg,
 		nil,
 	)
@@ -203,37 +254,40 @@ func TestEncoderDecoder_EncodeS_NoncesAreUnpredictable(t *testing.T) {
 	require.False(t, bytes.Equal(p1[4:16], p2[4:16]))
 }
 
-func TestSecurePacketAAD_BindsPacketTypeAndCipherSize(t *testing.T) {
+func TestSecurePacketAAD_BindsFrameMetadataAndSequence(t *testing.T) {
 	expand := []byte("expand")
-	base := securePacketAAD(64, uint16(pbpub.PacketType_REQ_SEND_MSG), 48, expand)
-	wrongType := securePacketAAD(64, uint16(pbpub.PacketType_REQ_ACTIVE_CONN), 48, expand)
-	wrongCipherSize := securePacketAAD(64, uint16(pbpub.PacketType_REQ_SEND_MSG), 49, expand)
-	wrongFrameSize := securePacketAAD(65, uint16(pbpub.PacketType_REQ_SEND_MSG), 48, expand)
+	seq := uint64(0x0807060504030201)
+	base := securePacketAAD(64, uint16(pbpub.MsgType_REQ_SEND_MSG), 48, seq, expand)
+	wrongType := securePacketAAD(64, uint16(pbpub.MsgType_REQ_ACTIVE_CONN), 48, seq, expand)
+	wrongCipherSize := securePacketAAD(64, uint16(pbpub.MsgType_REQ_SEND_MSG), 49, seq, expand)
+	wrongFrameSize := securePacketAAD(65, uint16(pbpub.MsgType_REQ_SEND_MSG), 48, seq, expand)
+	wrongSeq := securePacketAAD(64, uint16(pbpub.MsgType_REQ_SEND_MSG), 48, seq+1, expand)
 	defer func() {
-		for _, aad := range [][]byte{base, wrongType, wrongCipherSize, wrongFrameSize} {
+		for _, aad := range [][]byte{base, wrongType, wrongCipherSize, wrongFrameSize, wrongSeq} {
 			clear(aad[:cap(aad)])
 			slicepool.Put(aad)
 		}
 	}()
 
-	require.Equal(t, securePacketAADForTest(64, uint16(pbpub.PacketType_REQ_SEND_MSG), 48, expand), base)
+	require.Equal(t, securePacketAADForTest(64, uint16(pbpub.MsgType_REQ_SEND_MSG), 48, seq, expand), base)
 	require.NotEqual(t, base, wrongType)
 	require.NotEqual(t, base, wrongCipherSize)
 	require.NotEqual(t, base, wrongFrameSize)
+	require.NotEqual(t, base, wrongSeq)
 }
 
 func TestEncodeHandshake_NoSessionMAC(t *testing.T) {
 	secureChannel := NewMockSecureChannel()
 	encoder := NewEncoder(secureChannel)
-	want := &pbpub.ActiveConnChallengeResp{Nonce: make([]byte, 32)}
-	packet, err := encoder.EncodeHandshake(pbpub.PacketType_RESP_ACTIVE_CONN_CHALLENGE, want)
+	want := &pbpub.ActiveConnResp{Nonce: make([]byte, 32)}
+	packet, err := encoder.EncodeHandshake(pbpub.MsgType_RESP_ACTIVE_CONN, want)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(packet), 6)
 	require.Equal(t, uint16(len(packet)-2), binary.LittleEndian.Uint16(packet[:2]))
-	require.Equal(t, uint16(pbpub.PacketType_RESP_ACTIVE_CONN_CHALLENGE), binary.LittleEndian.Uint16(packet[2:4]))
+	require.Equal(t, uint16(pbpub.MsgType_RESP_ACTIVE_CONN), binary.LittleEndian.Uint16(packet[2:4]))
 	require.Equal(t, uint16(len(packet)-6), binary.LittleEndian.Uint16(packet[4:6]))
 
-	var got pbpub.ActiveConnChallengeResp
+	var got pbpub.ActiveConnResp
 	require.NoError(t, proto.Unmarshal(packet[6:], &got))
 	require.True(t, proto.Equal(want, &got))
 }
