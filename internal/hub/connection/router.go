@@ -127,10 +127,12 @@ func NewRouter(
 }
 
 // ActivateConn registers conn for the device in t. t must come from PrepareActivation;
-// the caller keeps ownership and must Clear it (session keys are copied by value).
+// keys must be derived for this activation challenge. The caller retains ownership
+// of both values and must clear them after this method returns.
 func (r *Router) ActivateConn(
 	ctx context.Context,
 	t *sharedsession.Ticket,
+	keys *sharedsession.Keys,
 	conn nio.Conn,
 	callback func(id shareddevice.ID),
 ) error {
@@ -151,7 +153,10 @@ func (r *Router) ActivateConn(
 		return ErrConnReachMax
 	}
 
-	ss := &session.Data{Keys: t.Keys, DeviceID: deviceID}
+	ss := &session.Data{
+		Keys:     *keys,
+		DeviceID: deviceID,
+	}
 	timestamp := time.Now().Unix()
 	ss.LastHeartBeat.Store(timestamp)
 	ss.State.Store(uint32(session.StateActive))

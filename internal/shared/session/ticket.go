@@ -32,10 +32,7 @@ func (t *Ticket) Clear() {
 	if t == nil {
 		return
 	}
-	clear(t.Keys.RecvEnc[:])
-	clear(t.Keys.SendEnc[:])
-	clear(t.Keys.RecvMac[:])
-	clear(t.Keys.SendMac[:])
+	t.Keys.Clear()
 	clear(t.ActivationKey[:])
 	clear(t.IdentityPub[:])
 }

@@ -133,7 +133,7 @@ func TestTicketSigner_Seal_WireFormatAndSignature(t *testing.T) {
 	defer opened.Clear()
 	require.Equal(t, in, opened)
 
-	message := append([]byte("xxx/iam/ticket-signature/v2\x00"), wire[:239]...)
+	message := append([]byte(ticketSigningDomain), wire[:239]...)
 	require.True(t, ed25519.Verify(publicKey, message, wire[239:]))
 	require.False(t, ed25519.Verify(publicKey, wire[:239], wire[239:]), "a signature without the domain must not verify")
 	require.False(t, ed25519.Verify(publicKey, wire[2:239], wire[239:]), "signing just the AES ticket must not verify")
@@ -168,7 +168,7 @@ func TestTicketSigningMessage_DomainAndInputOwnership(t *testing.T) {
 		t.Run(fmt.Sprintf("unsigned length %d", size), func(t *testing.T) {
 			unsigned := bytes.Repeat([]byte{0xA5}, size)
 			before := bytes.Clone(unsigned)
-			expected := append([]byte("xxx/iam/ticket-signature/v2\x00"), unsigned...)
+			expected := append([]byte(ticketSigningDomain), unsigned...)
 			message := ticketSigningMessage(unsigned)
 			defer func() {
 				clear(message)

@@ -93,7 +93,7 @@ frame_length: uint16 LE | packet body: frame_length bytes
 
 The packet body starts with a two-byte little-endian packet type. HMAC packets and the server's activation challenge then have a two-byte little-endian protobuf length. The inbound activation request and activation proof are exceptions: after the packet type, their protobuf message follows directly, with no inner length. The server reads the outer frame length before dispatching the packet type.
 
-**Client request rule:** send one request and wait until the complete corresponding response has been received and decoded before sending the next request. Do not pipeline client requests. For activation, `REQ_ACTIVE_CONN` pairs with `RESP_ACTIVE_CONN_CHALLENGE`, then `REQ_ACTIVE_CONN_PROOF` pairs with `RESP_ACTIVE_CONN`. `OnTraffic` processes at most one frame per callback; one `unix.Read` may contain multiple frames, and `nio.read` moves the unconsumed bytes into `inboundBuffer` after the callback. In level-triggered mode, bytes already in that user-space buffer do not make the socket readable again, so a later frame could wait there until new socket data arrives. A single frame may still be split across reads; the server buffers it until the rest arrives.
+**Client request rule:** send one request and wait until the complete corresponding response has been received and decoded before sending the next request. Do not pipeline client requests. For activation, `REQ_ACTIVE_CONN` pairs with `RESP_ACTIVE_CONN` (the challenge), then `REQ_ACTIVE_CONN_PROOF` pairs with `RESP_ACTIVE_CONN_PROOF` (the activation result). `OnTraffic` processes at most one frame per callback; one `unix.Read` may contain multiple frames, and `nio.read` moves the unconsumed bytes into `inboundBuffer` after the callback. In level-triggered mode, bytes already in that user-space buffer do not make the socket readable again, so a later frame could wait there until new socket data arrives. A single frame may still be split across reads; the server buffers it until the rest arrives.
 
 ### IAM key exchange
 
@@ -165,12 +165,13 @@ protobuf: ActiveConnReq {
 
 The hub validates the ticket in this order: it checks the envelope version and trusted signing key ID, verifies IAM's Ed25519 signature, opens the AES-GCM ticket, checks that its device ID matches the request and that it has not expired, then verifies the device signature over the raw ticket using the identity public key inside the authenticated ticket. The connection is not active yet.
 
-The hub creates a fresh 32-byte nonce, stores a pending challenge on this TCP connection, and requires the proof within 5 seconds. It returns this packet body, without an outer frame-length prefix:
+The hub creates a fresh 32-byte nonce, stores a pending challenge on this TCP connection, and requires the proof within 5 seconds. It returns this framed packet:
 
 ```text
-packet_type: uint16 LE = RESP_ACTIVE_CONN_CHALLENGE
+frame_length: uint16 LE
+packet_type: uint16 LE = RESP_ACTIVE_CONN
 protobuf_size: uint16 LE
-protobuf: ActiveConnChallengeResp{nonce: 32 fresh bytes}
+protobuf: ActiveConnResp{nonce: 32 fresh bytes}
 ```
 
 The challenge belongs to that TCP connection and is single-use.
@@ -191,7 +192,16 @@ proof = HMAC-SHA-256(
 )
 ```
 
-The client sends a framed `REQ_ACTIVE_CONN_PROOF` packet whose body is `packet_type: uint16 LE | protobuf: ActiveConnProofReq{proof}`; this packet also has no inner protobuf-length field. The hub checks the proof in constant time, the challenge deadline, and the pending state on the same connection. It checks ticket expiry again before activation completes. On success, the hub attaches the session keys to the connection, updates device presence in Redis, and replaces any older connection for the same device. After Redis registration succeeds, it sends `RESP_ACTIVE_CONN` with `ActiveConnResp{code: SUCCESS}`, protected with the hub-to-client MAC.
+When it receives the challenge, the client derives four fresh session keys from its exchange keys and this connection's nonce, then sends the proof. After validating the proof, the hub derives the same keys from the ticket and nonce before activating the session. For each key, `info` is the ASCII domain, the label, a zero byte, and the 32-byte nonce:
+
+```text
+info = "xxx/hub/conn/v1/" || label || 0x00 || nonce
+connection_key = HKDF-Expand(SHA-256, ticket_key[label], info, 32)
+```
+
+The labels use the hub's direction names: `c2s/enc` derives `RecvEnc`, `s2c/enc` derives `SendEnc`, `c2s/mac` derives `RecvMac`, and `s2c/mac` derives `SendMac`. The client uses these derived keys to verify the activation ACK. The hub installs only these connection-specific keys; the `ActivationKey` remains the ticket key used for the proof. A reused ticket therefore produces different session keys for each fresh challenge.
+
+The client sends a framed `REQ_ACTIVE_CONN_PROOF` packet whose body is `packet_type: uint16 LE | protobuf: ActiveConnProofReq{proof}`; this packet has no inner protobuf-length field. The hub checks the proof in constant time, the challenge deadline, and the pending state on the same connection. It checks ticket expiry again before activation completes. On success, the hub attaches the derived session keys to the connection, updates device presence in Redis, and replaces any older connection for the same device. After Redis registration succeeds, it sends `RESP_ACTIVE_CONN_PROOF` with `ActiveConnProofResp{code: SUCCESS}`, protected by the derived hub-to-client MAC key. This ACK uses server-to-client sequence `0`; the first client-to-server session packet also uses sequence `0`.
 
 ### Session packet bodies
 
@@ -204,7 +214,7 @@ packet_type: uint16 LE | protobuf_size: uint16 LE | protobuf |
 expand | HMAC-SHA-256: 32 bytes
 ```
 
-The MAC covers all bytes before the MAC, including the outer frame length, packet type, protobuf length, protobuf bytes, and `expand`. The direction-specific `c2s/mac` or `s2c/mac` key is used.
+The MAC input is `sequence_LE64 || all frame bytes before the MAC`. The frame bytes include the outer frame length, packet type, protobuf length, protobuf bytes, and `expand`. The direction-specific `c2s/mac` or `s2c/mac` connection key is used.
 
 **Encrypted packet** — protobuf is encrypted with AES-256-GCM; `expand` is transmitted in clear and supplied as GCM additional authenticated data:
 
@@ -213,7 +223,9 @@ packet_type: uint16 LE | nonce: 12 bytes | cipher_size: uint16 LE |
 ciphertext_and_GCM_tag | expand
 ```
 
-`cipher_size` includes the 16-byte GCM tag. The AAD is the domain `xxx/hub/packet/gcm/v1\0`, followed by the little-endian frame length (body size, excluding its two-byte prefix), packet type, cipher size, and cleartext `expand` bytes. The encrypted message request contains protobuf metadata (`channel_id`, `dedup_key`, and recipient device IDs); its `expand` carries the encrypted message material described beside `SendMsgReq` in [`message.proto`](api/hub/v1/proto/src/pub/message.proto).
+`cipher_size` includes the 16-byte GCM tag. The AAD is the domain `xxx/hub/packet/gcm/v1\0`, followed by the little-endian frame length (body size, excluding its two-byte prefix), packet type, cipher size, the implicit sequence as uint64 LE, and cleartext `expand` bytes. The encrypted message request contains protobuf metadata (`channel_id`, `dedup_key`, and recipient device IDs); its `expand` carries the encrypted message material described beside `SendMsgReq` in [`message.proto`](api/hub/v1/proto/src/pub/message.proto).
+
+Each direction has one implicit sequence counter, shared by HMAC and encrypted packets. Both counters start at `0` when the session activates; handshake packets do not use them. The receiver authenticates each packet with the next expected sequence and advances only after successful verification. The sequence is not sent on the wire. A replay, missing packet, or reordering causes authentication to fail and the connection to close.
 
 The current TCP handler only checks that `REQ_SEND_MSG` and `REQ_ACK_RECV_MSG` arrive on an activated session; their application handling and responses are not wired yet. The request/response rule above applies once those handlers return their corresponding responses.
 

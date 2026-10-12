@@ -359,7 +359,7 @@ func TestTicketVerifier_Open_StillChecksAESAuthentication(t *testing.T) {
 	for _, offset := range []int{2, 3, 15, 238} {
 		bad := bytes.Clone(wire)
 		bad[offset] ^= 1
-		message := append([]byte("xxx/iam/ticket-signature/v2\x00"), bad[:239]...)
+		message := append([]byte(ticketSigningDomain), bad[:239]...)
 		copy(bad[239:], ed25519.Sign(signer.privateKey, message))
 		require.True(t, ed25519.Verify(publicKey, message, bad[239:]))
 		requireSignedTicketOpenFails(t, verifier, in.DeviceID, bad, ErrTicketInvalid)

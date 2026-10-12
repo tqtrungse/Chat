@@ -20,6 +20,7 @@ package session
 import "errors"
 
 var (
+	ErrConnKeyBaseNil          = errors.New("connection key base is nil")
 	ErrTicketInvalid           = errors.New("invalid ticket")
 	ErrTicketExpired           = errors.New("ticket expired")
 	ErrTicketBadEntry          = errors.New("bad ticket key entry")

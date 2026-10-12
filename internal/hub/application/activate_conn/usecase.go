@@ -201,11 +201,19 @@ func (ca *connActivator) Prove(ctx context.Context, conn nio.Conn, packet []byte
 		return ca.reject(pending)
 	}
 
+	connKeys, err := sharedsession.DeriveConnKeys(&pending.ticket.Keys, pending.nonce)
+	if err != nil {
+		ca.logger.Error("failed to derive connection keys, force close", zap.Error(err))
+		return ca.reject(pending)
+	}
+	defer connKeys.Clear()
+
 	// ActivateConn copies the session keys by value and replaces the conn context
 	// with the session, so pending can be wiped right after.
-	err := ca.router.ActivateConn(
+	err = ca.router.ActivateConn(
 		ctx,
 		pending.ticket,
+		&connKeys,
 		conn,
 		ca.onAck(conn),
 	)

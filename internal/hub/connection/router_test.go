@@ -114,7 +114,7 @@ func TestRouter_ActivateConn_RechecksExpiryWithoutPreparingAgain(t *testing.T) {
 			router.meta.Store(closed | 3)
 			before := *ticket
 			started := time.Now()
-			err = router.ActivateConn(context.Background(), prepared, nil, nil)
+			err = router.ActivateConn(context.Background(), prepared, &sharedsession.Keys{}, nil, nil)
 			finished := time.Now()
 			require.ErrorIs(t, err, tc.wantErr)
 			require.Equal(t, uint32(closed|3), router.meta.Load())
@@ -141,7 +141,7 @@ func TestRouter_ActivateConn_ExpiredTicketDoesNotReserveSlot(t *testing.T) {
 
 	// A nil connection deliberately makes any attempt to register it fail:
 	// expiry must reject before touching the conn or creating a session.
-	err := router.ActivateConn(context.Background(), ticket, nil, nil)
+	err := router.ActivateConn(context.Background(), ticket, &sharedsession.Keys{}, nil, nil)
 	require.ErrorIs(t, err, sharedsession.ErrTicketExpired)
 	require.Equal(t, uint32(3), router.meta.Load())
 	require.Equal(t, uint32(3), router.CurConns())
@@ -152,7 +152,7 @@ func TestRouter_ActivateConn_ExpiredTicketDoesNotReserveSlot(t *testing.T) {
 func TestRouter_ActivateConn_RejectsNilTicket(t *testing.T) {
 	verifier := &expiryTestVerifier{verifier: newExpiryTestVerifier(t, 0), now: time.Now()}
 	router := &Router{ticketVerifier: verifier}
-	err := router.ActivateConn(context.Background(), nil, nil, nil)
+	err := router.ActivateConn(context.Background(), nil, &sharedsession.Keys{}, nil, nil)
 	require.ErrorIs(t, err, sharedsession.ErrTicketInvalid)
 	require.Zero(t, router.meta.Load())
 	require.Equal(t, 1, verifier.checkCalls)

@@ -25,3 +25,14 @@ type Keys struct {
 	RecvMac [32]byte
 	SendMac [32]byte
 }
+
+// Clear overwrites every directional session key.
+func (k *Keys) Clear() {
+	if k == nil {
+		return
+	}
+	clear(k.RecvEnc[:])
+	clear(k.SendEnc[:])
+	clear(k.RecvMac[:])
+	clear(k.SendMac[:])
+}

@@ -100,9 +100,9 @@ func requireTicketOpenFails(
 	require.Nil(t, out, msgAndArgs...)
 }
 
-// ----------------------------------------
+// ----------------------------------
 // Seal / Open: round trip and tamper
-// ----------------------------------------
+// ----------------------------------
 
 func TestTicket_RoundTripAndTamper(t *testing.T) {
 	key := ticketTestKey(t)
