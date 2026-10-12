@@ -227,7 +227,7 @@ func TestDecoder_Decode_RejectsFrameWhenExpectedSequenceDiffers(t *testing.T) {
 
 	_, _, code, err = d.Decode(hmacKey, seq+1, packet)
 	require.Error(t, err)
-	require.Equal(t, pbpub.Code_ERR_MODIFIED_PACK, code)
+	require.Equal(t, pbpub.Code_ERR_PKG_MODIFIED, code)
 }
 
 func TestDecoder_Decode_NoExpand(t *testing.T) {
@@ -268,7 +268,7 @@ func TestDecoder_Decode_RejectsTamperedHMAC(t *testing.T) {
 
 	_, _, code, err := d.Decode(hmacKey, 0, packet)
 	require.Error(t, err)
-	require.Equal(t, pbpub.Code_ERR_MODIFIED_PACK, code)
+	require.Equal(t, pbpub.Code_ERR_PKG_MODIFIED, code)
 }
 
 func TestDecoder_Decode_WrongHmacKey(t *testing.T) {
@@ -290,7 +290,7 @@ func TestDecoder_Decode_WrongHmacKey(t *testing.T) {
 
 	_, _, code, err := d.Decode(wrongKey, 0, packet)
 	require.Error(t, err)
-	require.Equal(t, pbpub.Code_ERR_MODIFIED_PACK, code)
+	require.Equal(t, pbpub.Code_ERR_PKG_MODIFIED, code)
 }
 
 func TestDecoder_Decode_UnrecognizedPacketType(t *testing.T) {
@@ -308,7 +308,7 @@ func TestDecoder_Decode_UnrecognizedPacketType(t *testing.T) {
 
 	_, _, code, err := d.Decode(hmacKey, 0, packet)
 	require.Error(t, err)
-	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_TYPE, code)
+	require.Equal(t, pbpub.Code_ERR_MSG_INVALID_TYPE, code)
 }
 
 func TestDecoder_Decode_TooShortPacket_ReturnsErrorNotPanic(t *testing.T) {
@@ -324,7 +324,7 @@ func TestDecoder_Decode_TooShortPacket_ReturnsErrorNotPanic(t *testing.T) {
 		_, _, code, err = d.Decode(hmacKey, 0, shortPacket)
 	})
 	require.Error(t, err)
-	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_SIZE, code)
+	require.Equal(t, pbpub.Code_ERR_PKG_INVALID_SIZE, code)
 }
 
 func TestDecoder_Decode_RejectsInconsistentFrameLength(t *testing.T) {
@@ -341,7 +341,7 @@ func TestDecoder_Decode_RejectsInconsistentFrameLength(t *testing.T) {
 
 	_, _, code, err := d.Decode(hmacKey, 0, packet)
 	require.ErrorIs(t, err, ErrPkgSizeInvalid)
-	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_SIZE, code)
+	require.Equal(t, pbpub.Code_ERR_PKG_INVALID_SIZE, code)
 }
 
 // TestDecoder_Decode_PbSizeLiesAboutLength checks the pbSize-vs-actual-length
@@ -373,7 +373,7 @@ func TestDecoder_Decode_PbSizeLiesAboutLength(t *testing.T) {
 		_, _, code, err = d.Decode(hmacKey, 0, packet)
 	})
 	require.Error(t, err)
-	require.Equal(t, pbpub.Code_ERR_MODIFIED_PACK, code)
+	require.Equal(t, pbpub.Code_ERR_PKG_MODIFIED, code)
 }
 
 func TestDecoder_DecodeS_ParsesHeaderAndDecrypts(t *testing.T) {
@@ -529,7 +529,7 @@ func TestDecoder_DecodeS_UnrecognizedPacketType(t *testing.T) {
 
 	_, _, code, err := d.DecodeS(secretKey, 0, packet)
 	require.Error(t, err)
-	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_TYPE, code)
+	require.Equal(t, pbpub.Code_ERR_MSG_INVALID_TYPE, code)
 }
 
 func TestDecoder_DecodeS_InvalidCipherSize_TooSmall(t *testing.T) {
@@ -552,7 +552,7 @@ func TestDecoder_DecodeS_InvalidCipherSize_TooSmall(t *testing.T) {
 
 	_, _, code, err := d.DecodeS(secretKey, 0, packet)
 	require.Error(t, err)
-	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_CIPHER, code)
+	require.Equal(t, pbpub.Code_ERR_CIPHER_INVALID_SIZE, code)
 }
 
 func TestDecoder_DecodeS_TooShortPacket_ReturnsErrorNotPanic(t *testing.T) {
@@ -569,7 +569,7 @@ func TestDecoder_DecodeS_TooShortPacket_ReturnsErrorNotPanic(t *testing.T) {
 		_, _, code, err = d.DecodeS(secretKey, 0, shortPacket)
 	})
 	require.Error(t, err)
-	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_SIZE, code)
+	require.Equal(t, pbpub.Code_ERR_PKG_INVALID_SIZE, code)
 }
 
 func TestDecoder_DecodeS_RejectsInconsistentFrameLength(t *testing.T) {
@@ -589,7 +589,7 @@ func TestDecoder_DecodeS_RejectsInconsistentFrameLength(t *testing.T) {
 
 	_, _, code, err := d.DecodeS(secretKey, 0, packet)
 	require.ErrorIs(t, err, ErrPkgSizeInvalid)
-	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_SIZE, code)
+	require.Equal(t, pbpub.Code_ERR_PKG_INVALID_SIZE, code)
 }
 
 func TestDecoder_DecodeS_CipherSizeExceedsPacket_ReturnsErrorNotPanic(t *testing.T) {
@@ -618,5 +618,5 @@ func TestDecoder_DecodeS_CipherSizeExceedsPacket_ReturnsErrorNotPanic(t *testing
 		_, _, code, err = b.DecodeS(secretKey, 0, packet)
 	})
 	require.Error(t, err)
-	require.Equal(t, pbpub.Code_ERR_INVALID_PACK_CIPHER, code)
+	require.Equal(t, pbpub.Code_ERR_CIPHER_INVALID_SIZE, code)
 }

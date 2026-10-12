@@ -100,36 +100,39 @@ type Code int32
 
 const (
 	Code_SUCCESS                 Code = 0
-	Code_ERR_INVALID_PACK_TYPE   Code = 1 // Wrong message type
-	Code_ERR_INVALID_PACK_SIZE   Code = 2 // Wrong message size
-	Code_ERR_INVALID_PACK_CIPHER Code = 3 // Wrong message cipher
-	Code_ERR_MODIFIED_PACK       Code = 4 // message is modified
-	Code_ERR_DECRYPT             Code = 5 // message decryption error
-	Code_ERR_DESERIALIZE         Code = 6 // message parsing error
-	Code_ERR_INTERNAL            Code = 7 // Server error
+	Code_ERR_PKG_INVALID_SIZE    Code = 1 // Wrong packet size
+	Code_ERR_PKG_MODIFIED        Code = 2 // packet is modified
+	Code_ERR_MSG_INVALID_TYPE    Code = 3 // Wrong message type
+	Code_ERR_CIPHER_INVALID_SIZE Code = 4 // Wrong cipher size
+	Code_ERR_PB_INVALID_SIZE     Code = 5 // Wrong protobuf size
+	Code_ERR_DECRYPT             Code = 6 // message decryption error
+	Code_ERR_DESERIALIZE         Code = 7 // message parsing error
+	Code_ERR_INTERNAL            Code = 8 // Server error
 )
 
 // Enum value maps for Code.
 var (
 	Code_name = map[int32]string{
 		0: "SUCCESS",
-		1: "ERR_INVALID_PACK_TYPE",
-		2: "ERR_INVALID_PACK_SIZE",
-		3: "ERR_INVALID_PACK_CIPHER",
-		4: "ERR_MODIFIED_PACK",
-		5: "ERR_DECRYPT",
-		6: "ERR_DESERIALIZE",
-		7: "ERR_INTERNAL",
+		1: "ERR_PKG_INVALID_SIZE",
+		2: "ERR_PKG_MODIFIED",
+		3: "ERR_MSG_INVALID_TYPE",
+		4: "ERR_CIPHER_INVALID_SIZE",
+		5: "ERR_PB_INVALID_SIZE",
+		6: "ERR_DECRYPT",
+		7: "ERR_DESERIALIZE",
+		8: "ERR_INTERNAL",
 	}
 	Code_value = map[string]int32{
 		"SUCCESS":                 0,
-		"ERR_INVALID_PACK_TYPE":   1,
-		"ERR_INVALID_PACK_SIZE":   2,
-		"ERR_INVALID_PACK_CIPHER": 3,
-		"ERR_MODIFIED_PACK":       4,
-		"ERR_DECRYPT":             5,
-		"ERR_DESERIALIZE":         6,
-		"ERR_INTERNAL":            7,
+		"ERR_PKG_INVALID_SIZE":    1,
+		"ERR_PKG_MODIFIED":        2,
+		"ERR_MSG_INVALID_TYPE":    3,
+		"ERR_CIPHER_INVALID_SIZE": 4,
+		"ERR_PB_INVALID_SIZE":     5,
+		"ERR_DECRYPT":             6,
+		"ERR_DESERIALIZE":         7,
+		"ERR_INTERNAL":            8,
 	}
 )
 
@@ -772,16 +775,17 @@ const file_pub_message_proto_rawDesc = "" +
 	"\x10RESP_ACTIVE_CONN\x10\xf5\x03\x12\x1b\n" +
 	"\x16RESP_ACTIVE_CONN_PROOF\x10\xf6\x03\x12\x12\n" +
 	"\rRESP_SEND_MSG\x10\xf7\x03\x12\x16\n" +
-	"\x11RESP_ACK_RECV_MSG\x10\xf8\x03*\xb5\x01\n" +
+	"\x11RESP_ACK_RECV_MSG\x10\xf8\x03*\xcb\x01\n" +
 	"\x04Code\x12\v\n" +
-	"\aSUCCESS\x10\x00\x12\x19\n" +
-	"\x15ERR_INVALID_PACK_TYPE\x10\x01\x12\x19\n" +
-	"\x15ERR_INVALID_PACK_SIZE\x10\x02\x12\x1b\n" +
-	"\x17ERR_INVALID_PACK_CIPHER\x10\x03\x12\x15\n" +
-	"\x11ERR_MODIFIED_PACK\x10\x04\x12\x0f\n" +
-	"\vERR_DECRYPT\x10\x05\x12\x13\n" +
-	"\x0fERR_DESERIALIZE\x10\x06\x12\x10\n" +
-	"\fERR_INTERNAL\x10\aB\vZ\t./gen/pubb\x06proto3"
+	"\aSUCCESS\x10\x00\x12\x18\n" +
+	"\x14ERR_PKG_INVALID_SIZE\x10\x01\x12\x14\n" +
+	"\x10ERR_PKG_MODIFIED\x10\x02\x12\x18\n" +
+	"\x14ERR_MSG_INVALID_TYPE\x10\x03\x12\x1b\n" +
+	"\x17ERR_CIPHER_INVALID_SIZE\x10\x04\x12\x17\n" +
+	"\x13ERR_PB_INVALID_SIZE\x10\x05\x12\x0f\n" +
+	"\vERR_DECRYPT\x10\x06\x12\x13\n" +
+	"\x0fERR_DESERIALIZE\x10\a\x12\x10\n" +
+	"\fERR_INTERNAL\x10\bB\vZ\t./gen/pubb\x06proto3"
 
 var (
 	file_pub_message_proto_rawDescOnce sync.Once

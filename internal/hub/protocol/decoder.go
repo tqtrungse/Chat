@@ -49,12 +49,12 @@ func (d *Decoder) Decode(
 	packet []byte,
 ) (proto.Message, []byte, pbpub.Code, error) {
 	// -------------------------------------------------------------------
-	// | Pkg Size |  Pkg Type |   Pb Size  |  Pb  |  Expand  |    HMAC   |
+	// | Pkg Size |  Msg Type |   Pb Size  |  Pb  |  Expand  |    HMAC   |
 	// -------------------------------------------------------------------
 	// |  2 bytes |  2 bytes  |   2 bytes  | xxx  |    xxx   |  32 bytes |
 	// -------------------------------------------------------------------
 	if !hasValidFrame(packet, 36) {
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_SIZE, ErrPkgSizeInvalid
+		return nil, nil, pbpub.Code_ERR_PKG_INVALID_SIZE, ErrPkgSizeInvalid
 	}
 
 	size := len(packet) - 32
@@ -64,7 +64,7 @@ func (d *Decoder) Decode(
 	mac.Write(packet[:size])
 
 	if ok := hmac.Equal(mac.Sum(nil), packet[size:]); !ok {
-		return nil, nil, pbpub.Code_ERR_MODIFIED_PACK, ErrPkgModified
+		return nil, nil, pbpub.Code_ERR_PKG_MODIFIED, ErrPkgModified
 	}
 
 	var (
@@ -74,7 +74,7 @@ func (d *Decoder) Decode(
 	)
 
 	if int(pbSize) > size-6 {
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_SIZE, ErrPkgSizeInvalid
+		return nil, nil, pbpub.Code_ERR_PB_INVALID_SIZE, ErrPkgSizeInvalid
 	}
 
 	switch pbpub.MsgType(msgType) {
@@ -85,7 +85,7 @@ func (d *Decoder) Decode(
 		msg = new(pbpub.BrokerForwardMsgReq)
 
 	default:
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_TYPE, ErrMsgTypeInvalid
+		return nil, nil, pbpub.Code_ERR_MSG_INVALID_TYPE, ErrMsgTypeInvalid
 	}
 
 	pbEnd := 6 + int(pbSize)
@@ -101,12 +101,12 @@ func (d *Decoder) DecodeS(
 	packet []byte,
 ) (proto.Message, []byte, pbpub.Code, error) {
 	// -------------------------------------------------------------------
-	// | Pkg Size | Pkg Type |   Nonce   | Cipher Size | Cipher | Expand |
+	// | Pkg Size | Msg Type |   Nonce   | Cipher Size | Cipher | Expand |
 	// -------------------------------------------------------------------
 	// | 2 bytes  | 2 bytes  |  12 bytes |   2 bytes   |   Pb   |   xxx  |
 	// -------------------------------------------------------------------
 	if !hasValidFrame(packet, 16) {
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_SIZE, ErrPkgSizeInvalid
+		return nil, nil, pbpub.Code_ERR_PKG_INVALID_SIZE, ErrPkgSizeInvalid
 	}
 
 	var (
@@ -119,13 +119,13 @@ func (d *Decoder) DecodeS(
 		msg = new(pbpub.SendMsgReq)
 
 	default:
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_TYPE, ErrMsgTypeInvalid
+		return nil, nil, pbpub.Code_ERR_MSG_INVALID_TYPE, ErrMsgTypeInvalid
 	}
 
 	cipherSize := binary.LittleEndian.Uint16(packet[16:18])
 	if !d.secureChannel.IsValid(int(cipherSize)) ||
 		int(cipherSize) > len(packet)-18 {
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_CIPHER, ErrMsgCipherInvalid
+		return nil, nil, pbpub.Code_ERR_CIPHER_INVALID_SIZE, ErrMsgCipherInvalid
 	}
 
 	cipherEnd := 18 + int(cipherSize)

@@ -26,13 +26,14 @@ enum MsgType {
 enum Code {
   SUCCESS = 0;
 
-  ERR_INVALID_PACK_TYPE = 1; // Wrong message type
-  ERR_INVALID_PACK_SIZE = 2; // Wrong message size
-  ERR_INVALID_PACK_CIPHER = 3; // Wrong message cipher
-  ERR_MODIFIED_PACK = 4; // message is modified
-  ERR_DECRYPT = 5; // message decryption error
-  ERR_DESERIALIZE = 6; // message parsing error
-  ERR_INTERNAL = 7; // Server error
+  ERR_PKG_INVALID_SIZE = 1; // Wrong packet size
+  ERR_PKG_MODIFIED = 2; // packet is modified
+  ERR_MSG_INVALID_TYPE = 3; // Wrong message type
+  ERR_CIPHER_INVALID_SIZE = 4; // Wrong cipher size
+  ERR_PB_INVALID_SIZE = 5; // Wrong protobuf size
+  ERR_DECRYPT = 6; // message decryption error
+  ERR_DESERIALIZE = 7; // message parsing error
+  ERR_INTERNAL = 8; // Server error
 }
 
 message ActiveConnReq {
