@@ -46,7 +46,7 @@ func (e *Encoder) EncodeHandshake(msgType pbpub.MsgType, msg proto.Message) ([]b
 	frameSize := 4 + pbSize
 
 	if pbSize > maxFrameSize || frameSize > maxFrameSize {
-		return nil, ErrHandshakePacketTooLarge
+		return nil, ErrPkgHandshakeTooLarge
 	}
 
 	needed := 2 + frameSize
@@ -203,7 +203,7 @@ func (e *Encoder) EncodeS(
 	if len(sealed) != cipherSize {
 		clear(buf)
 		slicepool.Put(buf)
-		return nil, ErrPkgCipherInvalid
+		return nil, ErrMsgCipherInvalid
 	}
 
 	buf = buf[:18+len(sealed)]

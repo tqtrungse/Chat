@@ -85,7 +85,7 @@ func (d *Decoder) Decode(
 		msg = new(pbpub.BrokerForwardMsgReq)
 
 	default:
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_TYPE, ErrPkgTypeInvalid
+		return nil, nil, pbpub.Code_ERR_INVALID_PACK_TYPE, ErrMsgTypeInvalid
 	}
 
 	pbEnd := 6 + int(pbSize)
@@ -119,13 +119,13 @@ func (d *Decoder) DecodeS(
 		msg = new(pbpub.SendMsgReq)
 
 	default:
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_TYPE, ErrPkgTypeInvalid
+		return nil, nil, pbpub.Code_ERR_INVALID_PACK_TYPE, ErrMsgTypeInvalid
 	}
 
 	cipherSize := binary.LittleEndian.Uint16(packet[16:18])
 	if !d.secureChannel.IsValid(int(cipherSize)) ||
 		int(cipherSize) > len(packet)-18 {
-		return nil, nil, pbpub.Code_ERR_INVALID_PACK_CIPHER, ErrPkgCipherInvalid
+		return nil, nil, pbpub.Code_ERR_INVALID_PACK_CIPHER, ErrMsgCipherInvalid
 	}
 
 	cipherEnd := 18 + int(cipherSize)

@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package session
+package protocol
 
 import (
 	"crypto/hmac"

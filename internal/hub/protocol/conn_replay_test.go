@@ -11,6 +11,7 @@ import (
 
 	pbpub "xxx/api/hub/v1/proto/gen/pub"
 	sharedsession "xxx/internal/shared/session"
+
 	slicepool "xxx/pkg/pool/slice"
 
 	"github.com/stretchr/testify/require"
@@ -31,10 +32,10 @@ func TestDeriveConnKeys_RejectsFrameReplayAcrossConnections(t *testing.T) {
 		nonceA[i] = byte(i + 5)
 		nonceB[i] = byte(i + 6)
 	}
-	keysA, err := sharedsession.DeriveConnKeys(&ticketKeys, nonceA)
+	keysA, err := DeriveConnKeys(&ticketKeys, nonceA)
 	require.NoError(t, err)
 	defer keysA.Clear()
-	keysB, err := sharedsession.DeriveConnKeys(&ticketKeys, nonceB)
+	keysB, err := DeriveConnKeys(&ticketKeys, nonceB)
 	require.NoError(t, err)
 	defer keysB.Clear()
 

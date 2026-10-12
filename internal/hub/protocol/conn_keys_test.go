@@ -14,16 +14,18 @@
  * limitations under the License.
  */
 
-package session
+package protocol
 
 import (
 	"testing"
+
+	sharedsession "xxx/internal/shared/session"
 
 	"github.com/stretchr/testify/require"
 )
 
 func TestDeriveConnKeys_BindsNonceAndDirection(t *testing.T) {
-	var base Keys
+	var base sharedsession.Keys
 	for i := range 32 {
 		base.RecvEnc[i] = byte(i + 1)
 		base.SendEnc[i] = byte(i + 2)

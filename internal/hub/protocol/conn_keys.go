@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
-package session
+package protocol
 
 import (
 	"crypto/sha256"
 	"io"
+
+	sharedsession "xxx/internal/shared/session"
 
 	"golang.org/x/crypto/hkdf"
 )
@@ -28,26 +30,26 @@ const connKeyDomain = "xxx/hub/conn/v1/"
 // DeriveConnKeys creates directional keys bound to one activation challenge.
 // The labels and info encoding are part of the wire protocol and must match
 // the client implementation exactly.
-func DeriveConnKeys(base *Keys, nonce [32]byte) (out Keys, err error) {
+func DeriveConnKeys(base *sharedsession.Keys, nonce [32]byte) (out sharedsession.Keys, err error) {
 	if base == nil {
-		return Keys{}, ErrConnKeyBaseNil
+		return sharedsession.Keys{}, ErrConnKeyBaseNil
 	}
 
 	if out.RecvEnc, err = deriveConnKey(&base.RecvEnc, "c2s/enc", nonce); err != nil {
 		out.Clear()
-		return Keys{}, err
+		return sharedsession.Keys{}, err
 	}
 	if out.SendEnc, err = deriveConnKey(&base.SendEnc, "s2c/enc", nonce); err != nil {
 		out.Clear()
-		return Keys{}, err
+		return sharedsession.Keys{}, err
 	}
 	if out.RecvMac, err = deriveConnKey(&base.RecvMac, "c2s/mac", nonce); err != nil {
 		out.Clear()
-		return Keys{}, err
+		return sharedsession.Keys{}, err
 	}
 	if out.SendMac, err = deriveConnKey(&base.SendMac, "s2c/mac", nonce); err != nil {
 		out.Clear()
-		return Keys{}, err
+		return sharedsession.Keys{}, err
 	}
 	return out, nil
 }

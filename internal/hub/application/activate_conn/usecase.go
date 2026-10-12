@@ -27,7 +27,6 @@ import (
 	"xxx/internal/hub/connection"
 	"xxx/internal/hub/protocol"
 	shareddevice "xxx/internal/shared/device"
-	sharedsession "xxx/internal/shared/session"
 
 	"xxx/pkg/log"
 	"xxx/pkg/nio"
@@ -144,7 +143,7 @@ func (ca *connActivator) Activate(conn nio.Conn, packet []byte) nio.Action {
 		return ca.reject(pending)
 	}
 	pending.ticket = ticket // owned by pending from here; zeroed by pending.clear()
-	pending.transcript = sharedsession.ActivationTranscript(req.Token, req.Ticket, req.Sign)
+	pending.transcript = protocol.ActivationTranscript(req.Token, req.Ticket, req.Sign)
 	pending.deadline = time.Now().Add(activationChallengeTTL)
 	if _, err = rand.Read(pending.nonce[:]); err != nil {
 		ca.logger.Error("failed to generate activation challenge, force close", zap.Error(err))
@@ -192,7 +191,7 @@ func (ca *connActivator) Prove(ctx context.Context, conn nio.Conn, packet []byte
 		return ca.reject(pending)
 	}
 
-	want := sharedsession.ActivationProof(&pending.ticket.ActivationKey, pending.transcript, pending.nonce)
+	want := protocol.ActivationProof(&pending.ticket.ActivationKey, pending.transcript, pending.nonce)
 	if !hmac.Equal(want[:], req.Proof) {
 		return ca.reject(pending)
 	}
@@ -201,7 +200,7 @@ func (ca *connActivator) Prove(ctx context.Context, conn nio.Conn, packet []byte
 		return ca.reject(pending)
 	}
 
-	connKeys, err := sharedsession.DeriveConnKeys(&pending.ticket.Keys, pending.nonce)
+	connKeys, err := protocol.DeriveConnKeys(&pending.ticket.Keys, pending.nonce)
 	if err != nil {
 		ca.logger.Error("failed to derive connection keys, force close", zap.Error(err))
 		return ca.reject(pending)

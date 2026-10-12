@@ -9,10 +9,11 @@ package protocol
 import "errors"
 
 var (
-	ErrPkgSizeInvalid          = errors.New("invalid packet size")
-	ErrPkgTypeInvalid          = errors.New("invalid packet type")
-	ErrPkgCipherInvalid        = errors.New("invalid cipher size")
-	ErrPkgModified             = errors.New("the packet is modified")
-	ErrHandshakePacketTooLarge = errors.New("handshake packet too large")
-	ErrPkgTooLarge             = errors.New("packet too large")
+	ErrPkgSizeInvalid       = errors.New("invalid packet size")
+	ErrPkgModified          = errors.New("the packet is modified")
+	ErrPkgTooLarge          = errors.New("packet too large")
+	ErrPkgHandshakeTooLarge = errors.New("handshake packet too large")
+	ErrMsgTypeInvalid       = errors.New("invalid message type")
+	ErrMsgCipherInvalid     = errors.New("invalid message cipher size")
+	ErrConnKeyBaseNil       = errors.New("connection key base is nil")
 )
