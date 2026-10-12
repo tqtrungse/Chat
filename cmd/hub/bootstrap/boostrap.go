@@ -46,52 +46,15 @@ func Run(ctx context.Context) (retErr error) {
 	logger, closeLogger := log.NewLogger(nil)
 	defer func() {
 		if err := closeLogger(); err != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("close logger: %w", err))
+			retErr = errors.Join(retErr, fmt.Errorf("failed close logger: %w", err))
 		}
 	}()
 
 	cfgLoader, err := pkg.LoadConfig("hub")
 	if err != nil {
-		return fmt.Errorf("load hub config: %w", err)
+		return fmt.Errorf("failed to load hub config: %w", err)
 	}
 	if err = ctx.Err(); err != nil {
-		return err
-	}
-
-	var cfgTcp tcp.Config
-	cfgTcp.Load(cfgLoader)
-	cfgTcp.Addr = strings.TrimSpace(cfgTcp.Addr)
-	if cfgTcp.Addr == "" {
-		return errors.New("TCP_SERVER_ADDRESS is required")
-	}
-	if !strings.Contains(cfgTcp.Addr, "://") {
-		cfgTcp.Addr = "tcp://" + cfgTcp.Addr
-	}
-	if cfgTcp.ReadBufferCap == 0 {
-		cfgTcp.ReadBufferCap = 4096
-	}
-	if cfgTcp.WriteBufferCap == 0 {
-		cfgTcp.WriteBufferCap = 4096
-	}
-
-	var (
-		cfgRouter   connection.Config
-		cfgActivate activate_conn.Config
-		cfgCache    redis.Config
-		cfgCb       cb.Config
-		cfgPool     workerpool.Config
-	)
-	cfgRouter.Load(cfgLoader)
-	cfgActivate.Load(cfgLoader)
-	cfgCache.Load(cfgLoader)
-	cfgCb.Load(cfgLoader)
-	cfgPool.Load(cfgLoader)
-	if strings.TrimSpace(cfgCache.Addr) == "" {
-		return errors.New("DISTRIBUTED_CACHE_ADDRESS is required for activation")
-	}
-
-	ticketVerifier, err := loadTicketVerifier(cfgLoader)
-	if err != nil {
 		return err
 	}
 
@@ -106,6 +69,37 @@ func Run(ctx context.Context) (retErr error) {
 		if err != nil {
 			return fmt.Errorf("failed to get machine ID from hostname %w", err)
 		}
+	}
+
+	cfgTcp := tcp.Config{}
+	cfgTcp.Load(cfgLoader)
+	if len(cfgTcp.Addr) == 0 {
+		return errors.New("TCP_SERVER_ADDRESS is required")
+	}
+	if !strings.Contains(cfgTcp.Addr, "://") {
+		cfgTcp.Addr = "tcp://" + cfgTcp.Addr
+	}
+
+	cfgCache := redis.Config{}
+	cfgCache.Load(cfgLoader)
+	if len(cfgCache.Addr) == 0 {
+		return errors.New("DISTRIBUTED_CACHE_ADDRESS is required")
+	}
+
+	var (
+		cfgCb       cb.Config
+		cfgPool     workerpool.Config
+		cfgRouter   connection.Config
+		cfgActivate activate_conn.Config
+	)
+	cfgCb.Load(cfgLoader)
+	cfgPool.Load(cfgLoader)
+	cfgRouter.Load(cfgLoader)
+	cfgActivate.Load(cfgLoader)
+
+	ticketVerifier, err := loadTicketVerifier(cfgLoader)
+	if err != nil {
+		return err
 	}
 
 	runCtx, cancelRun := context.WithCancelCause(ctx)
@@ -135,11 +129,11 @@ func Run(ctx context.Context) (retErr error) {
 			err2 := dCache.ReapHub(shutdownCtx)
 			cancel()
 			if err2 != nil {
-				retErr = errors.Join(retErr, fmt.Errorf("reap hub presence: %w", err2))
+				retErr = errors.Join(retErr, fmt.Errorf("failed to reap hub presence: %w", err2))
 			}
 		}
 		if err2 := closeCache(); err2 != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("close Redis: %w", err2))
+			retErr = errors.Join(retErr, fmt.Errorf("failed to close cache: %w", err2))
 		}
 	}()
 	setCallbacks(
@@ -148,12 +142,12 @@ func Run(ctx context.Context) (retErr error) {
 			OnDeviceDeleted: func(uint64, shareddevice.ID) {},
 			OnSelfReaped: func() {
 				logger.Error("hub registration was lost; shutting down", zap.Uint64("hubID", hubID))
-				cancelRun(errors.New("hub Redis registration was lost"))
+				cancelRun(errors.New("hub cache registration was lost"))
 			},
 		},
 	)
 	if err = startCache(runCtx); err != nil {
-		return fmt.Errorf("start Redis presence: %w", err)
+		return fmt.Errorf("failed to start cache: %w", err)
 	}
 	cacheStarted = true
 
@@ -242,8 +236,9 @@ func runTCPServer(
 
 	logger.Info("shutting down hub TCP server")
 	if err := server.Shutdown(); err != nil {
-		return fmt.Errorf("shutdown hub TCP server: %w", err)
+		return fmt.Errorf("failed to shutdown hub TCP server: %w", err)
 	}
+
 	serverErr := tcpServerError(<-serverResult)
 	cause := context.Cause(ctx)
 	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
@@ -256,7 +251,7 @@ func tcpServerError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("run hub TCP server: %w", err)
+	return fmt.Errorf("failed to run hub TCP server: %w", err)
 }
 
 func loadTicketVerifier(cfgLoader pkg.ConfigLoader) (*sharedsession.TicketVerifier, error) {
@@ -264,7 +259,7 @@ func loadTicketVerifier(cfgLoader pkg.ConfigLoader) (*sharedsession.TicketVerifi
 		strings.Split(cfgLoader.GetString("TICKET_ENCRYPT_KEYS"), ","),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("parse ticket encryption keys: %w", err)
+		return nil, fmt.Errorf("failed to parse ticket encryption keys: %w", err)
 	}
 	defer func() {
 		for _, key := range keys {
@@ -272,23 +267,26 @@ func loadTicketVerifier(cfgLoader pkg.ConfigLoader) (*sharedsession.TicketVerifi
 		}
 	}()
 
-	sealer, err := sharedsession.NewTicketSealer(
-		cfgLoader.GetUint8("TICKET_ENCRYPT_CURRENT_KEY_ID"), keys,
-	)
+	id := cfgLoader.GetUint8("TICKET_ENCRYPT_CURRENT_KEY_ID")
+	if id == 0 {
+		return nil, errors.New("invalid TICKET_ENCRYPT_CURRENT_KEY_ID")
+	}
+
+	sealer, err := sharedsession.NewTicketSealer(id, keys)
 	if err != nil {
-		return nil, fmt.Errorf("initialize ticket decryption: %w", err)
+		return nil, fmt.Errorf("failed to initialize ticket sealer: %w", err)
 	}
 
 	publicKeys, err := sharedsession.ParseTicketSigningPublicKeys(
 		strings.Split(cfgLoader.GetString("TICKET_SIGNNING_PUBLIC_KEYS"), ","),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("parse hub ticket public keys: %w", err)
+		return nil, fmt.Errorf("failed to parse ticket signing public keys: %w", err)
 	}
 
 	clockSkew, err := time.ParseDuration(strings.TrimSpace(cfgLoader.GetString("TICKET_CLOCK_SKEW")))
 	if err != nil {
-		return nil, fmt.Errorf("parse TICKET_CLOCK_SKEW: %w", err)
+		return nil, fmt.Errorf("invalid TICKET_CLOCK_SKEW: %w", err)
 	}
 
 	return sharedsession.NewTicketVerifier(

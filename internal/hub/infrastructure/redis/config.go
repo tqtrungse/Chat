@@ -17,6 +17,7 @@
 package redis
 
 import (
+	"strings"
 	"time"
 
 	"xxx/pkg"
@@ -105,8 +106,8 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 	if loader == nil {
 		return
 	}
-	c.Addr = loader.GetString("DISTRIBUTED_CACHE_ADDRESS")
-	c.Password = loader.GetString("DISTRIBUTED_CACHE_PASSWORD")
+	c.Addr = strings.TrimSpace(loader.GetString("DISTRIBUTED_CACHE_ADDRESS"))
+	c.Password = strings.TrimSpace(loader.GetString("DISTRIBUTED_CACHE_PASSWORD"))
 	c.PoolSize = loader.GetUint16("DISTRIBUTED_CACHE_POOL_SIZE")
 	c.MaxIdleConns = loader.GetUint16("DISTRIBUTED_CACHE_MAX_IDLE_CONNS")
 	c.MaxActiveConns = loader.GetUint16("DISTRIBUTED_CACHE_MAX_ACTIVE_CONNS")

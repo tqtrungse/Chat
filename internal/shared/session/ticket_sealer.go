@@ -39,7 +39,10 @@ type TicketSealer struct {
 // NewTicketSealer keys maps keyID -> 32-byte AES key. Keep the previous key in
 // the map while rotating so in-flight tickets (TTL ~20s) still open.
 func NewTicketSealer(curID byte, keys map[byte][]byte) (*TicketSealer, error) {
-	s := &TicketSealer{curID: curID, aeads: make(map[byte]cipher.AEAD, len(keys))}
+	s := &TicketSealer{
+		curID: curID,
+		aeads: make(map[byte]cipher.AEAD, len(keys)),
+	}
 	for id, k := range keys {
 		if len(k) != 32 {
 			return nil, fmt.Errorf("ticket key %d: want 32 bytes, got %d", id, len(k))

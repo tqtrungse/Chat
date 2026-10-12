@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	iamhttp "xxx/internal/iam/adapter/http"
@@ -43,16 +42,16 @@ func Run(ctx context.Context) (retErr error) {
 	logger, closeLogger := log.NewLogger(nil)
 	defer func() {
 		if err := closeLogger(); err != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("close logger: %w", err))
+			retErr = errors.Join(retErr, fmt.Errorf("failed to close logger: %w", err))
 		}
 	}()
 
 	cfgLoader, err := pkg.LoadConfig("iam")
 	if err != nil {
-		return fmt.Errorf("load IAM config: %w", err)
+		return fmt.Errorf("failed to load IAM config: %w", err)
 	}
 
-	var cfgHttp iamhttp.Config
+	cfgHttp := iamhttp.Config{}
 	cfgHttp.Load(cfgLoader)
 	if err = validateHTTPConfig(cfgHttp); err != nil {
 		return err
@@ -68,12 +67,12 @@ func Run(ctx context.Context) (retErr error) {
 
 	db := sql.NewMySql()
 	if err = db.Open(ctx, cfgDb); err != nil {
-		return fmt.Errorf("open MySQL: %w", err)
+		return fmt.Errorf("failed to open MySQL: %w", err)
 	}
 	defer func() {
 		if err = db.Close(); err != nil {
 			logger.Error("failed to close MySQL", zap.Error(err))
-			retErr = errors.Join(retErr, fmt.Errorf("close MySQL: %w", err))
+			retErr = errors.Join(retErr, fmt.Errorf("failed to close MySQL: %w", err))
 		} else {
 			logger.Info("closed MySQL")
 		}
@@ -93,7 +92,7 @@ func Run(ctx context.Context) (retErr error) {
 		keyExchanger,
 	)
 	if err != nil {
-		return fmt.Errorf("initialize IAM HTTP server: %w", err)
+		return fmt.Errorf("failed to initialize IAM HTTP server: %w", err)
 	}
 
 	serverResult := make(chan error, 1)
@@ -108,7 +107,7 @@ func Run(ctx context.Context) (retErr error) {
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
-		return fmt.Errorf("run IAM HTTP server: %w", err)
+		return fmt.Errorf("failed to run IAM HTTP server: %w", err)
 
 	case <-ctx.Done():
 		logger.Info("shutting down IAM HTTP server")
@@ -119,7 +118,7 @@ func Run(ctx context.Context) (retErr error) {
 		if errors.Is(serverErr, http.ErrServerClosed) {
 			serverErr = nil
 		} else if serverErr != nil {
-			serverErr = fmt.Errorf("run IAM HTTP server: %w", serverErr)
+			serverErr = fmt.Errorf("failed to run IAM HTTP server: %w", serverErr)
 		}
 		return errors.Join(shutdownErr, serverErr)
 	}
@@ -140,7 +139,7 @@ func loadTicketSigner(loader pkg.ConfigLoader) (*sharedsession.TicketSigner, err
 		strings.Split(loader.GetString("TICKET_ENCRYPT_KEYS"), ","),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("parse ticket encryption keys: %w", err)
+		return nil, fmt.Errorf("failed to parse ticket encryption keys: %w", err)
 	}
 	defer func() {
 		for _, key := range keys {
@@ -153,33 +152,25 @@ func loadTicketSigner(loader pkg.ConfigLoader) (*sharedsession.TicketSigner, err
 		keys,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("initialize ticket encryption: %w", err)
+		return nil, fmt.Errorf("failed to initialize ticket sealer: %w", err)
 	}
 
-	id, err := strconv.ParseUint(
-		strings.TrimSpace(loader.GetString("TICKET_SIGNING_KEY_ID")),
-		10,
-		8,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("parse TICKET_SIGNING_KEY_ID: %w", err)
+	id := loader.GetUint8("TICKET_SIGNING_KEY_ID")
+	if id == 0 {
+		return nil, errors.New("invalid TICKET_SIGNING_KEY_ID")
 	}
 
 	seed, err := sharedsession.ParseTicketSigningPrivate(
-		loader.GetString("TICKET_SIGNING_PRIVATE_KEY"),
+		strings.TrimSpace(loader.GetString("TICKET_SIGNING_PRIVATE_KEY")),
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	signer, err := sharedsession.NewTicketSigner(
-		sealer,
-		byte(id),
-		seed,
-	)
+	signer, err := sharedsession.NewTicketSigner(sealer, id, seed)
 	clear(seed)
 	if err != nil {
-		return nil, fmt.Errorf("initialize ticket signer: %w", err)
+		return nil, fmt.Errorf("failed to initialize ticket signer: %w", err)
 	}
 	return signer, nil
 }

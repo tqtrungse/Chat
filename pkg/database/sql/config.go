@@ -37,10 +37,10 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 	if loader == nil {
 		return
 	}
-	c.User = loader.GetString("SQL_DATABASE_USER")
-	c.Passwd = loader.GetString("SQL_DATABASE_PASSWORD")
-	c.DBName = loader.GetString("SQL_DATABASE_NAME")
-	c.PrimaryAddr = loader.GetString("SQL_DATABASE_PRIMARY_ADDRESS")
+	c.User = strings.TrimSpace(loader.GetString("SQL_DATABASE_USER"))
+	c.Passwd = strings.TrimSpace(loader.GetString("SQL_DATABASE_PASSWORD"))
+	c.DBName = strings.TrimSpace(loader.GetString("SQL_DATABASE_NAME"))
+	c.PrimaryAddr = strings.TrimSpace(loader.GetString("SQL_DATABASE_PRIMARY_ADDRESS"))
 	c.ReplicaAddrs = strings.Split(loader.GetString("SQL_DATABASE_REPLICA_ADDRESSES"), ",")
 	for idx := range c.ReplicaAddrs {
 		c.ReplicaAddrs[idx] = strings.TrimSpace(c.ReplicaAddrs[idx])

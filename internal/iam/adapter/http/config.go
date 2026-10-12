@@ -17,6 +17,7 @@
 package http
 
 import (
+	"strings"
 	"time"
 
 	"xxx/pkg"
@@ -39,14 +40,14 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 	if loader == nil {
 		return
 	}
-	c.Addr = loader.GetString("HTTP_SERVER_ADDR")
-	c.CertFile = loader.GetString("HTTP_SERVER_CERT_FILE")
-	c.KeyFile = loader.GetString("HTTP_SERVER_KEY_FILE")
+	c.Addr = strings.TrimSpace(loader.GetString("HTTP_SERVER_ADDR"))
+	c.CertFile = strings.TrimSpace(loader.GetString("HTTP_SERVER_CERT_FILE"))
+	c.KeyFile = strings.TrimSpace(loader.GetString("HTTP_SERVER_KEY_FILE"))
 	c.ReadHeaderTimeout = loader.GetDuration("HTTP_READ_HEADER_TIMEOUT")
 	c.ReadTimeout = loader.GetDuration("HTTP_READ_TIMEOUT")
 	c.WriteTimeout = loader.GetDuration("HTTP_WRITE_TIMEOUT")
 	c.MaxHeaderBytes = loader.GetInt("HTTP_MAX_HEADER_BYTES")
-	c.OIDCIssuer = loader.GetString("HTTP_SERVER_OIDC_ISSUER")
-	c.OIDCAudience = loader.GetString("HTTP_SERVER_OIDC_AUDIENCE")
-	c.OIDCJWKSURL = loader.GetString("HTTP_SERVER_OIDC_JWKS_URL")
+	c.OIDCIssuer = strings.TrimSpace(loader.GetString("HTTP_SERVER_OIDC_ISSUER"))
+	c.OIDCAudience = strings.TrimSpace(loader.GetString("HTTP_SERVER_OIDC_AUDIENCE"))
+	c.OIDCJWKSURL = strings.TrimSpace(loader.GetString("HTTP_SERVER_OIDC_JWKS_URL"))
 }

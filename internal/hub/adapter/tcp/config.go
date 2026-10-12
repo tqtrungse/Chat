@@ -17,6 +17,7 @@
 package tcp
 
 import (
+	"strings"
 	"time"
 
 	"xxx/pkg"
@@ -63,7 +64,7 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 	if loader == nil {
 		return
 	}
-	c.Addr = loader.GetString("TCP_SERVER_ADDRESS")
+	c.Addr = strings.TrimSpace(loader.GetString("TCP_SERVER_ADDRESS"))
 	c.TCPKeepAlive = loader.GetDuration("TCP_SERVER_KEEP_ALIVE")
 	c.TCPKeepInterval = loader.GetDuration("TCP_SERVER_KEEP_INTERVAL")
 	c.TCPKeepCount = loader.GetInt("TCP_SERVER_KEEP_COUNT")

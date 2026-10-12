@@ -17,6 +17,7 @@
 package cb
 
 import (
+	"strings"
 	"time"
 
 	"xxx/pkg"
@@ -59,7 +60,7 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 	if loader == nil {
 		return
 	}
-	c.Name = loader.GetString("CIRCUIT_BREAKER_NAME")
+	c.Name = strings.TrimSpace(loader.GetString("CIRCUIT_BREAKER_NAME"))
 	c.MaxRequests = loader.GetUint32("CIRCUIT_BREAKER_MAX_REQUESTS")
 	c.Interval = loader.GetDuration("CIRCUIT_BREAKER_INTERVAL")
 	c.Timeout = loader.GetDuration("CIRCUIT_BREAKER_TIMEOUT")
