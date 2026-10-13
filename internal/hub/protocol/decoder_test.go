@@ -15,8 +15,10 @@ import (
 	"testing"
 
 	pbpub "xxx/api/hub/v1/proto/gen/pub"
+	"xxx/internal/hub/protocol/mocks"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -156,8 +158,9 @@ func runRecovered(t *testing.T, name string, fn func()) {
 	fn()
 }
 
-func TestDecoder_DecodeActivePack_Success(t *testing.T) {
-	d := NewDecoder(NewMockSecureChannel())
+func TestDecoder_DecodeActivationPack_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	d := NewDecoder(mocks.NewMockSecureChannel(ctrl))
 	in := &pbpub.ActiveConnReq{
 		Token:  []byte("12345678"),
 		Sign:   bytes.Repeat([]byte{1}, 64),
@@ -166,37 +169,40 @@ func TestDecoder_DecodeActivePack_Success(t *testing.T) {
 	packet := buildActivationPacket(t, pbpub.MsgType_REQ_ACTIVE_CONN, in)
 
 	out := new(pbpub.ActiveConnReq)
-	require.NoError(t, d.DecodeActivePacket(packet[4:], out))
+	require.NoError(t, d.DecodeActivationPacket(packet[4:], out))
 	require.True(t, proto.Equal(in, out))
 }
 
-func TestDecoder_DecodeActiveProofPack_Success(t *testing.T) {
-	d := NewDecoder(NewMockSecureChannel())
+func TestDecoder_DecodeActivationProofPack_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	d := NewDecoder(mocks.NewMockSecureChannel(ctrl))
 	in := &pbpub.ActiveConnProofReq{Proof: bytes.Repeat([]byte{1}, 32)}
 	packet := buildActivationPacket(t, pbpub.MsgType_REQ_ACTIVE_CONN_PROOF, in)
 
 	out := new(pbpub.ActiveConnProofReq)
-	require.NoError(t, d.DecodeActiveProofPack(packet[4:], out))
+	require.NoError(t, d.DecodeActivationProofPack(packet[4:], out))
 	require.True(t, proto.Equal(in, out))
 }
 
 func TestDecoder_DecodeActivePack_InvalidBytes(t *testing.T) {
-	d := NewDecoder(NewMockSecureChannel())
+	ctrl := gomock.NewController(t)
+	d := NewDecoder(mocks.NewMockSecureChannel(ctrl))
 	out := new(pbpub.ActiveConnReq)
-	err := d.DecodeActivePacket([]byte{0xFF, 0xFF, 0xFF}, out)
+	err := d.DecodeActivationPacket([]byte{0xFF, 0xFF, 0xFF}, out)
 	require.Error(t, err)
 }
 
 func TestDecoder_Decode_ParsesHeaderAndPayload(t *testing.T) {
-	d := NewDecoder(NewMockSecureChannel())
+	ctrl := gomock.NewController(t)
+	d := NewDecoder(mocks.NewMockSecureChannel(ctrl))
 	hmacKey := randomKey(t)
-	msg := new(pbpub.ActiveConnReq)
+	msg := &pbpub.BrokerForwardMsgReq{SendDeviceId: 1, MsgId: 42}
 	expand := []byte("expand-data")
 
 	packet := buildPlainPacket(
 		t,
 		hmacKey,
-		pbpub.MsgType_REQ_ACTIVE_CONN,
+		pbpub.MsgType_REQ_BROKER_FORWARD_MSG,
 		msg,
 		expand,
 	)
@@ -209,14 +215,15 @@ func TestDecoder_Decode_ParsesHeaderAndPayload(t *testing.T) {
 }
 
 func TestDecoder_Decode_RejectsFrameWhenExpectedSequenceDiffers(t *testing.T) {
-	d := NewDecoder(NewMockSecureChannel())
+	ctrl := gomock.NewController(t)
+	d := NewDecoder(mocks.NewMockSecureChannel(ctrl))
 	hmacKey := randomKey(t)
 	seq := uint64(17)
 	packet := buildPlainPacket(
 		t,
 		hmacKey,
-		pbpub.MsgType_REQ_ACTIVE_CONN,
-		new(pbpub.ActiveConnReq),
+		pbpub.MsgType_REQ_BROKER_FORWARD_MSG,
+		new(pbpub.BrokerForwardMsgReq),
 		[]byte("expand"),
 		seq,
 	)
@@ -231,17 +238,15 @@ func TestDecoder_Decode_RejectsFrameWhenExpectedSequenceDiffers(t *testing.T) {
 }
 
 func TestDecoder_Decode_NoExpand(t *testing.T) {
-	d := NewDecoder(NewMockSecureChannel())
+	ctrl := gomock.NewController(t)
+	d := NewDecoder(mocks.NewMockSecureChannel(ctrl))
 	hmacKey := randomKey(t)
-	msg := &pbpub.ActiveConnReq{
-		Token: []byte{1, 2, 3, 4, 5, 6, 7, 8},
-		Sign:  nil,
-	}
+	msg := &pbpub.BrokerForwardMsgReq{SendDeviceId: 1, MsgId: 42}
 
 	packet := buildPlainPacket(
 		t,
 		hmacKey,
-		pbpub.MsgType_REQ_ACTIVE_CONN,
+		pbpub.MsgType_REQ_BROKER_FORWARD_MSG,
 		msg,
 		nil,
 	)
@@ -253,14 +258,15 @@ func TestDecoder_Decode_NoExpand(t *testing.T) {
 }
 
 func TestDecoder_Decode_RejectsTamperedHMAC(t *testing.T) {
-	d := NewDecoder(NewMockSecureChannel())
+	ctrl := gomock.NewController(t)
+	d := NewDecoder(mocks.NewMockSecureChannel(ctrl))
 	hmacKey := randomKey(t)
 	msg := new(pbpub.ActiveConnReq)
 
 	packet := buildPlainPacket(
 		t,
 		hmacKey,
-		pbpub.MsgType_REQ_ACTIVE_CONN,
+		pbpub.MsgType_REQ_BROKER_FORWARD_MSG,
 		msg,
 		[]byte("x"),
 	)
@@ -272,18 +278,16 @@ func TestDecoder_Decode_RejectsTamperedHMAC(t *testing.T) {
 }
 
 func TestDecoder_Decode_WrongHmacKey(t *testing.T) {
-	d := NewDecoder(NewMockSecureChannel())
+	ctrl := gomock.NewController(t)
+	d := NewDecoder(mocks.NewMockSecureChannel(ctrl))
 	hmacKey := randomKey(t)
 	wrongKey := randomKey(t)
-	msg := &pbpub.ActiveConnReq{
-		Token: []byte{1, 2, 3, 4, 5, 6, 7, 8},
-		Sign:  nil,
-	}
+	msg := &pbpub.BrokerForwardMsgReq{SendDeviceId: 1, MsgId: 42}
 
 	packet := buildPlainPacket(
 		t,
 		hmacKey,
-		pbpub.MsgType_REQ_ACTIVE_CONN,
+		pbpub.MsgType_REQ_BROKER_FORWARD_MSG,
 		msg,
 		nil,
 	)
@@ -294,9 +298,10 @@ func TestDecoder_Decode_WrongHmacKey(t *testing.T) {
 }
 
 func TestDecoder_Decode_UnrecognizedPacketType(t *testing.T) {
-	d := NewDecoder(NewMockSecureChannel())
+	ctrl := gomock.NewController(t)
+	d := NewDecoder(mocks.NewMockSecureChannel(ctrl))
 	hmacKey := randomKey(t)
-	msg := new(pbpub.ActiveConnReq)
+	msg := new(pbpub.BrokerForwardMsgReq)
 
 	packet := buildPlainPacket(
 		t,
@@ -312,7 +317,8 @@ func TestDecoder_Decode_UnrecognizedPacketType(t *testing.T) {
 }
 
 func TestDecoder_Decode_TooShortPacket_ReturnsErrorNotPanic(t *testing.T) {
-	d := NewDecoder(NewMockSecureChannel())
+	ctrl := gomock.NewController(t)
+	d := NewDecoder(mocks.NewMockSecureChannel(ctrl))
 	hmacKey := randomKey(t)
 	shortPacket := []byte{1, 2, 3, 4, 5}
 
@@ -328,12 +334,13 @@ func TestDecoder_Decode_TooShortPacket_ReturnsErrorNotPanic(t *testing.T) {
 }
 
 func TestDecoder_Decode_RejectsInconsistentFrameLength(t *testing.T) {
-	d := NewDecoder(NewMockSecureChannel())
+	ctrl := gomock.NewController(t)
+	d := NewDecoder(mocks.NewMockSecureChannel(ctrl))
 	hmacKey := randomKey(t)
 	packet := buildPlainPacket(
 		t,
 		hmacKey,
-		pbpub.MsgType_REQ_ACTIVE_CONN,
+		pbpub.MsgType_REQ_BROKER_FORWARD_MSG,
 		new(pbpub.ActiveConnReq),
 		nil,
 	)
@@ -348,7 +355,8 @@ func TestDecoder_Decode_RejectsInconsistentFrameLength(t *testing.T) {
 // guard: a header claiming a much larger pbSize than the packet actually
 // contains must be rejected cleanly, not panic while slicing.
 func TestDecoder_Decode_PbSizeLiesAboutLength(t *testing.T) {
-	d := NewDecoder(NewMockSecureChannel())
+	ctrl := gomock.NewController(t)
+	d := NewDecoder(mocks.NewMockSecureChannel(ctrl))
 	hmacKey := randomKey(t)
 	msg := new(pbpub.ActiveConnReq)
 
@@ -377,7 +385,7 @@ func TestDecoder_Decode_PbSizeLiesAboutLength(t *testing.T) {
 }
 
 func TestDecoder_DecodeS_ParsesHeaderAndDecrypts(t *testing.T) {
-	ch := NewMockSecureChannel()
+	ch := newSecureChannelHelperTest(t)
 	d := NewDecoder(ch)
 	secretKey := randomKey(t)
 	nonce := randomNonce(t)
@@ -404,7 +412,7 @@ func TestDecoder_DecodeS_ParsesHeaderAndDecrypts(t *testing.T) {
 }
 
 func TestDecoder_DecodeS_RejectsFrameWhenExpectedSequenceDiffers(t *testing.T) {
-	ch := NewMockSecureChannel()
+	ch := newSecureChannelHelperTest(t)
 	d := NewDecoder(ch)
 	secretKey := randomKey(t)
 	seq := uint64(23)
@@ -429,8 +437,8 @@ func TestDecoder_DecodeS_RejectsFrameWhenExpectedSequenceDiffers(t *testing.T) {
 }
 
 func TestDecoder_DecodeS_RejectsTamperedCiphertext(t *testing.T) {
-	ch := NewMockSecureChannel()
-	Decoder := NewDecoder(ch)
+	ch := newSecureChannelHelperTest(t)
+	d := NewDecoder(ch)
 	secretKey := randomKey(t)
 	nonce := randomNonce(t)
 	msg := &pbpub.SendMsgReq{
@@ -448,7 +456,7 @@ func TestDecoder_DecodeS_RejectsTamperedCiphertext(t *testing.T) {
 	)
 	packet[18] ^= 0xFF // flip a bit inside the ciphertext
 
-	_, _, code, err := Decoder.DecodeS(secretKey, 0, packet)
+	_, _, code, err := d.DecodeS(secretKey, 0, packet)
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_DECRYPT, code)
 }
@@ -458,8 +466,8 @@ func TestDecoder_DecodeS_RejectsTamperedCiphertext(t *testing.T) {
 // data. Tampering it must invalidate authentication even though expand
 // itself is never encrypted.
 func TestDecoder_DecodeS_RejectsTamperedExpand(t *testing.T) {
-	ch := NewMockSecureChannel()
-	Decoder := NewDecoder(ch)
+	ch := newSecureChannelHelperTest(t)
+	d := NewDecoder(ch)
 	secretKey := randomKey(t)
 	nonce := randomNonce(t)
 	msg := &pbpub.SendMsgReq{
@@ -480,13 +488,13 @@ func TestDecoder_DecodeS_RejectsTamperedExpand(t *testing.T) {
 	tampered := append([]byte(nil), packet...)
 	copy(tampered[len(tampered)-len(expand):], "tampered-expand!")
 
-	_, _, code, err := Decoder.DecodeS(secretKey, 0, tampered)
+	_, _, code, err := d.DecodeS(secretKey, 0, tampered)
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_DECRYPT, code)
 }
 
 func TestDecoder_DecodeS_WrongSecretKey(t *testing.T) {
-	ch := NewMockSecureChannel()
+	ch := newSecureChannelHelperTest(t)
 	d := NewDecoder(ch)
 	secretKey := randomKey(t)
 	wrongKey := randomKey(t)
@@ -511,7 +519,7 @@ func TestDecoder_DecodeS_WrongSecretKey(t *testing.T) {
 }
 
 func TestDecoder_DecodeS_UnrecognizedPacketType(t *testing.T) {
-	ch := NewMockSecureChannel()
+	ch := newSecureChannelHelperTest(t)
 	d := NewDecoder(ch)
 	secretKey := randomKey(t)
 	nonce := randomNonce(t)
@@ -533,7 +541,7 @@ func TestDecoder_DecodeS_UnrecognizedPacketType(t *testing.T) {
 }
 
 func TestDecoder_DecodeS_InvalidCipherSize_TooSmall(t *testing.T) {
-	ch := NewMockSecureChannel()
+	ch := newSecureChannelHelperTest(t)
 	d := NewDecoder(ch)
 	secretKey := randomKey(t)
 	nonce := randomNonce(t)
@@ -556,7 +564,8 @@ func TestDecoder_DecodeS_InvalidCipherSize_TooSmall(t *testing.T) {
 }
 
 func TestDecoder_DecodeS_TooShortPacket_ReturnsErrorNotPanic(t *testing.T) {
-	ch := NewMockSecureChannel()
+	ctrl := gomock.NewController(t)
+	ch := mocks.NewMockSecureChannel(ctrl)
 	d := NewDecoder(ch)
 	secretKey := randomKey(t)
 	shortPacket := []byte{1, 2, 3}
@@ -573,7 +582,7 @@ func TestDecoder_DecodeS_TooShortPacket_ReturnsErrorNotPanic(t *testing.T) {
 }
 
 func TestDecoder_DecodeS_RejectsInconsistentFrameLength(t *testing.T) {
-	ch := NewMockSecureChannel()
+	ch := newSecureChannelHelperTest(t)
 	d := NewDecoder(ch)
 	secretKey := randomKey(t)
 	packet := buildSecurePacket(
@@ -593,8 +602,8 @@ func TestDecoder_DecodeS_RejectsInconsistentFrameLength(t *testing.T) {
 }
 
 func TestDecoder_DecodeS_CipherSizeExceedsPacket_ReturnsErrorNotPanic(t *testing.T) {
-	ch := NewMockSecureChannel()
-	b := NewDecoder(ch)
+	ch := newSecureChannelHelperTest(t)
+	d := NewDecoder(ch)
 	secretKey := randomKey(t)
 	nonce := randomNonce(t)
 	msg := new(pbpub.SendMsgReq)
@@ -615,7 +624,7 @@ func TestDecoder_DecodeS_CipherSizeExceedsPacket_ReturnsErrorNotPanic(t *testing
 		err  error
 	)
 	runRecovered(t, "DecodeS", func() {
-		_, _, code, err = b.DecodeS(secretKey, 0, packet)
+		_, _, code, err = d.DecodeS(secretKey, 0, packet)
 	})
 	require.Error(t, err)
 	require.Equal(t, pbpub.Code_ERR_CIPHER_INVALID_SIZE, code)

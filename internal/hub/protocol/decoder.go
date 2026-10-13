@@ -29,14 +29,14 @@ func NewDecoder(secureChannel SecureChannel) *Decoder {
 	}
 }
 
-func (d *Decoder) DecodeActivePacket(
+func (d *Decoder) DecodeActivationPacket(
 	plain []byte,
 	outReq *pbpub.ActiveConnReq,
 ) error {
 	return d.pbUnmarshal.Unmarshal(plain, outReq)
 }
 
-func (d *Decoder) DecodeActiveProofPack(
+func (d *Decoder) DecodeActivationProofPack(
 	plain []byte,
 	outReq *pbpub.ActiveConnProofReq,
 ) error {

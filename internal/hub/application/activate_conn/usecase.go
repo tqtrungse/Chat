@@ -118,7 +118,7 @@ func (ca *connActivator) Activate(conn nio.Conn, packet []byte) nio.Action {
 	}
 
 	var req pbpub.ActiveConnReq
-	if err := ca.decoder.DecodeActivePacket(packet[4:], &req); err != nil {
+	if err := ca.decoder.DecodeActivationPacket(packet[4:], &req); err != nil {
 		ca.logger.Error("failed to decode active request, force close", zap.Error(err))
 		return ca.reject(pending)
 	}
@@ -178,7 +178,7 @@ func (ca *connActivator) Prove(ctx context.Context, conn nio.Conn, packet []byte
 	}
 
 	var req pbpub.ActiveConnProofReq
-	if err := ca.decoder.DecodeActiveProofPack(packet[4:], &req); err != nil {
+	if err := ca.decoder.DecodeActivationProofPack(packet[4:], &req); err != nil {
 		ca.logger.Error("failed to decode activation proof, force close", zap.Error(err))
 		return ca.reject(pending)
 	}

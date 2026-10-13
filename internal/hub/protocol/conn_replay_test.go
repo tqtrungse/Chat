@@ -19,7 +19,7 @@ import (
 
 func TestDeriveConnKeys_RejectsFrameReplayAcrossConnections(t *testing.T) {
 	var ticketKeys sharedsession.Keys
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		ticketKeys.RecvEnc[i] = byte(i + 1)
 		ticketKeys.SendEnc[i] = byte(i + 2)
 		ticketKeys.RecvMac[i] = byte(i + 3)
@@ -28,7 +28,7 @@ func TestDeriveConnKeys_RejectsFrameReplayAcrossConnections(t *testing.T) {
 	defer ticketKeys.Clear()
 
 	var nonceA, nonceB [32]byte
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		nonceA[i] = byte(i + 5)
 		nonceB[i] = byte(i + 6)
 	}
@@ -57,8 +57,9 @@ func TestDeriveConnKeys_RejectsFrameReplayAcrossConnections(t *testing.T) {
 	_, _, _, err = decoder.Decode(&keysB.RecvMac, 0, frame)
 	require.ErrorIs(t, err, ErrPkgModified)
 
-	secureEncoder := NewEncoder(NewMockSecureChannel())
-	secureDecoder := NewDecoder(NewMockSecureChannel())
+	ch := newSecureChannelHelperTest(t)
+	secureEncoder := NewEncoder(ch)
+	secureDecoder := NewDecoder(ch)
 	secureFrame, err := secureEncoder.EncodeS(
 		&keysA.RecvEnc,
 		0,

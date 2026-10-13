@@ -14,14 +14,18 @@ import (
 	"testing"
 
 	pbpub "xxx/api/hub/v1/proto/gen/pub"
+	"xxx/internal/hub/protocol/mocks"
+
 	slicepool "xxx/pkg/pool/slice"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestEncoder_Encode_OutputIncludesTrailingHMAC(t *testing.T) {
-	encoder := NewEncoder(NewMockSecureChannel())
+	ctrl := gomock.NewController(t)
+	encoder := NewEncoder(mocks.NewMockSecureChannel(ctrl))
 	hmacKey := randomKey(t)
 	msg := new(pbpub.ActiveConnReq)
 	seq := uint64(0x0807060504030201)
@@ -51,7 +55,8 @@ func TestEncoder_Encode_OutputIncludesTrailingHMAC(t *testing.T) {
 }
 
 func TestEncoder_Encode_WithExpand(t *testing.T) {
-	encoder := NewEncoder(NewMockSecureChannel())
+	ctrl := gomock.NewController(t)
+	encoder := NewEncoder(mocks.NewMockSecureChannel(ctrl))
 	hmacKey := randomKey(t)
 	msg := new(pbpub.ActiveConnReq)
 	expand := []byte("expand-payload")
@@ -77,7 +82,8 @@ func TestEncoder_Encode_WithExpand(t *testing.T) {
 }
 
 func TestEncoder_Encode_RejectsFrameTooLarge(t *testing.T) {
-	encoder := NewEncoder(NewMockSecureChannel())
+	ctrl := gomock.NewController(t)
+	encoder := NewEncoder(mocks.NewMockSecureChannel(ctrl))
 	hmacKey := randomKey(t)
 
 	_, err := encoder.Encode(
@@ -91,18 +97,19 @@ func TestEncoder_Encode_RejectsFrameTooLarge(t *testing.T) {
 }
 
 func TestEncoder_EncodeDecode_RoundTrip(t *testing.T) {
-	secureChannel := NewMockSecureChannel()
-	encoder := NewEncoder(secureChannel)
-	decoder := NewDecoder(secureChannel)
+	ctrl := gomock.NewController(t)
+	ch := mocks.NewMockSecureChannel(ctrl)
+	encoder := NewEncoder(ch)
+	decoder := NewDecoder(ch)
 	hmacKey := randomKey(t)
-	msg := new(pbpub.ActiveConnReq)
+	msg := &pbpub.BrokerForwardMsgReq{SendDeviceId: 1, MsgId: 42}
 	expand := []byte("expand-payload")
 	seq := uint64(42)
 
 	packet, err := encoder.Encode(
 		hmacKey,
 		seq,
-		pbpub.MsgType_REQ_ACTIVE_CONN,
+		pbpub.MsgType_REQ_BROKER_FORWARD_MSG,
 		msg,
 		expand,
 	)
@@ -116,9 +123,10 @@ func TestEncoder_EncodeDecode_RoundTrip(t *testing.T) {
 }
 
 func TestEnCoder_EncodeDecode_RoundTrip_ForwardSendMsg(t *testing.T) {
-	secureChannel := NewMockSecureChannel()
-	encoder := NewEncoder(secureChannel)
-	decoder := NewDecoder(secureChannel)
+	ctrl := gomock.NewController(t)
+	ch := mocks.NewMockSecureChannel(ctrl)
+	encoder := NewEncoder(ch)
+	decoder := NewDecoder(ch)
 	hmacKey := randomKey(t)
 	msg := &pbpub.BrokerForwardMsgReq{
 		SendDeviceId: uint64(1),
@@ -142,9 +150,9 @@ func TestEnCoder_EncodeDecode_RoundTrip_ForwardSendMsg(t *testing.T) {
 }
 
 func TestEncoderDecoder_EncodeSDecodeS_RoundTrip(t *testing.T) {
-	secureChannel := NewMockSecureChannel()
-	encoder := NewEncoder(secureChannel)
-	decoder := NewDecoder(secureChannel)
+	ch := newSecureChannelHelperTest(t)
+	encoder := NewEncoder(ch)
+	decoder := NewDecoder(ch)
 	secretKey := randomKey(t)
 	msg := &pbpub.SendMsgReq{
 		ChannelId: uint64(1),
@@ -170,9 +178,9 @@ func TestEncoderDecoder_EncodeSDecodeS_RoundTrip(t *testing.T) {
 }
 
 func TestEncoderDecoder_EncodeSDecodeS_RoundTrip_NoExpand(t *testing.T) {
-	secureChannel := NewMockSecureChannel()
-	encoder := NewEncoder(secureChannel)
-	decoder := NewDecoder(secureChannel)
+	ch := newSecureChannelHelperTest(t)
+	encoder := NewEncoder(ch)
+	decoder := NewDecoder(ch)
 	secretKey := randomKey(t)
 	msg := &pbpub.SendMsgReq{
 		ChannelId: uint64(1),
@@ -196,17 +204,17 @@ func TestEncoderDecoder_EncodeSDecodeS_RoundTrip_NoExpand(t *testing.T) {
 }
 
 func TestEncoderDecoder_MixedFrameTypesShareSequence(t *testing.T) {
-	secureChannel := NewMockSecureChannel()
-	encoder := NewEncoder(secureChannel)
-	decoder := NewDecoder(secureChannel)
+	ch := newSecureChannelHelperTest(t)
+	encoder := NewEncoder(ch)
+	decoder := NewDecoder(ch)
 	hmacKey := randomKey(t)
 	secretKey := randomKey(t)
 
 	plainFrame, err := encoder.Encode(
 		hmacKey,
 		0,
-		pbpub.MsgType_REQ_ACTIVE_CONN,
-		new(pbpub.ActiveConnReq),
+		pbpub.MsgType_REQ_BROKER_FORWARD_MSG,
+		new(pbpub.BrokerForwardMsgReq),
 		nil,
 	)
 	require.NoError(t, err)
@@ -228,8 +236,7 @@ func TestEncoderDecoder_MixedFrameTypesShareSequence(t *testing.T) {
 }
 
 func TestEncoderDecoder_EncodeS_NoncesAreUnpredictable(t *testing.T) {
-	secureChannel := NewMockSecureChannel()
-	encoder := NewEncoder(secureChannel)
+	encoder := NewEncoder(newSecureChannelHelperTest(t))
 	secretKey := randomKey(t)
 	msg := new(pbpub.SendMsgReq)
 	seq := uint64(0)
@@ -277,8 +284,8 @@ func TestSecurePacketAAD_BindsFrameMetadataAndSequence(t *testing.T) {
 }
 
 func TestEncodeHandshake_NoSessionMAC(t *testing.T) {
-	secureChannel := NewMockSecureChannel()
-	encoder := NewEncoder(secureChannel)
+	ctrl := gomock.NewController(t)
+	encoder := NewEncoder(mocks.NewMockSecureChannel(ctrl))
 	want := &pbpub.ActiveConnResp{Nonce: make([]byte, 32)}
 	packet, err := encoder.EncodeHandshake(pbpub.MsgType_RESP_ACTIVE_CONN, want)
 	require.NoError(t, err)

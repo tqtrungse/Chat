@@ -30,11 +30,6 @@ mockgen \
   -package=mocks
 
 mockgen \
-  -source=pkg/nio/load_balancer.go \
-  -destination=pkg/nio/mocks/load_balancer_mock.go \
-  -package=mocks
-
-mockgen \
   -source=pkg/nio/nio.go \
   -destination=pkg/nio/mocks/nio_mock.go \
   -package=mocks
