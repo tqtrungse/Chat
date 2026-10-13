@@ -21,7 +21,7 @@ import (
 	"errors"
 
 	"xxx/internal/iam/application/exchange_key"
-	"xxx/internal/iam/infrastructure/datastore/mysql/entity"
+	"xxx/internal/iam/infrastructure/datastore/mysql/model"
 	shareddevice "xxx/internal/shared/device"
 
 	"xxx/pkg/database/sql"
@@ -45,14 +45,14 @@ func (d *deviceMetaReader) FindDeviceMeta(
 	}
 
 	var (
-		db        = val.(*gorm.DB)
-		entDevice = &entity.Device{ID: deviceID}
+		db     = val.(*gorm.DB)
+		device = &model.Device{ID: deviceID}
 	)
 
 	err = db.
 		WithContext(dbCtx).
 		Select("external_id", "state", "identity_pub").
-		Take(entDevice).
+		Take(device).
 		Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -61,8 +61,8 @@ func (d *deviceMetaReader) FindDeviceMeta(
 		return nil, err
 	}
 	return &exchange_key.DeviceMeta{
-		ExternalID:  entDevice.ExternalID,
-		State:       entDevice.State,
-		IdentityPub: entDevice.IdentityPub,
+		ExternalID:  device.ExternalID,
+		State:       device.State,
+		IdentityPub: device.IdentityPub,
 	}, nil
 }
