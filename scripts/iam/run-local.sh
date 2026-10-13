@@ -20,7 +20,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 
 CONFIG_FILE="$ROOT_DIR/cmd/iam/.local/.config.env"
 HUB_CONFIG_FILE="$ROOT_DIR/cmd/hub/.local/.config.env"
@@ -75,11 +75,16 @@ set_config() {
 set_key_entry() {
   local key="$1" id="$2" encoded="$3" config_file="$4"
   local current entry entry_id merged="" replaced=false
-  local -a entries
 
   current="$(get_config "$key" "$config_file")"
-  IFS=',' read -r -a entries <<< "$current"
-  for entry in "${entries[@]}"; do
+  while [[ -n "$current" ]]; do
+    entry="${current%%,*}"
+    if [[ "$current" == *,* ]]; then
+      current="${current#*,}"
+    else
+      current=""
+    fi
+
     entry="${entry#"${entry%%[![:space:]]*}"}"
     entry="${entry%"${entry##*[![:space:]]}"}"
     [[ -z "$entry" || "$entry" == *"<"* ]] && continue
@@ -109,10 +114,15 @@ set_key_entry() {
 
 merge_key_entries() {
   local key="$1" source_entries="$2" config_file="$3" entry
-  local -a entries
 
-  IFS=',' read -r -a entries <<< "$source_entries"
-  for entry in "${entries[@]}"; do
+  while [[ -n "$source_entries" ]]; do
+    entry="${source_entries%%,*}"
+    if [[ "$source_entries" == *,* ]]; then
+      source_entries="${source_entries#*,}"
+    else
+      source_entries=""
+    fi
+
     entry="${entry#"${entry%%[![:space:]]*}"}"
     entry="${entry%"${entry##*[![:space:]]}"}"
     [[ -z "$entry" ]] && continue
@@ -155,6 +165,7 @@ fi
 TICKET_SIGNING_KEY_ID="$(get_config TICKET_SIGNING_KEY_ID)"
 TICKET_SIGNING_KEY_ID="${TICKET_SIGNING_KEY_ID:-1}"
 TICKET_SIGNING_PRIVATE_KEY="$(get_config TICKET_SIGNING_PRIVATE_KEY)"
+TICKET_SIGNING_PUBLIC_KEY=""
 
 if [[ -z "$TICKET_SIGNING_PRIVATE_KEY" || "$TICKET_SIGNING_PRIVATE_KEY" == *"<"* ]]; then
   mkdir -p "$CERT_DIR"
@@ -187,7 +198,7 @@ fi
 
 set_config TICKET_ENCRYPT_CURRENT_KEY_ID "$TICKET_ENCRYPT_KEY_ID" "$HUB_CONFIG_FILE"
 merge_key_entries TICKET_ENCRYPT_KEYS "$TICKET_ENCRYPT_KEYS" "$HUB_CONFIG_FILE"
-set_key_entry TICKET_SIGNNING_PUBLIC_KEYS "$TICKET_SIGNING_KEY_ID" "$TICKET_SIGNING_PUBLIC_KEY" "$HUB_CONFIG_FILE"
+set_key_entry TICKET_SIGNING_PUBLIC_KEYS "$TICKET_SIGNING_KEY_ID" "$TICKET_SIGNING_PUBLIC_KEY" "$HUB_CONFIG_FILE"
 echo "Synchronized IAM ticket keys to $HUB_CONFIG_FILE" >&2
 
 if [[ ! -s "$CERT_FILE" || ! -s "$KEY_FILE" ]]; then

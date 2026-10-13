@@ -31,7 +31,7 @@ type Config struct {
 	PresenceSync PresenceSyncConfig
 }
 
-// RouterConfig configures Router: the connection registry.
+// RouterConfig configures connection registration and lifecycle behavior.
 type RouterConfig struct {
 	// TickerDuration defines interval time to the next polling.
 	//

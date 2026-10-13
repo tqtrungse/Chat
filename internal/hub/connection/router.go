@@ -18,66 +18,24 @@ package connection
 
 import (
 	"context"
-	"encoding/binary"
-	"errors"
-	"math"
-	"sync/atomic"
 	"time"
 
-	pbpub "xxx/api/hub/v1/proto/gen/pub"
-	"xxx/internal/hub/domain/session"
 	"xxx/internal/hub/protocol"
 	shareddevice "xxx/internal/shared/device"
 	sharedsession "xxx/internal/shared/session"
 	sharedticket "xxx/internal/shared/ticket"
 
-	"xxx/pkg"
-	"xxx/pkg/collection/swiss"
-	"xxx/pkg/hash"
 	"xxx/pkg/log"
 	"xxx/pkg/nio"
-	slicepool "xxx/pkg/pool/slice"
 	workerpool "xxx/pkg/pool/worker"
-
-	"go.uber.org/zap"
-	"google.golang.org/protobuf/proto"
 )
 
-type Op uint8
-
-const (
-	nShards = 8
-	mask    = nShards - 1
-	closed  = uint32(1) << 31
-
-	addDeviceOp Op = 1
-	delDeviceOp Op = 2
-
-	defaultTickerDuration = time.Second
-	defaultMaxConns       = 128000
-)
-
-type SendData struct {
-	MsgType pbpub.MsgType
-	Msg     proto.Message
-	Expand  []byte
-}
-
-// Router is a plain connection registry: it tracks live connections per
-// shard and drives their lifecycle (create/activate/remove/reap).
+// Router is the public connection manager facade. Registry, lifecycle,
+// outbound sending, and presence synchronization live in separate components.
 type Router struct {
-	meta atomic.Uint32
-	_    [pkg.CacheLineSize - 4]byte
-
-	signer         Signer
-	ticketVerifier TicketVerifier
-	tickerDuration time.Duration
-	maxConns       uint32
-	logger         *log.Logger
-	pool           *workerpool.Pool
-	encoder        *protocol.Encoder
-	presence       *presenceSync
-	conns          [nShards]*swiss.TableC2[shareddevice.ID, nio.Conn]
+	registry  *connectionRegistry
+	lifecycle *connectionLifecycle
+	sender    *connectionSender
 }
 
 func NewRouter(
@@ -91,24 +49,9 @@ func NewRouter(
 	pool *workerpool.Pool,
 	encoder *protocol.Encoder,
 ) *Router {
-	r := &Router{
-		signer:         signer,
-		ticketVerifier: ticketVerifier,
-		tickerDuration: cfg.Router.TickerDuration,
-		logger:         logger,
-		pool:           pool,
-		encoder:        encoder,
-		maxConns:       cfg.Router.MaxConns,
-	}
-
-	if r.tickerDuration <= 0 {
-		r.tickerDuration = defaultTickerDuration
-	}
-	if r.maxConns == 0 {
-		r.maxConns = defaultMaxConns
-	}
-
-	r.presence = newPresenceSync(
+	registry := newConnectionRegistry(cfg.Router.MaxConns)
+	sender := newConnectionSender(registry, encoder, logger)
+	presence := newPresenceSync(
 		rootCtx,
 		cfg.PresenceSync,
 		dCache,
@@ -116,20 +59,25 @@ func NewRouter(
 		logger,
 		pool,
 	)
-
-	nItemsPerShard := math.Ceil(float64(r.maxConns) / float64(nShards))
-	for i := range nShards {
-		r.conns[i] = swiss.NewTableC2WithCap[shareddevice.ID, nio.Conn](
-			int(nItemsPerShard),
-			hash.Int64,
-		)
+	lifecycle := newConnectionLifecycle(
+		signer,
+		ticketVerifier,
+		cfg.Router.TickerDuration,
+		registry,
+		logger,
+		pool,
+		presence,
+	)
+	return &Router{
+		registry:  registry,
+		lifecycle: lifecycle,
+		sender:    sender,
 	}
-	return r
 }
 
-// ActivateConn registers conn for the device in t. t must come from PrepareActivation;
-// keys must be derived for this activation challenge. The caller retains ownership
-// of both values and must clear them after this method returns.
+// ActivateConn registers conn for ticket.DeviceID. The ticket must come from
+// PrepareActivation; keys must be derived for that activation challenge. The
+// caller retains ownership of ticket and keys and must clear them afterward.
 func (r *Router) ActivateConn(
 	ctx context.Context,
 	ticket *sharedticket.Ticket,
@@ -137,262 +85,46 @@ func (r *Router) ActivateConn(
 	conn nio.Conn,
 	callback func(id shareddevice.ID),
 ) error {
-	if err := r.ticketVerifier.CheckExpiry(ticket, time.Now()); err != nil {
-		return err
-	}
-
-	deviceID := shareddevice.ID(ticket.DeviceID)
-
-	// Reserve a slot first; give it back if we end up replacing a conn.
-	meta := r.meta.Add(1)
-	if meta&closed != 0 {
-		r.meta.Add(^uint32(0))
-		return ErrRouterClosed
-	}
-	if meta&^closed > r.maxConns {
-		r.meta.Add(^uint32(0))
-		return ErrConnReachMax
-	}
-
-	ss := &session.Data{
-		Keys:     *keys,
-		DeviceID: deviceID,
-	}
-	timestamp := time.Now().Unix()
-	ss.LastHeartBeat.Store(timestamp)
-	ss.State.Store(uint32(session.StateActive))
-
-	conn.SetContext(ss)
-	old, existence := r.conns[r.bucketFor(deviceID)].Set(deviceID, conn)
-	switch {
-	case existence && old == conn:
-		r.meta.Add(^uint32(0)) // activated twice on the same conn
-
-	case existence:
-		// If we flip the old session to Closed first, RemoveConn(old) becomes a
-		// no-op and its slot is inherited by the new conn. If RemoveConn won the
-		// race, it already released the slot and ours stays reserved.
-		if oss, ok := old.Context().(*session.Data); ok &&
-			oss.State.Swap(uint32(session.StateClosed)) != uint32(session.StateClosed) {
-			r.meta.Add(^uint32(0))
-		}
-		r.ForceClose(old)
-	}
-
-	// Sync device presence (device -> this hub) to cache.
-	return r.pool.Submit(func(_ *workerpool.Context) {
-		err2 := r.presence.Submit(
-			ctx,
-			deviceOp{
-				DeviceID:  deviceID,
-				Timestamp: timestamp,
-				Op:        addDeviceOp,
-			},
-			func(_ any, err error) {
-				if err == nil {
-					callback(deviceID)
-					return
-				}
-				r.logger.Error("failed to add connection to ledger", zap.Error(err))
-				r.ForceClose(conn)
-			},
-		)
-		if err2 != nil {
-			r.logger.Error("failed to submit batch", zap.Error(err2))
-			r.ForceClose(conn)
-		}
-	})
+	return r.lifecycle.ActivateConn(ctx, ticket, keys, conn, callback)
 }
 
-// PrepareActivation opens the sealed ticket and verifies the device signature,
-// but does not register the connection. The caller must clear the returned
-// ticket and prove possession of its activation key before activating.
+// PrepareActivation opens the sealed ticket and verifies the device
+// signature without registering the connection.
 func (r *Router) PrepareActivation(token, ticket, sign []byte) (*sharedticket.Ticket, error) {
-	if len(token) != 8 {
-		return nil, ErrActivationInvalid
-	}
-	deviceID := shareddevice.ID(binary.LittleEndian.Uint64(token))
-
-	t, err := r.ticketVerifier.Open(deviceID.Uint64(), ticket)
-	if err != nil {
-		return nil, err
-	}
-
-	// The signature authenticates the device identity. Freshness is provided
-	// separately by the per-connection challenge-response.
-	if err = r.signer.Verify(t.IdentityPub[:], ticket, sign); err != nil {
-		t.Clear()
-		return nil, err
-	}
-	return t, nil
+	return r.lifecycle.PrepareActivation(token, ticket, sign)
 }
 
 func (r *Router) RemoveConn(ctx context.Context, conn nio.Conn) {
-	// If connection has no context, it just connects and immediately closes while doesn't
-	// send any package. It is not in map, so call connActivator.Deactivate is unnecessary.
-	// We set SO_KEEPALIVE, so when it closed, it will be cleaned up by NIO.
-	ss, ok := conn.Context().(*session.Data)
-	// never activated
-	if !ok {
-		return
-	}
-	// Whoever flips Active->Closed owns the cleanup. If ActivateConn replaced
-	// this connection it already flipped it, so we must not touch the map or counter.
-	if ss.State.Swap(uint32(session.StateClosed)) == uint32(session.StateClosed) {
-		return
-	}
-	if cur, ok := r.conns[r.bucketFor(ss.DeviceID)].Lookup(ss.DeviceID); ok && cur == conn {
-		r.conns[r.bucketFor(ss.DeviceID)].Delete(ss.DeviceID)
-	}
-	r.meta.Add(^uint32(0))
-
-	// Delete device from cache.
-	timestamp := time.Now().Unix()
-	err := r.pool.Submit(func(_ *workerpool.Context) {
-		err := r.presence.Submit(
-			ctx,
-			deviceOp{
-				DeviceID:  ss.DeviceID,
-				Timestamp: timestamp,
-				Op:        delDeviceOp,
-			},
-			func(_ any, err error) {
-				// If delete device is failed, don't need to retry.
-				// The connection is deleted from hub, just garbage record in cache.
-				//
-				// If another hub sends message to the deleted device (get garbage record in cache
-				// to determine storage hub), it is solved as offline messages.
-				//
-				// When device reconnect, cache will remove garbage record and create new record.
-				if err != nil && !errors.Is(err, errSuperseded) {
-					r.logger.Error("failed to delete connection from ledger", zap.Error(err))
-				}
-			},
-		)
-		if err != nil {
-			r.logger.Error("failed to submit batch", zap.Error(err))
-		}
-	})
-	if err != nil {
-		r.logger.Error("failed to worker pool submit", zap.Error(err))
-	}
+	r.lifecycle.RemoveConn(ctx, conn)
 }
 
 // AsyncSend encodes and queues a frame for the current connection of deviceID.
 func (r *Router) AsyncSend(secure bool, deviceID shareddevice.ID, data SendData) error {
-	conn, existence := r.conns[r.bucketFor(deviceID)].Lookup(deviceID)
-	if !existence {
-		return ErrSessionNotFound
-	}
-	return r.AsyncSendConn(secure, conn, data)
+	return r.sender.AsyncSend(secure, deviceID, data)
 }
 
-// AsyncSendConn queues a frame for conn only. It is useful for callbacks tied
-// to one activation so a delayed callback cannot send to a replacement
-// connection for the same device.
+// AsyncSendConn targets one activation so a delayed callback cannot send to a
+// replacement connection for the same device.
 func (r *Router) AsyncSendConn(secure bool, conn nio.Conn, data SendData) error {
-	ss, ok := conn.Context().(*session.Data)
-	if !ok || ss.State.Load() == uint32(session.StateClosed) {
-		return ErrSessionClosed
-	}
-
-	current, exists := r.conns[r.bucketFor(ss.DeviceID)].Lookup(ss.DeviceID)
-	if !exists || current != conn {
-		return ErrSessionClosed
-	}
-
-	var packet []byte
-	err := ss.WithSendSeq(func(seq uint64) (bool, error) {
-		var err error
-		if secure {
-			packet, err = r.encoder.EncodeS(
-				&ss.Keys.SendEnc,
-				seq,
-				data.MsgType,
-				data.Msg,
-				data.Expand,
-			)
-		} else {
-			packet, err = r.encoder.Encode(
-				&ss.Keys.SendMac,
-				seq,
-				data.MsgType,
-				data.Msg,
-				data.Expand,
-			)
-		}
-		if err != nil {
-			return false, err
-		}
-
-		err = conn.AsyncWrite(packet, func(_ nio.Conn, writeErr error) error {
-			clear(packet[:cap(packet)])
-			slicepool.Put(packet)
-			if writeErr != nil {
-				ss.MarkSendFailed()
-				r.logger.Error("failed to write session frame", zap.Error(writeErr))
-				r.ForceClose(conn)
-			}
-			return nil
-		})
-		return true, err
-	})
-	if err != nil {
-		if ss.SendFailed() {
-			r.ForceClose(conn)
-		}
-		return err
-	}
-	return nil
+	return r.sender.AsyncSendConn(secure, conn, data)
 }
 
 func (r *Router) MaxConns() uint32 {
-	return r.maxConns
+	return r.registry.MaxConns()
 }
 
 func (r *Router) CurConns() uint32 {
-	currConns := r.meta.Load() &^ closed
-	if currConns >= r.maxConns {
-		return r.maxConns + 1
-	}
-	return currConns
+	return r.registry.CurConns()
 }
 
 func (r *Router) Close() {
-	r.meta.Or(closed)
+	r.registry.Close()
 }
 
 func (r *Router) Tick() time.Duration {
-	//for i := range nShards {
-	//	r.conns[i].Range(func(deviceID device.ID, conn connection) (goOn bool) {
-	//		conCtx := conn.Context()
-	//		if conCtx == nil {
-	//			return true
-	//		}
-	//
-	//		ss := conCtx.(*session.Data)
-	//		if ss.State.Load() == uint32(session.StateUnactive) {
-	//			durationSecs := time.Now().Unix() - ss.LastHeartBeat.Load()
-	//			if durationSecs >= int64(r.ttlUnactiveSession.Seconds()) {
-	//				r.conns[i].Delete(deviceID)
-	//				conn.SetContext(nil)
-	//				r.meta.Add(^uint32(0))
-	//			}
-	//		}
-	//		return true
-	//	})
-	//}
-	return r.tickerDuration
+	return r.lifecycle.Tick()
 }
 
 func (r *Router) ForceClose(conn nio.Conn) {
-	if err := conn.Close(); err != nil {
-		r.logger.Error("failed to force close connection", zap.Error(err))
-	} else {
-		r.logger.Debug("forces close connection")
-	}
-}
-
-func (r *Router) bucketFor(deviceID shareddevice.ID) int {
-	return int(pkg.Mix64(deviceID.Uint64())) & mask
+	r.lifecycle.ForceClose(conn)
 }

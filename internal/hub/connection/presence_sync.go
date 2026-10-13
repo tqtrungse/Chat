@@ -32,10 +32,15 @@ import (
 )
 
 const (
+	addDeviceOp Op = 1
+	delDeviceOp Op = 2
+
 	defaultRetryAttempts     = 3
 	defaultBackoffJitterBase = time.Second
 	defaultBackoffJitterCap  = 30 * time.Second
 )
+
+type Op uint8
 
 type cacheOpPanicError struct {
 	value any
@@ -51,7 +56,7 @@ func (e *cacheOpPanicError) Error() string {
 // It batches add/delete ops per device, protects the cache behind a
 // circuit breaker, and retries only infrastructure errors with
 // decorrelated jitter. This is the single place that owns cache-sync
-// resilience, so Router itself stays a plain connection registry.
+// resilience; lifecycle code only submits operations and handles results.
 type presenceSync struct {
 	dCache            DistributedCache
 	cb                CircuitBreaker
@@ -104,9 +109,8 @@ func newPresenceSync(
 }
 
 // Submit enqueues a device add/delete op to be synced to the cache.
-// Whether the caller dispatches this sync or via the worker pool is up
-// to the caller (Router currently submits it through the pool so the
-// hot path — ActivateConn/RemoveConn — never blocks on it).
+// Lifecycle dispatches it through the worker pool so activation and removal
+// do not block on cache synchronization.
 func (s *presenceSync) Submit(ctx context.Context, op deviceOp, onResult func(any, error)) error {
 	return s.batcher.Submit(ctx, op, onResult)
 }

@@ -28,7 +28,7 @@ import (
 	"xxx/api/hub/v1/proto/gen/pub"
 	"xxx/internal/hub/application/activate_conn"
 	"xxx/internal/hub/application/send_message"
-	"xxx/internal/hub/domain/session"
+	"xxx/internal/hub/connection"
 
 	"xxx/pkg/log"
 	"xxx/pkg/nio"
@@ -191,12 +191,12 @@ func (s *Server) OnTraffic(conn nio.Conn) nio.Action {
 		return s.activator.Prove(s.ctx, conn, packet)
 
 	case pub.MsgType_REQ_SEND_MSG:
-		if _, ok := conn.Context().(*session.Data); !ok { // not activated yet
+		if _, ok := conn.Context().(*connection.Session); !ok { // not activated yet
 			return nio.Close
 		}
 
 	case pub.MsgType_REQ_ACK_RECV_MSG:
-		if _, ok := conn.Context().(*session.Data); !ok {
+		if _, ok := conn.Context().(*connection.Session); !ok {
 			return nio.Close
 		}
 

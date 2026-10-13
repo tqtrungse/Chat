@@ -20,7 +20,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 
 COMPOSE_FILE="$ROOT_DIR/infrastructure/local-docker-compose.yaml"
 NATS_ENV_FILE="$ROOT_DIR/infrastructure/nats/local/.local.env"
