@@ -31,7 +31,6 @@ import (
 	"xxx/internal/hub/infrastructure/redis"
 	"xxx/internal/hub/protocol"
 	shareddevice "xxx/internal/shared/device"
-	sharedsession "xxx/internal/shared/session"
 
 	"xxx/pkg"
 	"xxx/pkg/log"
@@ -252,46 +251,4 @@ func tcpServerError(err error) error {
 		return nil
 	}
 	return fmt.Errorf("failed to run hub TCP server: %w", err)
-}
-
-func loadTicketVerifier(cfgLoader pkg.ConfigLoader) (*sharedsession.TicketVerifier, error) {
-	keys, err := sharedsession.ParseTicketEncryptKeys(
-		strings.Split(cfgLoader.GetString("TICKET_ENCRYPT_KEYS"), ","),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse ticket encryption keys: %w", err)
-	}
-	defer func() {
-		for _, key := range keys {
-			clear(key)
-		}
-	}()
-
-	id := cfgLoader.GetUint8("TICKET_ENCRYPT_CURRENT_KEY_ID")
-	if id == 0 {
-		return nil, errors.New("invalid TICKET_ENCRYPT_CURRENT_KEY_ID")
-	}
-
-	sealer, err := sharedsession.NewTicketSealer(id, keys)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize ticket sealer: %w", err)
-	}
-
-	publicKeys, err := sharedsession.ParseTicketSigningPublicKeys(
-		strings.Split(cfgLoader.GetString("TICKET_SIGNNING_PUBLIC_KEYS"), ","),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse ticket signing public keys: %w", err)
-	}
-
-	clockSkew, err := time.ParseDuration(strings.TrimSpace(cfgLoader.GetString("TICKET_CLOCK_SKEW")))
-	if err != nil {
-		return nil, fmt.Errorf("invalid TICKET_CLOCK_SKEW: %w", err)
-	}
-
-	return sharedsession.NewTicketVerifier(
-		sealer,
-		publicKeys,
-		clockSkew,
-	)
 }

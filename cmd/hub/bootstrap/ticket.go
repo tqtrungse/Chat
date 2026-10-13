@@ -15,62 +15,67 @@
  * limitations under the License.
  */
 
-package session
+package bootstrap
 
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
+
+	"xxx/internal/hub/infrastructure/crypto"
+	"xxx/internal/shared/ticket"
+
+	"xxx/pkg"
 )
 
-// ParseTicketEncryptKeys parses entries like "1:<base64 32 bytes>".
-func ParseTicketEncryptKeys(entries []string) (map[byte][]byte, error) {
-	out := make(map[byte][]byte, len(entries))
-	for _, e := range entries {
-		idStr, b64, ok := strings.Cut(strings.TrimSpace(e), ":")
-		if !ok {
-			return nil, ErrTicketBadEntry
-		}
-
-		id, err := strconv.ParseUint(idStr, 10, 8)
-		if err != nil {
-			return nil, err
-		}
-		if _, exists := out[byte(id)]; exists {
-			return nil, fmt.Errorf("duplicate ticket encryption key ID %d", id)
-		}
-
-		k, err := base64.StdEncoding.DecodeString(b64)
-		if err != nil {
-			return nil, err
-		}
-
-		out[byte(id)] = k
-	}
-	return out, nil
-}
-
-// ParseTicketSigningPrivate decodes a 32-byte Ed25519 seed for IAM.
-// The caller must clear the returned seed after NewTicketSigner copies it.
-func ParseTicketSigningPrivate(value string) ([]byte, error) {
-	seed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(value))
+func loadTicketVerifier(cfgLoader pkg.ConfigLoader) (*crypto.TicketVerifier, error) {
+	keys, err := ticket.ParseTicketEncryptKeys(
+		strings.Split(cfgLoader.GetString("TICKET_ENCRYPT_KEYS"), ","),
+	)
 	if err != nil {
-		clear(seed)
-		return nil, fmt.Errorf("decode ticket signing seed: %w", err)
+		return nil, fmt.Errorf("failed to parse ticket encryption keys: %w", err)
+	}
+	defer func() {
+		for _, key := range keys {
+			clear(key)
+		}
+	}()
+
+	id := cfgLoader.GetUint8("TICKET_ENCRYPT_CURRENT_KEY_ID")
+	if id == 0 {
+		return nil, errors.New("invalid TICKET_ENCRYPT_CURRENT_KEY_ID")
 	}
 
-	if len(seed) != ed25519.SeedSize {
-		got := len(seed)
-		clear(seed)
-		return nil, fmt.Errorf("ticket signing seed: want %d bytes, got %d", ed25519.SeedSize, got)
+	sealer, err := ticket.NewSealer(id, keys)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize ticket sealer: %w", err)
 	}
-	return seed, nil
+
+	publicKeys, err := parseTicketSigningPublicKeys(
+		strings.Split(cfgLoader.GetString("TICKET_SIGNNING_PUBLIC_KEYS"), ","),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse ticket signing public keys: %w", err)
+	}
+
+	clockSkew, err := time.ParseDuration(strings.TrimSpace(cfgLoader.GetString("TICKET_CLOCK_SKEW")))
+	if err != nil {
+		return nil, fmt.Errorf("invalid TICKET_CLOCK_SKEW: %w", err)
+	}
+
+	return crypto.NewTicketVerifier(
+		sealer,
+		publicKeys,
+		clockSkew,
+	)
 }
 
-// ParseTicketSigningPublicKeys parses ID:base64(public key) entries for Hub.
-func ParseTicketSigningPublicKeys(entries []string) (map[byte]ed25519.PublicKey, error) {
+// parseTicketSigningPublicKeys parses ID:base64(public key) entries for Hub.
+func parseTicketSigningPublicKeys(entries []string) (map[byte]ed25519.PublicKey, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("ticket verification keys are required")
 	}

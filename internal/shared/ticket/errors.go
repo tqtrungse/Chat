@@ -15,24 +15,12 @@
  * limitations under the License.
  */
 
-package session
+package ticket
 
-// Ticket is the state that used to live in a pending session. It is sealed
-// (AES-GCM) with a cluster-wide key, so any hub can open it.
-type Ticket struct {
-	DeviceID      uint64
-	ExpiresAt     int64
-	Keys          Keys
-	ActivationKey [32]byte
-	IdentityPub   [32]byte
-}
+import "errors"
 
-// Clear erases ticket key material after the ticket is consumed or rejected.
-func (t *Ticket) Clear() {
-	if t == nil {
-		return
-	}
-	t.Keys.Clear()
-	clear(t.ActivationKey[:])
-	clear(t.IdentityPub[:])
-}
+var (
+	ErrTicketInvalid        = errors.New("invalid ticket")
+	ErrTicketBadEntry       = errors.New("bad ticket key entry")
+	ErrTicketSealerRequired = errors.New("ticket sealer is required")
+)

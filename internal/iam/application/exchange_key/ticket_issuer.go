@@ -17,8 +17,8 @@
 
 package exchange_key
 
-import sharedsession "xxx/internal/shared/session"
+import sharedticket "xxx/internal/shared/ticket"
 
 type TicketIssuer interface {
-	Seal(t *sharedsession.Ticket) ([]byte, error)
+	Seal(t *sharedticket.Ticket) ([]byte, error)
 }

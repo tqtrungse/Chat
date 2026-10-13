@@ -15,18 +15,27 @@
  * limitations under the License.
  */
 
-package session
+package crypto
 
 import (
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"time"
+
+	sharedticket "xxx/internal/shared/ticket"
 
 	slicepool "xxx/pkg/pool/slice"
 )
 
+var (
+	ErrTicketPubKeysRequired   = errors.New("ticket verification keys are required")
+	ErrTicketClockSkewRequired = errors.New("ticket clock skew is required")
+	ErrTicketExpired           = errors.New("ticket expired")
+)
+
 type TicketVerifier struct {
-	sealer     *TicketSealer
+	sealer     *sharedticket.Sealer
 	clockSkew  time.Duration
 	publicKeys map[byte]ed25519.PublicKey
 }
@@ -36,12 +45,12 @@ type TicketVerifier struct {
 // ClockSkew is the allowed clock difference between IAM and Hub.
 // Zero disables the allowance.
 func NewTicketVerifier(
-	sealer *TicketSealer,
+	sealer *sharedticket.Sealer,
 	publicKeys map[byte]ed25519.PublicKey,
 	clockSkew time.Duration,
 ) (*TicketVerifier, error) {
 	if sealer == nil {
-		return nil, ErrTicketSealerRequired
+		return nil, sharedticket.ErrTicketSealerRequired
 	}
 
 	if len(publicKeys) == 0 {
@@ -69,35 +78,32 @@ func NewTicketVerifier(
 
 // Open verifies IAM's signature before decrypting.
 // The caller owns the returned ticket and must call Clear when finished.
-func (v *TicketVerifier) Open(
-	deviceID uint64,
-	wire []byte,
-) (*Ticket, error) {
-	if len(wire) != SignedTicketSize || wire[0] != signedTicketVersion {
-		return nil, ErrTicketInvalid
+func (v *TicketVerifier) Open(deviceID uint64, wire []byte) (*sharedticket.Ticket, error) {
+	if len(wire) != sharedticket.SignedSize || wire[0] != sharedticket.SignedVersion {
+		return nil, sharedticket.ErrTicketInvalid
 	}
 
 	publicKey, ok := v.publicKeys[wire[1]]
 	if !ok {
-		return nil, ErrTicketInvalid
+		return nil, sharedticket.ErrTicketInvalid
 	}
 
-	message := ticketSigningMessage(wire[:signedTicketUnsignedSize])
+	message := sharedticket.SigningMessage(wire[:sharedticket.SignedUnsignedSize])
 	success := ed25519.Verify(
 		publicKey,
 		message,
-		wire[signedTicketUnsignedSize:],
+		wire[sharedticket.SignedUnsignedSize:],
 	)
 	clear(message)
 	slicepool.Put(message)
 
 	if !success {
-		return nil, ErrTicketInvalid
+		return nil, sharedticket.ErrTicketInvalid
 	}
 
 	t, err := v.sealer.Open(
 		deviceID,
-		wire[signedTicketHeaderSize:signedTicketUnsignedSize],
+		wire[sharedticket.SignedHeaderSize:sharedticket.SignedUnsignedSize],
 	)
 	if err != nil {
 		return nil, err
@@ -112,9 +118,9 @@ func (v *TicketVerifier) Open(
 
 // CheckExpiry checks only the expiration of an already authenticated ticket.
 // It does not decrypt, verify signatures, mutate or clear the ticket.
-func (v *TicketVerifier) CheckExpiry(t *Ticket, now time.Time) error {
+func (v *TicketVerifier) CheckExpiry(t *sharedticket.Ticket, now time.Time) error {
 	if t == nil {
-		return ErrTicketInvalid
+		return sharedticket.ErrTicketInvalid
 	}
 
 	deadline := time.Unix(t.ExpiresAt, 0).Add(v.clockSkew)

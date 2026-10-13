@@ -21,13 +21,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	iamhttp "xxx/internal/iam/adapter/http"
 	"xxx/internal/iam/application/exchange_key"
 	"xxx/internal/iam/infrastructure/crypto"
 	"xxx/internal/iam/infrastructure/datastore/mysql"
-	sharedsession "xxx/internal/shared/session"
 
 	"xxx/pkg"
 	"xxx/pkg/database/sql"
@@ -132,45 +130,4 @@ func validateHTTPConfig(cfg iamhttp.Config) error {
 		return errors.New("HTTP_SERVER_CERT_FILE and HTTP_SERVER_KEY_FILE are required; IAM serves HTTPS")
 	}
 	return nil
-}
-
-func loadTicketSigner(loader pkg.ConfigLoader) (*sharedsession.TicketSigner, error) {
-	keys, err := sharedsession.ParseTicketEncryptKeys(
-		strings.Split(loader.GetString("TICKET_ENCRYPT_KEYS"), ","),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse ticket encryption keys: %w", err)
-	}
-	defer func() {
-		for _, key := range keys {
-			clear(key)
-		}
-	}()
-
-	sealer, err := sharedsession.NewTicketSealer(
-		loader.GetUint8("TICKET_ENCRYPT_CURRENT_KEY_ID"),
-		keys,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize ticket sealer: %w", err)
-	}
-
-	id := loader.GetUint8("TICKET_SIGNING_KEY_ID")
-	if id == 0 {
-		return nil, errors.New("invalid TICKET_SIGNING_KEY_ID")
-	}
-
-	seed, err := sharedsession.ParseTicketSigningPrivate(
-		strings.TrimSpace(loader.GetString("TICKET_SIGNING_PRIVATE_KEY")),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	signer, err := sharedsession.NewTicketSigner(sealer, id, seed)
-	clear(seed)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize ticket signer: %w", err)
-	}
-	return signer, nil
 }

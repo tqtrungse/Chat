@@ -21,14 +21,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	sharedsession "xxx/internal/shared/session"
+	sharedticket "xxx/internal/shared/ticket"
 )
 
 // pendingActivation is the conn context from OnOpen until activation succeeds
 // or the conn closes. stage is touched only by the event-loop goroutine.
 type pendingActivation struct {
 	owner      *connActivator
-	ticket     *sharedsession.Ticket // verified; holds session keys until activation completes
+	ticket     *sharedticket.Ticket // verified; holds session keys until activation completes
 	transcript [32]byte
 	nonce      [32]byte
 	deadline   time.Time   // proof deadline

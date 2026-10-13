@@ -15,11 +15,13 @@
  * limitations under the License.
  */
 
-package session
+package ticket
 
 import (
 	"testing"
 	"time"
+
+	"xxx/internal/shared/session"
 
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +31,7 @@ func TestTicket_Clear_ErasesAllKeyMaterial(t *testing.T) {
 	deviceID, expiresAt := ticket.DeviceID, ticket.ExpiresAt
 	ticket.Clear()
 
-	require.Equal(t, Keys{}, ticket.Keys)
+	require.Equal(t, session.Keys{}, ticket.Keys)
 	require.Equal(t, [32]byte{}, ticket.ActivationKey)
 	require.Equal(t, [32]byte{}, ticket.IdentityPub)
 	require.Equal(t, deviceID, ticket.DeviceID)
@@ -49,12 +51,11 @@ func TestTicket_Clear_DoesNotEraseCopiedSessionKeys(t *testing.T) {
 	ticket := newTicketTestTicket(t, 42, ticketExpiry(time.Hour))
 	copiedKeys := ticket.Keys
 	expectedKeys := copiedKeys
-	require.NotEqual(t, Keys{}, copiedKeys)
+	require.NotEqual(t, session.Keys{}, copiedKeys)
 
 	ticket.Clear()
-	require.Equal(t, Keys{}, ticket.Keys)
-	require.Equal(t, expectedKeys, copiedKeys,
-		"a session owns the directional keys copied by value")
+	require.Equal(t, session.Keys{}, ticket.Keys)
+	require.Equal(t, expectedKeys, copiedKeys, "a session owns the directional keys copied by value")
 	clear(copiedKeys.RecvEnc[:])
 	clear(copiedKeys.SendEnc[:])
 	clear(copiedKeys.RecvMac[:])

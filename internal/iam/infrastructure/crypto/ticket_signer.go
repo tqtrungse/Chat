@@ -15,37 +15,30 @@
  * limitations under the License.
  */
 
-package session
+package crypto
 
 import (
 	"crypto/ed25519"
 	"fmt"
 
+	sharedticket "xxx/internal/shared/ticket"
+
 	slicepool "xxx/pkg/pool/slice"
 )
 
-const (
-	signedTicketVersion      byte = 2
-	signedTicketHeaderSize        = 2
-	signedTicketUnsignedSize      = signedTicketHeaderSize + ticketSize
-	SignedTicketSize              = signedTicketUnsignedSize + ed25519.SignatureSize
-
-	ticketSigningDomain = "xxx/iam/ticket-signature/v1\x00"
-)
-
 type TicketSigner struct {
-	sealer     *TicketSealer
+	sealer     *sharedticket.Sealer
 	keyID      byte
 	privateKey ed25519.PrivateKey
 }
 
 func NewTicketSigner(
-	sealer *TicketSealer,
+	sealer *sharedticket.Sealer,
 	keyID byte,
 	seed []byte,
 ) (*TicketSigner, error) {
 	if sealer == nil {
-		return nil, ErrTicketSealerRequired
+		return nil, sharedticket.ErrTicketSealerRequired
 	}
 
 	if len(seed) != ed25519.SeedSize {
@@ -60,9 +53,9 @@ func NewTicketSigner(
 }
 
 // Seal encrypts the payload and signs the complete unsigned envelope.
-func (s *TicketSigner) Seal(t *Ticket) ([]byte, error) {
+func (s *TicketSigner) Seal(t *sharedticket.Ticket) ([]byte, error) {
 	if t == nil {
-		return nil, ErrTicketInvalid
+		return nil, sharedticket.ErrTicketInvalid
 	}
 
 	sealed, err := s.sealer.Seal(t)
@@ -70,23 +63,15 @@ func (s *TicketSigner) Seal(t *Ticket) ([]byte, error) {
 		return nil, err
 	}
 
-	out := make([]byte, SignedTicketSize)
-	out[0], out[1] = signedTicketVersion, s.keyID
-	copy(out[signedTicketHeaderSize:signedTicketUnsignedSize], sealed)
+	out := make([]byte, sharedticket.SignedSize)
+	out[0], out[1] = sharedticket.SignedVersion, s.keyID
+	copy(out[sharedticket.SignedHeaderSize:sharedticket.SignedUnsignedSize], sealed)
 
-	message := ticketSigningMessage(out[:signedTicketUnsignedSize])
+	message := sharedticket.SigningMessage(out[:sharedticket.SignedUnsignedSize])
 	signature := ed25519.Sign(s.privateKey, message)
 	clear(message)
 	slicepool.Put(message)
-	copy(out[signedTicketUnsignedSize:], signature)
+	copy(out[sharedticket.SignedUnsignedSize:], signature)
 
 	return out, nil
-}
-
-func ticketSigningMessage(unsigned []byte) []byte {
-	n := len(ticketSigningDomain)
-	message := slicepool.Get(n + len(unsigned))
-	copy(message[:n], ticketSigningDomain)
-	copy(message[n:], unsigned)
-	return message
 }

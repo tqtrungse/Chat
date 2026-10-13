@@ -20,10 +20,10 @@ package connection
 import (
 	"time"
 
-	sharedsession "xxx/internal/shared/session"
+	sharedticket "xxx/internal/shared/ticket"
 )
 
 type TicketVerifier interface {
-	Open(deviceID uint64, ticket []byte) (*sharedsession.Ticket, error)
-	CheckExpiry(ticket *sharedsession.Ticket, now time.Time) error
+	Open(deviceID uint64, ticket []byte) (*sharedticket.Ticket, error)
+	CheckExpiry(ticket *sharedticket.Ticket, now time.Time) error
 }

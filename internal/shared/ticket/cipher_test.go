@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package session
+package ticket
 
 import (
 	"bytes"
@@ -45,14 +45,14 @@ func ticketTestKey(t *testing.T) []byte {
 
 // newTicketTestSealer builds a sealer whose current key is curID, holding one
 // fresh random key for every id in ids.
-func newTicketTestSealer(t *testing.T, curID byte, ids ...byte) *TicketSealer {
+func newTicketTestSealer(t *testing.T, curID byte, ids ...byte) *Sealer {
 	t.Helper()
 
 	keys := make(map[byte][]byte, len(ids))
 	for _, id := range ids {
 		keys[id] = ticketTestKey(t)
 	}
-	s, err := NewTicketSealer(curID, keys)
+	s, err := NewSealer(curID, keys)
 	require.NoError(t, err)
 	return s
 }
@@ -87,7 +87,7 @@ func ticketExpiry(d time.Duration) int64 {
 // error and does not hand back a partially filled ticket.
 func requireTicketOpenFails(
 	t *testing.T,
-	s *TicketSealer,
+	s *Sealer,
 	deviceID uint64,
 	tk []byte,
 	want error,
@@ -106,14 +106,14 @@ func requireTicketOpenFails(
 
 func TestTicket_RoundTripAndTamper(t *testing.T) {
 	key := ticketTestKey(t)
-	s, err := NewTicketSealer(1, map[byte][]byte{1: key})
+	s, err := NewSealer(1, map[byte][]byte{1: key})
 	require.NoError(t, err)
 
 	in := newTicketTestTicket(t, 42, time.Now().Add(20*time.Second).Unix())
 
 	tk, err := s.Seal(in)
 	require.NoError(t, err)
-	require.Len(t, tk, ticketSize)
+	require.Len(t, tk, size)
 
 	out, err := s.Open(42, tk)
 	require.NoError(t, err)
@@ -178,7 +178,7 @@ func TestTicket_Open_RejectsWrongLength(t *testing.T) {
 	require.NoError(t, err)
 
 	requireTicketOpenFails(t, s, 42, nil, ErrTicketInvalid)
-	for n := range ticketSize {
+	for n := range size {
 		requireTicketOpenFails(t, s, 42, tk[:n], ErrTicketInvalid, "truncated to %d", n)
 	}
 	requireTicketOpenFails(t, s, 42, append(bytes.Clone(tk), 0), ErrTicketInvalid, "one extra byte")
@@ -240,20 +240,20 @@ func TestTicket_Open_AuthenticatesExpiredPayload(t *testing.T) {
 // explicit check can reject it.
 func TestTicket_Open_RejectsPlaintextDeviceIDMismatch(t *testing.T) {
 	key := ticketTestKey(t)
-	s, err := NewTicketSealer(1, map[byte][]byte{1: key})
+	s, err := NewSealer(1, map[byte][]byte{1: key})
 	require.NoError(t, err)
 	aead := s.aeads[1]
 
 	in := newTicketTestTicket(t, 7, ticketExpiry(20*time.Second))
-	var pt [ticketPlainSize]byte
-	marshalTicket(pt[:], in)
+	var pt [plainSize]byte
+	marshal(pt[:], in)
 
-	out := make([]byte, ticketHeader, ticketSize)
+	out := make([]byte, header, size)
 	out[0] = 1
-	_, err = rand.Read(out[1:ticketHeader])
+	_, err = rand.Read(out[1:header])
 	require.NoError(t, err)
-	tk := aead.Seal(out, out[1:ticketHeader], pt[:], ticketAAD(8))
-	require.Len(t, tk, ticketSize)
+	tk := aead.Seal(out, out[1:header], pt[:], aad(8))
+	require.Len(t, tk, size)
 
 	requireTicketOpenFails(t, s, 8, tk, ErrTicketInvalid)
 }
@@ -309,7 +309,7 @@ func TestTicket_Seal_UsesFreshNonce(t *testing.T) {
 		tk, err := s.Seal(in)
 		require.NoError(t, err)
 
-		nonce := string(tk[1:ticketHeader])
+		nonce := string(tk[1:header])
 		_, dup := seen[nonce]
 		require.False(t, dup, "nonce reused on call %d", i)
 		seen[nonce] = struct{}{}
@@ -358,68 +358,9 @@ func TestTicket_SizeConstants(t *testing.T) {
 	aead := s.aeads[1]
 
 	require.Equal(t, 16, aead.Overhead(), "AES ticket uses a 16-byte GCM tag")
-	require.Equal(t, ticketHeader-1, aead.NonceSize(), "header must hold keyID + a full GCM nonce")
-	require.Equal(t, 208, ticketPlainSize)
-	require.Equal(t, 237, ticketSize)
-}
-
-// Pin the plaintext layout shared by IAM and Hub across deployments.
-func TestTicket_MarshalLayout(t *testing.T) {
-	in := &Ticket{DeviceID: 0x0102030405060708, ExpiresAt: 0x1112131415161718}
-	fill := func(dst []byte, v byte) {
-		for i := range dst {
-			dst[i] = v
-		}
-	}
-	fill(in.Keys.RecvEnc[:], 0xA1)
-	fill(in.Keys.SendEnc[:], 0xA2)
-	fill(in.Keys.RecvMac[:], 0xA3)
-	fill(in.Keys.SendMac[:], 0xA4)
-	fill(in.ActivationKey[:], 0xA5)
-	fill(in.IdentityPub[:], 0xA6)
-
-	var b [ticketPlainSize]byte
-	marshalTicket(b[:], in)
-
-	require.Equal(t, []byte{0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01}, b[0:8], "DeviceID, little-endian")
-	require.Equal(t, []byte{0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11}, b[8:16], "ExpiresAt, little-endian")
-	require.Equal(t, bytes.Repeat([]byte{0xA1}, 32), b[16:48], "RecvEnc")
-	require.Equal(t, bytes.Repeat([]byte{0xA2}, 32), b[48:80], "SendEnc")
-	require.Equal(t, bytes.Repeat([]byte{0xA3}, 32), b[80:112], "RecvMac")
-	require.Equal(t, bytes.Repeat([]byte{0xA4}, 32), b[112:144], "SendMac")
-	require.Equal(t, bytes.Repeat([]byte{0xA5}, 32), b[144:176], "ActivationKey")
-	require.Equal(t, bytes.Repeat([]byte{0xA6}, 32), b[176:208], "IdentityPub")
-
-	require.Equal(t, in, unmarshalTicket(b[:]))
-}
-
-func TestTicket_MarshalRoundTripExtremes(t *testing.T) {
-	cases := []struct {
-		name      string
-		deviceID  uint64
-		expiresAt int64
-	}{
-		{"zero", 0, 0},
-		{"negative expiry", 1, -1},
-		{"min int64 expiry", 1, math.MinInt64},
-		{"max values", math.MaxUint64, math.MaxInt64},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			in := newTicketTestTicket(t, tc.deviceID, tc.expiresAt)
-
-			var b [ticketPlainSize]byte
-			marshalTicket(b[:], in)
-			require.Equal(t, in, unmarshalTicket(b[:]))
-		})
-	}
-}
-
-func TestTicket_AADUsesDeviceID(t *testing.T) {
-	require.Equal(t,
-		[]byte{0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01},
-		ticketAAD(0x0102030405060708),
-	)
+	require.Equal(t, header-1, aead.NonceSize(), "header must hold keyID + a full GCM nonce")
+	require.Equal(t, 208, plainSize)
+	require.Equal(t, 237, size)
 }
 
 // --------------------------------------------------------------
@@ -428,8 +369,8 @@ func TestTicket_AADUsesDeviceID(t *testing.T) {
 
 func TestTicket_KeyRotation(t *testing.T) {
 	k1, k2 := ticketTestKey(t), ticketTestKey(t)
-	mk := func(cur byte, keys map[byte][]byte) *TicketSealer {
-		s, err := NewTicketSealer(cur, keys)
+	mk := func(cur byte, keys map[byte][]byte) *Sealer {
+		s, err := NewSealer(cur, keys)
 		require.NoError(t, err)
 		return s
 	}
@@ -478,10 +419,10 @@ func TestTicket_Open_RejectsTicketSealedUnderDifferentKey(t *testing.T) {
 
 // The sealer builds its AEADs up front, so callers may wipe their key
 // material afterward without breaking it.
-func TestNewTicketSealer_DoesNotRetainCallerKeys(t *testing.T) {
+func TestNewSealer_DoesNotRetainCallerKeys(t *testing.T) {
 	key := ticketTestKey(t)
 	keys := map[byte][]byte{1: key}
-	s, err := NewTicketSealer(1, keys)
+	s, err := NewSealer(1, keys)
 	require.NoError(t, err)
 
 	in := newTicketTestTicket(t, 42, ticketExpiry(20*time.Second))
@@ -502,7 +443,7 @@ func TestNewTicketSealer_DoesNotRetainCallerKeys(t *testing.T) {
 	require.Equal(t, in, out)
 }
 
-func TestNewTicketSealer_Validation(t *testing.T) {
+func TestNewSealer_Validation(t *testing.T) {
 	key := func(n int) []byte { return make([]byte, n) }
 
 	cases := []struct {
@@ -529,7 +470,7 @@ func TestNewTicketSealer_Validation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := NewTicketSealer(tc.cur, tc.keys)
+			s, err := NewSealer(tc.cur, tc.keys)
 			if tc.wantErr {
 				require.Error(t, err)
 				require.Nil(t, s)

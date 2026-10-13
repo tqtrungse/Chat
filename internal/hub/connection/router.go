@@ -29,6 +29,7 @@ import (
 	"xxx/internal/hub/protocol"
 	shareddevice "xxx/internal/shared/device"
 	sharedsession "xxx/internal/shared/session"
+	sharedticket "xxx/internal/shared/ticket"
 
 	"xxx/pkg"
 	"xxx/pkg/collection/swiss"
@@ -131,16 +132,16 @@ func NewRouter(
 // of both values and must clear them after this method returns.
 func (r *Router) ActivateConn(
 	ctx context.Context,
-	t *sharedsession.Ticket,
+	ticket *sharedticket.Ticket,
 	keys *sharedsession.Keys,
 	conn nio.Conn,
 	callback func(id shareddevice.ID),
 ) error {
-	if err := r.ticketVerifier.CheckExpiry(t, time.Now()); err != nil {
+	if err := r.ticketVerifier.CheckExpiry(ticket, time.Now()); err != nil {
 		return err
 	}
 
-	deviceID := shareddevice.ID(t.DeviceID)
+	deviceID := shareddevice.ID(ticket.DeviceID)
 
 	// Reserve a slot first; give it back if we end up replacing a conn.
 	meta := r.meta.Add(1)
@@ -206,7 +207,7 @@ func (r *Router) ActivateConn(
 // PrepareActivation opens the sealed ticket and verifies the device signature,
 // but does not register the connection. The caller must clear the returned
 // ticket and prove possession of its activation key before activating.
-func (r *Router) PrepareActivation(token, ticket, sign []byte) (*sharedsession.Ticket, error) {
+func (r *Router) PrepareActivation(token, ticket, sign []byte) (*sharedticket.Ticket, error) {
 	if len(token) != 8 {
 		return nil, ErrActivationInvalid
 	}

@@ -24,7 +24,7 @@ import (
 	"xxx/api/iam/v1/json"
 	"xxx/internal/iam/domain/device"
 	shareddevice "xxx/internal/shared/device"
-	sharedsession "xxx/internal/shared/session"
+	sharedticket "xxx/internal/shared/ticket"
 
 	"xxx/pkg/database/sql"
 )
@@ -100,7 +100,7 @@ func (ke *keyExchanger) Exchange(
 		return nil, err
 	}
 
-	t := &sharedsession.Ticket{
+	t := &sharedticket.Ticket{
 		DeviceID:      req.DeviceID,
 		ExpiresAt:     time.Now().Add(ticketTTL).Unix(),
 		Keys:          derived.Session,
