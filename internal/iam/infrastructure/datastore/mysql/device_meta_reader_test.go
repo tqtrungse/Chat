@@ -23,13 +23,13 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"xxx/internal/iam/domain/device"
 
 	"xxx/internal/iam/application/exchange_key"
+	"xxx/internal/iam/domain/device"
 	shareddevice "xxx/internal/shared/device"
 
 	"xxx/pkg/database/sql"
-	"xxx/pkg/database/sql/mock"
+	"xxx/pkg/database/sql/mocks"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/go-cmp/cmp"
@@ -137,15 +137,15 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 
 	for description, tc := range testCases {
 		t.Run(description, func(t *testing.T) {
-			db, sqlMock := mock.NewMysql(t)
-			mock.Setup(t, db)
+			db, sqlMock := mocks.NewMysql(t)
+			mocks.Setup(t, db)
 
 			f := &fields{
 				ctx:     t.Context(),
 				sqlMock: sqlMock,
 			}
 
-			doneSqlMock := mock.ExpectSqlMock(
+			doneSqlMock := mocks.ExpectSqlMock(
 				t,
 				f.sqlMock,
 				func() {
