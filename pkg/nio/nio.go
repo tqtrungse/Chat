@@ -36,7 +36,6 @@ import (
 	"xxx/pkg/hash"
 	errorx "xxx/pkg/nio/error"
 	"xxx/pkg/nio/socket"
-	workerpool "xxx/pkg/pool/worker"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -54,9 +53,6 @@ const (
 
 	// Shutdown shutdowns the engine.
 	Shutdown
-
-	// defaultNumberWorkers sets up the capacity of worker pool, 256 * 1024. (by ants)
-	defaultNumberWorkers = 8192
 )
 
 var (
@@ -67,8 +63,6 @@ var (
 
 	// MaxStreamBufferCap is the default buffer size for each stream-oriented connection(TCP/Unix).
 	MaxStreamBufferCap = 64 * 1024 // 64KB
-
-	defaultWorkerPool, closePool = workerpool.New(workerpool.Config{NumWorkers: defaultNumberWorkers}, nil)
 )
 
 type (
@@ -118,11 +112,13 @@ type (
 	// EventLoop provides a set of methods for manipulating the event-loop.
 	EventLoop interface {
 		// Register connects to the given address and registers the connection to the current event-loop,
-		// it's concurrency-safe.
+		// it's concurrency-safe. The context cancels dialing and pending registration;
+		// canceling it after a successful result does not close the registered connection.
 		Register(ctx context.Context, addr net.Addr) (<-chan RegisteredResult, error)
 
 		// Enroll is like Register, but it accepts an established net.Conn instead of a net.Addr,
-		// it's concurrency-safe.
+		// it's concurrency-safe. Once accepted, it takes ownership of c and closes
+		// the original net.Conn after duplicating its fd or if registration fails.
 		Enroll(ctx context.Context, c net.Conn) (<-chan RegisteredResult, error)
 
 		// Execute will execute the given runnable on the event-loop at some time in the future,
@@ -448,7 +444,6 @@ func (e Engine) Stop(ctx context.Context) error {
 
 	ticker := time.NewTicker(shutdownPollInterval)
 	defer ticker.Stop()
-	defer closePool()
 	for {
 		if e.eng.isShutdown() {
 			return nil

@@ -28,9 +28,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"xxx/pkg/log"
 
-	workerpool "xxx/pkg/pool/worker"
+	"xxx/pkg/log"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -162,11 +161,10 @@ func (s *testMcastServer) OnTick() (delay time.Duration, action Action) {
 	if atomic.CompareAndSwapInt32(&s.started, 0, 1) {
 		for i := 0; i < s.nclients; i++ {
 			atomic.AddInt32(&s.active, 1)
-			err := defaultWorkerPool.Submit(func(_ *workerpool.Context) {
+			go func() {
 				defer atomic.AddInt32(&s.active, -1)
 				s.startMcastClient()
-			})
-			assert.NoError(s.t, err)
+			}()
 		}
 	}
 	if atomic.LoadInt32(&s.active) == 0 {

@@ -28,9 +28,7 @@ import (
 	"io"
 	"net"
 	"os"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"xxx/pkg/collection/swiss"
@@ -39,8 +37,6 @@ import (
 	nio "xxx/pkg/nio/io"
 	"xxx/pkg/nio/netpoll"
 	"xxx/pkg/nio/queue"
-	"xxx/pkg/nio/socket"
-	workerpool "xxx/pkg/pool/worker"
 
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
@@ -66,7 +62,7 @@ func (el *eventloop) Register(ctx context.Context, addr net.Addr) (<-chan Regist
 	if addr == nil {
 		return nil, errorx.ErrInvalidNetworkAddress
 	}
-	return el.enroll(nil, addr, FromContext(ctx))
+	return el.enroll(ctx, nil, addr)
 }
 
 func (el *eventloop) Enroll(ctx context.Context, c net.Conn) (<-chan RegisteredResult, error) {
@@ -76,7 +72,7 @@ func (el *eventloop) Enroll(ctx context.Context, c net.Conn) (<-chan RegisteredR
 	if c == nil {
 		return nil, errorx.ErrInvalidNetConn
 	}
-	return el.enroll(c, c.RemoteAddr(), FromContext(ctx))
+	return el.enroll(ctx, c, c.RemoteAddr())
 }
 
 func (el *eventloop) Execute(ctx context.Context, runnable RunnableFunc) error {
@@ -115,110 +111,8 @@ func (el *eventloop) closeConns() {
 	})
 }
 
-type connWithCallback struct {
-	c  *conn
-	cb func()
-}
-
-func (el *eventloop) enroll(c net.Conn, addr net.Addr, ctx any) (resCh chan RegisteredResult, err error) {
-	resCh = make(chan RegisteredResult, 1)
-	err = defaultWorkerPool.Submit(func(_ *workerpool.Context) {
-		defer close(resCh)
-
-		var err2 error
-		if c == nil {
-			if c, err2 = net.Dial(addr.Network(), addr.String()); err2 != nil {
-				resCh <- RegisteredResult{Err: err2}
-				return
-			}
-		}
-		defer c.Close() //nolint:errcheck
-
-		sc, ok := c.(syscall.Conn)
-		if !ok {
-			resCh <- RegisteredResult{
-				Err: fmt.Errorf("failed to assert syscall.Conn from net.Conn: %s", addr.String()),
-			}
-			return
-		}
-		rc, err2 := sc.SyscallConn()
-		if err2 != nil {
-			resCh <- RegisteredResult{Err: err2}
-			return
-		}
-
-		var dupFD int
-		err1 := rc.Control(func(fd uintptr) {
-			dupFD, err2 = socket.Dup(int(fd))
-		})
-		if err2 != nil {
-			resCh <- RegisteredResult{Err: err2}
-			return
-		}
-		if err1 != nil {
-			resCh <- RegisteredResult{Err: err1}
-			return
-		}
-
-		var (
-			sockAddr unix.Sockaddr
-			cc       *conn
-		)
-		switch c.(type) {
-		case *net.UnixConn:
-			sockAddr, _, _, err2 = socket.GetUnixSockAddr(c.RemoteAddr().Network(), c.RemoteAddr().String())
-			if err2 != nil {
-				resCh <- RegisteredResult{Err: err2}
-				return
-			}
-			ua := c.LocalAddr().(*net.UnixAddr)
-			ua.Name = c.RemoteAddr().String() + "." + strconv.Itoa(dupFD)
-			cc = newStreamConn("unix", dupFD, el, sockAddr, c.LocalAddr(), c.RemoteAddr())
-		case *net.TCPConn:
-			sockAddr, _, _, _, err2 = socket.GetTCPSockAddr(c.RemoteAddr().Network(), c.RemoteAddr().String())
-			if err2 != nil {
-				resCh <- RegisteredResult{Err: err2}
-				return
-			}
-			cc = newStreamConn("tcp", dupFD, el, sockAddr, c.LocalAddr(), c.RemoteAddr())
-		case *net.UDPConn:
-			sockAddr, _, _, _, err2 = socket.GetUDPSockAddr(c.RemoteAddr().Network(), c.RemoteAddr().String())
-			if err2 != nil {
-				resCh <- RegisteredResult{Err: err2}
-				return
-			}
-			cc = newUDPConn(dupFD, el, c.LocalAddr(), sockAddr, true)
-		default:
-			resCh <- RegisteredResult{Err: fmt.Errorf("unknown type of conn: %T", c)}
-			return
-		}
-
-		cc.SetContext(ctx)
-
-		connOpened := make(chan struct{})
-		ccb := &connWithCallback{c: cc, cb: func() {
-			close(connOpened)
-		}}
-		if err2 = el.poller.Trigger(queue.LowPriority, el.register, ccb); err2 != nil {
-			_ = cc.Close()
-			resCh <- RegisteredResult{Err: err2}
-			return
-		}
-		<-connOpened
-
-		resCh <- RegisteredResult{Conn: cc}
-	})
-	return
-}
-
 func (el *eventloop) register(a any) error {
-	c, ok := a.(*conn)
-	if !ok {
-		ccb := a.(*connWithCallback)
-		c = ccb.c
-		defer ccb.cb()
-	}
-	return el.register0(c)
+	return el.register0(a.(*conn))
 }
 
 func (el *eventloop) register0(c *conn) error {

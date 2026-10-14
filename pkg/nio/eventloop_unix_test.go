@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"xxx/pkg/log"
-	workerpool "xxx/pkg/pool/worker"
 
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/sys/unix"
@@ -119,7 +118,7 @@ func benchServeGC(b *testing.B, network, addr string, async bool, elNum int, ini
 	nowEventLoopInitConn = initConnCount
 	logger, closeLogger := log.NewLogger(nil)
 	defer func() { _ = closeLogger() }()
-	_ = defaultWorkerPool.Submit(func(_ *workerpool.Context) {
+	go func() {
 		err := Run(ts,
 			network+"://"+addr,
 			WithLockOSThread(async),
@@ -130,7 +129,7 @@ func benchServeGC(b *testing.B, network, addr string, async bool, elNum int, ini
 		)
 		assert.NoError(b, err)
 		nowEventLoopInitConn = 0
-	})
+	}()
 	<-ts.initOk
 	return ts
 }
@@ -149,12 +148,12 @@ type benchmarkServerGC struct {
 
 func (s *benchmarkServerGC) OnBoot(eng Engine) (action Action) {
 	s.eng = eng
-	_ = defaultWorkerPool.Submit(func(_ *workerpool.Context) {
+	go func() {
 		for s.eng.eng.eventLoops.len() != s.elNum || s.eng.CountConnections() != s.elNum*int(s.initConnCount) {
 			time.Sleep(time.Millisecond)
 		}
 		close(s.initOk)
-	})
+	}()
 	return
 }
 
@@ -279,10 +278,7 @@ func (s *testServerGC) OnBoot(eng Engine) (action Action) {
 	if testBigGC {
 		gcSecs = 10
 	}
-	err := defaultWorkerPool.Submit(func(_ *workerpool.Context) {
-		s.GC(gcSecs)
-	})
-	assert.NoError(s.tester, err)
+	go s.GC(gcSecs)
 
 	return
 }
