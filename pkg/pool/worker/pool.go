@@ -20,9 +20,11 @@ import (
 	"errors"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"xxx/pkg"
+	"xxx/pkg/backoff"
 )
 
 var (
@@ -30,6 +32,8 @@ var (
 	ErrPoolClosed = errors.New("worker: pool is closed")
 	ErrTaskNil    = errors.New("task is nil")
 )
+
+const closedBit = uint64(1) << 63
 
 // Pool is a work-stealing thread pool built on top of local
 // (per-worker run queue — local_queue.go) and elastic
@@ -42,9 +46,10 @@ type Pool struct {
 	globalBatchSize     uint32
 	_                   [pkg.CacheLineSize - 2*pkg.PtrSize - unsafe.Sizeof([]*worker{}) - 8]byte
 
-	shutdownMu sync.RWMutex
-	closed     bool
-	_          [pkg.CacheLineSize - unsafe.Sizeof(sync.Mutex{}) - 1]byte
+	// The closed bit and number of active Submit calls share one word so
+	// admission cannot race shutdown's check for outstanding submitters.
+	submitState atomic.Uint64
+	_           [pkg.CacheLineSize - unsafe.Sizeof(atomic.Uint64{})]byte
 
 	tasksWg   sync.WaitGroup // outstanding submitted-or-spawned-but-unfinished tasks
 	workersWg sync.WaitGroup // running worker goroutines, for close to join
@@ -120,11 +125,19 @@ func (p *Pool) Submit(task Task) error {
 		return ErrTaskNil
 	}
 
-	p.shutdownMu.RLock()
-	defer p.shutdownMu.RUnlock()
-	if p.closed {
+	// Fast rejection avoids modifying the shared counter after shutdown.
+	if p.submitState.Load()&closedBit != 0 {
 		return ErrPoolClosed
 	}
+	state := p.submitState.Add(1)
+	defer p.submitState.Add(^uint64(0))
+	// Check the result of Add, not just the earlier Load: close may have
+	// set the bit in between. Such a caller must not add or publish a task,
+	// even if shutdown has already observed zero active submitters.
+	if state&closedBit != 0 {
+		return ErrPoolClosed
+	}
+
 	p.tasksWg.Add(1)
 	p.global.Push(task)
 	p.wake()
@@ -150,16 +163,18 @@ func (p *Pool) wake() {
 }
 
 func (p *Pool) close() {
-	p.shutdownMu.Lock()
-	if p.closed {
-		p.shutdownMu.Unlock()
-
+	if p.submitState.Or(closedBit)&closedBit != 0 {
 		// a concurrent first caller may still be shutting down
 		p.workersWg.Wait()
 		return
 	}
-	p.closed = true
-	p.shutdownMu.Unlock()
+
+	// All admitted Submit calls must finish Add/Push before Wait can
+	// observe a zero task count. No new Submit can pass the closed bit.
+	var bc backoff.Cpu
+	for p.submitState.Load()&^closedBit != 0 {
+		bc.Snooze()
+	}
 
 	// every submitted/spawned task has actually run, not just been queued
 	p.tasksWg.Wait()

@@ -455,19 +455,30 @@ func TestPool_Concurrent_SubmitAndClose(t *testing.T) {
 		)
 
 		var executed atomic.Int64
+		var accepted atomic.Int64
+		started := make(chan struct{}, 1)
 		var wg sync.WaitGroup
-		wg.Go(func() {
-			for range 200 {
-				err := p.Submit(func(ctx *Context) { executed.Add(1) })
-				if err != nil && !errors.Is(err, ErrPoolClosed) {
-					t.Errorf("round %d: unexpected Submit error: %v", round, err)
+		for range 8 {
+			wg.Go(func() {
+				for range 100 {
+					err := p.Submit(func(ctx *Context) { executed.Add(1) })
+					if err == nil {
+						accepted.Add(1)
+						select {
+						case started <- struct{}{}:
+						default:
+						}
+					} else if !errors.Is(err, ErrPoolClosed) {
+						t.Errorf("round %d: unexpected Submit error: %v", round, err)
+					}
 				}
-			}
-		})
+			})
+		}
 
-		closePool() // races the goroutine above by construction
+		<-started
+		closePool() // race shutdown against active producers
 		wg.Wait()
-		_ = executed.Load() // no assertion on the exact count: outcome depends on timing
+		require.Equal(t, accepted.Load(), executed.Load(), "round %d: accepted tasks must finish", round)
 	}
 }
 
