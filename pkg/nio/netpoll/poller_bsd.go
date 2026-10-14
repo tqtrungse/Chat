@@ -156,6 +156,10 @@ func (p *Poller) Trigger(priority queue.EventPriority, fn queue.Func, param any)
 	}
 	if p.wakeupCall.CompareAndSwap(0, 1) {
 		err = p.wakePoller()
+		if err != nil {
+			// A failed notification must allow the next Trigger to retry.
+			p.wakeupCall.Store(0)
+		}
 	}
 	return os.NewSyscallError("kevent | write", err)
 }
@@ -220,6 +224,7 @@ func (p *Poller) Polling() error {
 			p.wakeupCall.Store(0)
 			if (!p.asyncTaskQueue.IsEmpty() || !p.urgentAsyncTaskQueue.IsEmpty()) && p.wakeupCall.CompareAndSwap(0, 1) {
 				if err = p.wakePoller(); err != nil {
+					p.wakeupCall.Store(0)
 					doChores = true
 				}
 			}

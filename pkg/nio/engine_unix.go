@@ -34,17 +34,19 @@ import (
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 )
 
 type engine struct {
-	listeners    *swiss.Table[int, *listener] // listeners for accepting incoming connections
-	opts         *Options                     // options with engine
-	ingress      *eventloop                   // main event-loop that monitors all listeners
-	eventLoops   loadBalancer                 // event-loops for handling events
-	inShutdown   atomic.Bool                  // whether the engine is in shutdown
-	turnOff      context.CancelFunc
-	eventHandler EventHandler // user eventHandler
-	concurrency  struct {
+	listeners         *swiss.Table[int, *listener] // listeners for accepting incoming connections
+	opts              *Options                     // options with engine
+	ingress           *eventloop                   // main event-loop that monitors all listeners
+	eventLoops        loadBalancer                 // event-loops for handling events
+	inShutdown        atomic.Bool                  // whether the engine is in shutdown
+	turnOff           context.CancelFunc
+	eventHandler      EventHandler        // user eventHandler
+	registrationSlots *semaphore.Weighted // shared by all event loops; limits in-flight registrations
+	concurrency       struct {
 		*errgroup.Group
 
 		ctx context.Context

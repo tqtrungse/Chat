@@ -52,6 +52,9 @@ var (
 	ErrInvalidNetworkAddress = errors.New("nio: invalid network address")
 	// ErrInvalidNetConn occurs when trying to do something with an empty net.Conn.
 	ErrInvalidNetConn = errors.New("nio: the net.Conn is empty")
+	// ErrTooManyPendingRegistrations occurs when the engine's registration slots are full.
+	// The request was not accepted, so an Enroll caller still owns its net.Conn.
+	ErrTooManyPendingRegistrations = errors.New("nio: too many pending connection registrations")
 	// ErrNilRunnable occurs when trying to execute a nil runnable.
 	ErrNilRunnable = errors.New("nio: nil runnable is not allowed")
 	// ErrNilLogger occurs when missing set a logger.

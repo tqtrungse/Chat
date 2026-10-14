@@ -24,12 +24,14 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	errorx "xxx/pkg/nio/error"
 	"xxx/pkg/nio/queue"
 	"xxx/pkg/nio/socket"
 
+	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 )
 
@@ -46,14 +48,30 @@ type connRegistration struct {
 	completed   bool
 	stopEngine  func() bool
 	stopContext func() bool
+	// Preparation and completion each hold a reference. A callback that claims
+	// the fd holds another until it finishes. Cancellation can publish its
+	// result early, but the semaphore slot remains held until all work ends.
+	workRefs atomic.Int32
 }
 
 func (el *eventloop) enroll(ctx context.Context, c net.Conn, addr net.Addr) (<-chan RegisteredResult, error) {
+	r, err := el.newConnRegistration(ctx)
+	if err != nil {
+		return nil, err
+	}
+	go r.prepare(c, addr, new(net.Dialer).DialContext)
+	return r.result, nil
+}
+
+func (el *eventloop) newConnRegistration(ctx context.Context) (*connRegistration, error) {
 	if el.engine.concurrency.ctx.Err() != nil {
 		return nil, errorx.ErrEngineInShutdown
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if !el.engine.registrationSlots.TryAcquire(1) {
+		return nil, errorx.ErrTooManyPendingRegistrations
 	}
 
 	dialCtx, cancel := context.WithCancel(ctx)
@@ -63,6 +81,7 @@ func (el *eventloop) enroll(ctx context.Context, c net.Conn, addr net.Addr) (<-c
 		cancel: cancel,
 		result: make(chan RegisteredResult, 1),
 	}
+	r.workRefs.Store(2)
 
 	// Initialize both hooks while holding mu: an already canceled context can
 	// start its callback before AfterFunc returns.
@@ -75,8 +94,7 @@ func (el *eventloop) enroll(ctx context.Context, c net.Conn, addr net.Addr) (<-c
 	})
 	r.mu.Unlock()
 
-	go r.prepare(c, addr)
-	return r.result, nil
+	return r, nil
 }
 
 func (r *connRegistration) err() error {
@@ -108,6 +126,7 @@ func (r *connRegistration) complete(c *conn, err error) bool {
 	if pending != nil {
 		closeUnregisteredConn(pending)
 	}
+	r.finishWork()
 	result := RegisteredResult{Err: err}
 	if err == nil {
 		result.Conn = c
@@ -117,7 +136,10 @@ func (r *connRegistration) complete(c *conn, err error) bool {
 	return err == nil
 }
 
-func (r *connRegistration) prepare(c net.Conn, addr net.Addr) {
+func (r *connRegistration) prepare(c net.Conn, addr net.Addr, dial func(context.Context, string, string) (net.Conn, error)) {
+	// Run after closing the original net.Conn, including when cancellation
+	// has already published a result while dialing or duplicating the fd.
+	defer r.finishWork()
 	if c != nil {
 		defer c.Close() //nolint:errcheck
 	}
@@ -127,7 +149,7 @@ func (r *connRegistration) prepare(c net.Conn, addr net.Addr) {
 	}
 	if c == nil {
 		var err error
-		c, err = new(net.Dialer).DialContext(r.ctx, addr.Network(), addr.String())
+		c, err = dial(r.ctx, addr.Network(), addr.String())
 		if err != nil {
 			r.complete(nil, err)
 			return
@@ -165,13 +187,23 @@ func (r *connRegistration) prepare(c net.Conn, addr net.Addr) {
 	// The event loop publishes the result; this goroutine never waits for OnOpen.
 }
 
-func (r *connRegistration) register(any) error {
+func (r *connRegistration) register(any) (err error) {
+	defer func() {
+		if err != nil && !errors.Is(err, context.Canceled) &&
+			!errors.Is(err, context.DeadlineExceeded) &&
+			!errors.Is(err, errorx.ErrEngineInShutdown) &&
+			!errors.Is(err, errorx.ErrEngineShutdown) {
+			r.loop.getLogger().Debug("failed to register connection", zap.Int("event-loop", r.loop.idx), zap.Error(err))
+		}
+	}()
 	r.mu.Lock()
 	if r.completed {
 		r.mu.Unlock()
 		return nil
 	}
 	c := r.pending
+	r.workRefs.Add(1)
+	defer r.finishWork()
 	r.pending = nil // Only the event loop may touch c from this point onward.
 	r.mu.Unlock()
 
@@ -181,7 +213,7 @@ func (r *connRegistration) register(any) error {
 		return nil
 	}
 
-	err := r.loop.register0(c)
+	err = r.loop.register0(c)
 	if err == nil && !c.opened {
 		err = net.ErrClosed // OnOpen rejected the connection with Close.
 	}
@@ -198,6 +230,12 @@ func (r *connRegistration) register(any) error {
 		return r.loop.close(c, r.err())
 	}
 	return nil
+}
+
+func (r *connRegistration) finishWork() {
+	if r.workRefs.Add(-1) == 0 {
+		r.loop.engine.registrationSlots.Release(1)
+	}
 }
 
 func closeUnregisteredConn(c *conn) {

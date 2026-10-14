@@ -174,11 +174,18 @@ func (p *Poller) Trigger(priority queue.EventPriority, fn queue.Func, param any)
 	if p.wakeupCall.CompareAndSwap(0, 1) {
 		for {
 			_, err = unix.Write(p.epa.FD, b)
+			if errors.Is(err, unix.EINTR) {
+				continue
+			}
 			if errors.Is(err, unix.EAGAIN) {
 				_, _ = unix.Read(p.epa.FD, p.efdBuf)
 				continue
 			}
 			break
+		}
+		if err != nil {
+			// A failed notification must allow the next Trigger to retry.
+			p.wakeupCall.Store(0)
 		}
 	}
 	return os.NewSyscallError("write", err)
@@ -243,11 +250,15 @@ func (p *Poller) Polling() error {
 				p.wakeupCall.CompareAndSwap(0, 1) {
 				for {
 					_, err = unix.Write(p.epa.FD, b)
+					if errors.Is(err, unix.EINTR) {
+						continue
+					}
 					if errors.Is(err, unix.EAGAIN) {
 						_, _ = unix.Read(p.epa.FD, p.efdBuf)
 						continue
 					}
 					if err != nil {
+						p.wakeupCall.Store(0)
 						p.logger.Error("failed to notify next round of event-loop for leftover tasks", zap.Error(os.NewSyscallError("write", err)))
 					}
 					break

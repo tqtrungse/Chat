@@ -27,7 +27,6 @@ import (
 	"path"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"xxx/pkg"
@@ -39,6 +38,7 @@ import (
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 )
 
 // Action is an action that occurs after the completion of an event.
@@ -55,9 +55,11 @@ const (
 	Shutdown
 )
 
-var (
-	allEngines sync.Map
+// defaultMaxPendingRegistrations preserves the former pool's concurrency cap.
+// Completed registrations no longer occupy a slot, even while their connections live.
+const defaultMaxPendingRegistrations = 8192
 
+var (
 	// shutdownPollInterval is how often we poll to check whether engine has been shut down during gnet.Stop().
 	shutdownPollInterval = 500 * time.Millisecond
 
@@ -114,6 +116,8 @@ type (
 		// Register connects to the given address and registers the connection to the current event-loop,
 		// it's concurrency-safe. The context cancels dialing and pending registration;
 		// canceling it after a successful result does not close the registered connection.
+		// At most 8192 registrations may be in flight per engine; overload returns
+		// ErrTooManyPendingRegistrations synchronously without starting a goroutine.
 		Register(ctx context.Context, addr net.Addr) (<-chan RegisteredResult, error)
 
 		// Enroll is like Register, but it accepts an established net.Conn instead of a net.Addr,
@@ -690,10 +694,11 @@ func run(eventHandler EventHandler, listeners []*listener, options *Options, add
 	rootCtx, shutdown := context.WithCancel(context.Background())
 	eg, ctx := errgroup.WithContext(rootCtx)
 	eng := engine{
-		listeners:    lns,
-		opts:         options,
-		turnOff:      shutdown,
-		eventHandler: eventHandler,
+		listeners:         lns,
+		opts:              options,
+		turnOff:           shutdown,
+		eventHandler:      eventHandler,
+		registrationSlots: semaphore.NewWeighted(defaultMaxPendingRegistrations),
 		concurrency: struct {
 			*errgroup.Group
 			ctx context.Context
@@ -723,10 +728,6 @@ func run(eventHandler EventHandler, listeners []*listener, options *Options, add
 		return err
 	}
 	defer eng.stop(rootCtx, e)
-
-	for _, addr := range addrs {
-		allEngines.Store(addr, &eng)
-	}
 
 	return nil
 }

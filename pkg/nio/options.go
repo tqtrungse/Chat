@@ -69,8 +69,9 @@ type Options struct {
 	// otherwise, it will run the engine with single thread.
 	NumEventLoop int
 
-	// MaxConnections is set up max accepted connections.
-	// If value <= 0, unlimited.
+	// MaxConnections hints the initial connection-table capacity, distributed
+	// across event loops. Values <= 0 use dynamically growing tables.
+	// It does not enforce an admission limit or bound concurrent Register/Enroll calls.
 	MaxConnections int
 
 	// ReadBufferCap is the maximum number of bytes that can be read from the remote when the readable event comes.
@@ -187,7 +188,7 @@ func WithNumEventLoop(numEventLoop int) Option {
 	}
 }
 
-// WithMaxConnections sets the number of accepted connections.
+// WithMaxConnections sets the initial connection-table capacity hint.
 func WithMaxConnections(maxConnections int) Option {
 	return func(opts *Options) {
 		opts.MaxConnections = maxConnections

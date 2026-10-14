@@ -31,9 +31,16 @@ type PollAttachment struct {
 }
 
 func convertPollAttachment(ptr unsafe.Pointer, attachment *PollAttachment) {
-	*(**PollAttachment)(ptr) = attachment
+	// epoll_event stores pointer bytes at an address that need not be aligned
+	// for a Go pointer (notably the packed 12-byte event on Linux/amd64).
+	// Copy bytes rather than dereferencing **PollAttachment at that address.
+	copy((*[unsafe.Sizeof(attachment)]byte)(ptr)[:],
+		(*[unsafe.Sizeof(attachment)]byte)(unsafe.Pointer(&attachment))[:])
 }
 
 func restorePollAttachment(ptr unsafe.Pointer) *PollAttachment {
-	return *(**PollAttachment)(ptr)
+	var attachment *PollAttachment
+	copy((*[unsafe.Sizeof(attachment)]byte)(unsafe.Pointer(&attachment))[:],
+		(*[unsafe.Sizeof(attachment)]byte)(ptr)[:])
+	return attachment
 }
