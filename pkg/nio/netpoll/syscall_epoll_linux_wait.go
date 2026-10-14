@@ -1,4 +1,4 @@
-//go:build linux && arm64
+//go:build linux && (amd64 || 386)
 
 /*
  * Copyright (c) 2019 The Gnet Authors. All rights reserved.
@@ -38,7 +38,7 @@ func epollWait(epfd int, events []epollevent, msec int) (int, error) {
 	)
 	if msec == 0 { // non-block system call, use RawSyscall6 to avoid getting preempted by runtime
 		np, _, errno = unix.RawSyscall6(
-			unix.SYS_EPOLL_PWAIT,
+			unix.SYS_EPOLL_WAIT,
 			uintptr(epfd),
 			uintptr(ep),
 			uintptr(len(events)),
@@ -48,7 +48,7 @@ func epollWait(epfd int, events []epollevent, msec int) (int, error) {
 		)
 	} else {
 		np, _, errno = unix.Syscall6(
-			unix.SYS_EPOLL_PWAIT,
+			unix.SYS_EPOLL_WAIT,
 			uintptr(epfd),
 			uintptr(ep),
 			uintptr(len(events)),

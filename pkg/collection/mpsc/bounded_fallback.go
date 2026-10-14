@@ -18,7 +18,7 @@
 
 package mpsc
 
-// Why channel instead of Bounded on Apple Silicon (darwin/arm64)
+// Why channel instead of Bounded on non x86
 //
 // Benchmarked on Apple M4 Pro vs Intel i5-14600KF, BenchmarkBounded_Push,
 // p=8 and p=12 (max cores), no profiling flags (profiling instrumentation

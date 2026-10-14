@@ -1,3 +1,5 @@
+//go:build darwin || dragonfly || freebsd || netbsd || openbsd
+
 /*
  * Copyright (c) 2019 The Gnet Authors. All rights reserved.
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
