@@ -56,7 +56,7 @@ func loadTicketVerifier(cfgLoader pkg.ConfigLoader) (*crypto.TicketVerifier, err
 	}
 
 	publicKeys, err := parseTicketSigningPublicKeys(
-		strings.Split(cfgLoader.GetString("TICKET_SIGNNING_PUBLIC_KEYS"), ","),
+		strings.Split(cfgLoader.GetString("TICKET_SIGNING_PUBLIC_KEYS"), ","),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse ticket signing public keys: %w", err)

@@ -47,7 +47,7 @@ func newHubTicketTestConfig(t *testing.T) (*viper.Viper, *sharedticket.Sealer, e
 	loader := viper.New()
 	loader.Set("TICKET_ENCRYPT_CURRENT_KEY_ID", 1)
 	loader.Set("TICKET_ENCRYPT_KEYS", "1:"+base64.StdEncoding.EncodeToString(aesKey))
-	loader.Set("TICKET_SIGNNING_PUBLIC_KEYS", "7:"+base64.StdEncoding.EncodeToString(privateKey.Public().(ed25519.PublicKey)))
+	loader.Set("TICKET_SIGNING_PUBLIC_KEYS", "7:"+base64.StdEncoding.EncodeToString(privateKey.Public().(ed25519.PublicKey)))
 	loader.Set("TICKET_CLOCK_SKEW", "5s")
 	return loader, sealer, privateKey
 }
@@ -136,7 +136,7 @@ func TestLoadTicketVerifier_RejectsInvalidConfiguration(t *testing.T) {
 		{"malformed clock skew", "TICKET_CLOCK_SKEW", "not-a-duration"},
 		{"negative clock skew", "TICKET_CLOCK_SKEW", "-1ns"},
 		{"zero AES key ID", "TICKET_ENCRYPT_CURRENT_KEY_ID", 0},
-		{"missing public key", "TICKET_SIGNNING_PUBLIC_KEYS", ""},
+		{"missing public key", "TICKET_SIGNING_PUBLIC_KEYS", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			loader, _, _ := newHubTicketTestConfig(t)
@@ -148,7 +148,7 @@ func TestLoadTicketVerifier_RejectsInvalidConfiguration(t *testing.T) {
 	}
 
 	loader, _, _ := newHubTicketTestConfig(t)
-	loader.Set("TICKET_SIGNNING_PUBLIC_KEYS", "7:"+base64.StdEncoding.EncodeToString(make([]byte, ed25519.PublicKeySize-1)))
+	loader.Set("TICKET_SIGNING_PUBLIC_KEYS", "7:"+base64.StdEncoding.EncodeToString(make([]byte, ed25519.PublicKeySize-1)))
 	verifier, err := loadTicketVerifier(loader)
 	require.Error(t, err)
 	require.Nil(t, verifier)

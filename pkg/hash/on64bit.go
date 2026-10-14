@@ -14,6 +14,7 @@
 package hash
 
 import (
+	"math"
 	"math/bits"
 	"unsafe"
 
@@ -78,7 +79,7 @@ func Float32[T ~float32](v T, seed uint64) uint64 {
 	case v != v:
 		return c1 * (c0 ^ seed ^ MakeSeed())
 	default:
-		a := uint64(v)
+		a := math.Float64bits(float64(v))
 		return mix64(m^4, mix64(a^hashkey[1], a^seed^hashkey[0]))
 	}
 }
@@ -93,7 +94,7 @@ func Float64[T ~float64](v T, seed uint64) uint64 {
 	case v != v:
 		return c1 * (c0 ^ seed ^ MakeSeed())
 	default:
-		a := uint64(v)
+		a := math.Float64bits(float64(v))
 		return mix64(m^8, mix64(a^hashkey[1], a^seed^hashkey[0]))
 	}
 }

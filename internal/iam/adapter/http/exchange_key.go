@@ -39,7 +39,7 @@ func (s *Server) exchangeKey(w http.ResponseWriter, r *http.Request) {
 	// 2. Each key: HKDF-Expand(prk, info = "xxx/iam/exchange-key/v1" ‖ deviceID(8 bytes LE) ‖ "/" ‖ label),
 	//    label ∈ c2s/enc, s2c/enc, c2s/mac, s2c/mac.
 	// 3. Client: send using c2s/*, receive using s2c/*.
-	// 4. Within 20 seconds: TCP sends ActiveConnReq{token=deviceID LE, ticket, sign=Ed25519(identityPriv, ticket)}.
+	// 4. Within 15 seconds: TCP sends ActiveConnReq{token=deviceID LE, ticket, sign=Ed25519(identityPriv, ticket)}.
 	// ======================================
 
 	claims, ok := r.Context().Value(claimsContextKey).(*pkg.JWTClaims)
@@ -50,7 +50,7 @@ func (s *Server) exchangeKey(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
 
-	var req  json.ExchangeKeyReq
+	var req json.ExchangeKeyReq
 	err := easyjson.UnmarshalFromReader(r.Body, &req)
 	if err != nil {
 		s.logger.Error("failed to unmarshal request", zap.Error(err))

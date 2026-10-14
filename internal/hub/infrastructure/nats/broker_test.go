@@ -491,7 +491,7 @@ func TestBroker_Resolve_ForwardsToNewHubAndIncrementsHops(t *testing.T) {
 	var got pbpriv.Message
 	err = proto.Unmarshal(natMsg.Data, &got)
 	require.NoError(t, err)
-	require.NotEqual(t, 2, got.Hops)
+	require.NotEqual(t, uint32(2), got.Hops)
 }
 
 func TestBroker_Resolve_FallsBackToOfflineWhenForwardExceedsMaxHops(t *testing.T) {
