@@ -173,7 +173,7 @@ func itod(v uint) string {
 		buf[i] = byte(v%10 + '0')
 		i--
 	}
-	return pkg.BytesToString(buf[i:])
+	return pkg.BytesToString(buf[i+1:])
 }
 
 // Bigger than we need, not too big to worry about overflow.
