@@ -350,9 +350,9 @@ loop:
 		n, err = unix.Write(c.fd, iov[0])
 	}
 	_, _ = c.outboundBuffer.Discard(n)
-	switch err {
-	case nil:
-	case unix.EAGAIN:
+	switch {
+	case err == nil:
+	case errors.Is(err, unix.EAGAIN):
 		return nil
 	default:
 		return el.close(c, os.NewSyscallError("write", err))

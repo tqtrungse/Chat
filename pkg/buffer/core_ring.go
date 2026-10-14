@@ -157,6 +157,10 @@ func (rb *coreRing) Peek(n int) (head []byte, tail []byte) {
 
 // Discard skips the next n bytes by advancing the read pointer.
 func (rb *coreRing) Discard(n int) (discarded int, err error) {
+	if n <= 0 {
+		return 0, nil
+	}
+
 	discarded = rb.Buffered()
 	if n < discarded {
 		rb.r += n

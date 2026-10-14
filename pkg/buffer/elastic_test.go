@@ -164,6 +164,18 @@ func TestElastic_Discard_SpansRingAndList(t *testing.T) {
 	require.Equal(t, 30, e.Buffered())
 }
 
+func TestCoreRing_DiscardNonPositiveIsNoop(t *testing.T) {
+	rb := newCoreRing(16)
+	_, _ = rb.Write([]byte("abcd"))
+	for _, n := range []int{0, -1, -100} {
+		d, err := rb.Discard(n)
+		require.NoError(t, err)
+		require.Zero(t, d)
+		require.Zero(t, rb.r)
+		require.Equal(t, []byte("abcd"), rb.Bytes())
+	}
+}
+
 // ----------------------------------------------------------------------
 // Writev: split point can fall in the middle of one of the given slices.
 // ----------------------------------------------------------------------
