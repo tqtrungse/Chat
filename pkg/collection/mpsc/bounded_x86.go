@@ -72,37 +72,47 @@ func NewBounded[V any](capacity int) (*Bounded[V], error) {
 }
 
 func (b *Bounded[V]) TryPush(value V) (added bool) {
-	s := b.state.Add(pusherOne)
-	if s&closedFlag != 0 {
-		b.state.Add(^(pusherOne - 1))
-		return false
-	}
-
+	var (
+		// registry pusher; wait for drain to reach zero
+		s      = b.state.Add(pusherOne)
+		cycle  uint32
+		mapIdx uint32
+		ent    *entry[V]
+	)
+claim:
 	for {
-		idx := uint32(s >> sendIdxShift)
-		cycle := (idx >> b.n) << 1
-		mapIdx := pkg.CacheRemap(idx, b.capacity, b.entrySize)
-		ent := &b.ring[mapIdx]
-
-		if ent.Cycle.Load() != cycle {
+		if s&closedFlag != 0 {
 			b.state.Add(^(pusherOne - 1))
 			return false
 		}
-		if !b.state.CompareAndSwap(s, s+sendIdxOne) {
-			continue
-		}
-		ent.Value = value
-		ent.Cycle.Store(cycle + 1)
+		idx := uint32(s >> sendIdxShift)
+		cycle = (idx >> b.n) << 1
+		mapIdx = pkg.CacheRemap(idx, b.capacity, b.entrySize)
+		ent = &b.ring[mapIdx]
 
-		metaReaderWait := b.metaReaderWait.Load()
-		readIdxWait := uint16(metaReaderWait >> readerIdxShift)
-		if readIdxWait == uint16(mapIdx) && metaReaderWait&readerParked != 0 {
-			b.metaReaderWait.Store(readerUnpared)
-			runtimeSemRelease(&b.sem, false, 0)
+		switch diff := int32(ent.Cycle.Load() - cycle); {
+		case diff == 0:
+			if b.state.CompareAndSwap(s, s+sendIdxOne) {
+				break claim
+			}
+		case diff < 0: // slot của lap trước chưa được consume: đầy thật
+			b.state.Add(^(pusherOne - 1))
+			return false
 		}
-		b.state.Add(^(pusherOne - 1))
-		return true
+		s = b.state.Load() // thua CAS hoặc idx đã cũ: thử lại với state mới
 	}
+
+	ent.Value = value
+	ent.Cycle.Store(cycle + 1)
+
+	metaReaderWait := b.metaReaderWait.Load()
+	readIdxWait := uint16(metaReaderWait >> readerIdxShift)
+	if readIdxWait == uint16(mapIdx) && metaReaderWait&readerParked != 0 {
+		b.metaReaderWait.Store(readerUnpared)
+		runtimeSemRelease(&b.sem, false, 0)
+	}
+	b.state.Add(^(pusherOne - 1))
+	return true
 }
 
 func (b *Bounded[V]) Push(value V) (closed bool) {

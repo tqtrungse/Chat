@@ -600,3 +600,21 @@ func TestBounded_Drain_Concurrency(t *testing.T) {
 	require.Equal(t, pushedCount, finalCount, "QUANTITY ERROR: Pushed and Pop + Drain counts differ")
 	require.Equal(t, pushedSum, finalSum, "VALUE ERROR: pushed and Pop + Drain sums differ")
 }
+
+func TestBounded_TryPush_NoSpuriousFull(t *testing.T) {
+	q, _ := NewBounded[int](1024)
+	var wg sync.WaitGroup
+	var failed atomic.Int64
+	for range 8 {
+		wg.Go(func() {
+			// Total is 800 < 1024; it never fills up.
+			for i := range 100 {
+				if !q.TryPush(i) {
+					failed.Add(1)
+				}
+			}
+		})
+	}
+	wg.Wait()
+	require.Zero(t, failed.Load())
+}
