@@ -35,9 +35,8 @@ var (
 const (
 	closedBit = uint64(1) << 63
 
-	defaultBatchSize     = 100
-	defaultLinger        = 50 * time.Millisecond
-	defaultQueueCapacity = defaultBatchSize * 4
+	defaultBatchSize = 100
+	defaultLinger    = 50 * time.Millisecond
 )
 
 type Req[T any] struct {
@@ -54,21 +53,20 @@ type Config[T any] struct {
 	BatchSize int
 
 	// Linger is the maximum time a non-empty partition batch waits for more
-	// requests. A non-positive value disables the linger timer; such a batch is
-	// flushed only when BatchSize is reached or the batcher's context is canceled.
+	// requests. A non-positive value uses the default linger duration.
 	//
 	// Default: 50ms
 	Linger time.Duration
 
 	// QueueCapacity is the size of the buffered channel each partition uses to
 	// admit incoming requests before they are grouped into a batch. It bounds
-	// how many Submit calls can be waiting ahead of the partition loop; once
+	// how many accepted requests can be waiting ahead of the partition loop; once
 	// it's full, Submit blocks (subject to ctx) until a slot frees up.
 	//
-	// QueueCapacity is independent of BatchSize: BatchSize controls how many
-	// requests get flushed together, while QueueCapacity controls how much
-	// backlog a partition can hold before applying backpressure on callers.
-	// The value is rounded up to the nearest power of two.
+	// BatchSize controls how many requests get flushed together, while
+	// QueueCapacity controls how much backlog a partition can hold before
+	// applying backpressure on callers.
+	// Positive values are used exactly as provided, without rounding.
 	//
 	// Default: 4 * BatchSize.
 	QueueCapacity int
@@ -130,7 +128,7 @@ func New[T any](rootCtx context.Context, cfg Config[T]) (*Batcher[T], error) {
 	}
 
 	if cfg.QueueCapacity < 1 {
-		cfg.QueueCapacity = defaultQueueCapacity
+		cfg.QueueCapacity = cfg.BatchSize * 4
 	}
 
 	if cfg.Partitions < 1 {
@@ -160,16 +158,15 @@ func New[T any](rootCtx context.Context, cfg Config[T]) (*Batcher[T], error) {
 	return b, nil
 }
 
-// Submit admits item into the batcher, routes it to its partition, and waits
-// until that request's batch has completed or ctx is canceled. Submit is safe
-// for concurrent callers.
+// Submit enqueues data in its partition and returns nil once it is accepted.
+// It does not wait for the batch to complete. Flush reports the result through
+// onResult, or the batcher calls onResult with an error during shutdown.
+// Submit is safe for concurrent callers.
 //
-// Cancellation has two distinct points: if ctx is canceled before the request
-// is enqueued, the request is rejected; if it has already been enqueued, the
-// request remains in the batch and only the caller stops waiting for its result.
-// The latter is important because removing an accepted request from a channel
-// safely would otherwise require additional coordination with the partition
-// loop.
+// If the partition's queue is full, Submit waits for space or ctx cancellation.
+// A non-nil return means the request was not enqueued and onResult will not be
+// called. Canceling ctx after acceptance does not remove the request or cancel
+// its processing; the root context passed to New controls the batcher's lifetime.
 func (b *Batcher[T]) Submit(
 	ctx context.Context,
 	data T,

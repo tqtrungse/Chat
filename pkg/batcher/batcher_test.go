@@ -73,7 +73,7 @@ func waitDone(t *testing.T, b *Batcher[testItem], timeout time.Duration) {
 
 // submitSync bridges the callback-based Submit API back into a single
 // blocking call, for tests that only care about the end-to-end outcome.
-// It mirrors Submit's two cancellation points itself: if the request is
+// It handles two cancellation points itself: if the request is
 // rejected before being admitted, that error is returned directly; if it
 // has already been admitted, the request stays in the batch and is still
 // flushed regardless, but this call stops waiting for its OnResult once
@@ -192,8 +192,8 @@ func TestNewBatcherConstructorDefaults(t *testing.T) {
 		}
 	})
 
-	t.Run("queueCap below 1 defaults to next power of two of 4x batchSize", func(t *testing.T) {
-		// batchSize=5 -> base 4*5=20, rounded up to the next power of two: 32.
+	t.Run("queueCap below 1 defaults to exactly 4x batchSize", func(t *testing.T) {
+		// BatchSize=5 gives QueueCapacity=20 without rounding.
 		ctx, cancel := context.WithCancel(context.Background())
 		b, err := New(
 			ctx,
@@ -226,10 +226,9 @@ func TestNewBatcherConstructorDefaults(t *testing.T) {
 		waitDone(t, b, 2*time.Second)
 	})
 
-	t.Run("explicit queueCap rounds up to next power of two", func(t *testing.T) {
-		// QueueCap=10 -> rounded up to 16, applied identically to every
-		// partition -- QueueCap is a per-partition size now, so partition
-		// count no longer changes it.
+	t.Run("explicit queueCap is used exactly for every partition", func(t *testing.T) {
+		// QueueCapacity=10 gives every partition a channel of capacity 10,
+		// regardless of the number of partitions.
 		ctx, cancel := context.WithCancel(context.Background())
 		b, err := New(
 			ctx,
