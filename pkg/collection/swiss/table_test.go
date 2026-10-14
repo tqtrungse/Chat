@@ -19,11 +19,13 @@ package swiss
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unsafe"
 
 	"xxx/pkg/hash"
@@ -700,5 +702,45 @@ func TestSwissTable_Update(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestWissTable_RandomOpsMatchMap(t *testing.T) {
+	tb := NewTable[int, int](hash.Int)
+	ref := map[int]int{}
+	rng := rand.New(rand.NewSource(1))
+	errc := make(chan error, 1)
+	go func() {
+		for i := range 2_000_000 {
+			k := rng.Intn(64)
+			if rng.Intn(2) == 0 {
+				tb.Set(k, i)
+				ref[k] = i
+			} else {
+				tb.Delete(k)
+				delete(ref, k)
+			}
+			if i%512 == 0 {
+				if tb.Len() != len(ref) {
+					errc <- fmt.Errorf("len %d != %d at %d", tb.Len(), len(ref), i)
+					return
+				}
+				for q := range 64 {
+					v, ok := tb.Lookup(q)
+					rv, rok := ref[q]
+					if ok != rok || v != rv {
+						errc <- fmt.Errorf("key %d mismatch at %d", q, i)
+						return
+					}
+				}
+			}
+		}
+		errc <- nil
+	}()
+	select {
+	case err := <-errc:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		require.Fail(t, "hang (rehashInplace?)")
 	}
 }

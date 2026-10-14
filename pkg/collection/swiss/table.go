@@ -449,8 +449,8 @@ func (t *Table[K, V]) insertAt(key K, val V, taG tag, i, j int) {
 }
 
 func (t *Table[K, V]) rehashInplace() {
-	for _, g := range t.groups {
-		g.control = g.control.ConvertSpecialToEmptyAndFullToDeleted()
+	for idx := range t.groups {
+		t.groups[idx].control = t.groups[idx].control.ConvertSpecialToEmptyAndFullToDeleted()
 	}
 
 	numAllocBuckets := t.bucketMask + 1
@@ -469,7 +469,7 @@ func (t *Table[K, V]) rehashInplace() {
 			// In the same group.
 			if uint(newI) == i {
 				g.control = setTag(g.control, j, newFullTag(hashed))
-				continue
+				break
 			}
 
 			var preTag tag
