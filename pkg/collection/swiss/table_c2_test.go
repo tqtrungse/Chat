@@ -17,6 +17,7 @@
 package swiss
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -42,6 +43,68 @@ func newIntTableC2() *TableC2[int, int] {
 
 func newStrTableC2() *TableC2[string, int] {
 	return NewTableC2[string, int](hash.String)
+}
+
+func TestTableC2_RangeVisitsEveryEntryAndAllowsMutation(t *testing.T) {
+	const entries = 1_000
+	tbl := NewTableC2WithHintCap[int, int](entries, hash.Int)
+	for key := range entries {
+		tbl.Set(key, key+1)
+	}
+	seen := make(map[int]bool, entries)
+	tbl.Range(func(key, val int) bool {
+		require.False(t, seen[key], "duplicate key %d", key)
+		require.Equal(t, key+1, val)
+		seen[key] = true
+		tbl.Delete(key) // callbacks must run outside group locks
+		return true
+	})
+	require.Len(t, seen, entries)
+	require.Zero(t, tbl.Len())
+
+	tbl.Set(0, 1)
+	tbl.Set(1, 2)
+	calls := 0
+	tbl.Range(func(key, val int) bool {
+		calls++
+		return false
+	})
+	require.Equal(t, 1, calls)
+}
+
+func TestTableC2_DeleteConcurrentZeroKey(t *testing.T) {
+	for _, capacity := range []int{1, 16} {
+		t.Run(fmt.Sprint(capacity), func(t *testing.T) {
+			// A single group leaves a tombstone; multiple groups can mark the
+			// erased slot empty. Both clear its key to zero while relocking.
+			tbl := NewTableC2WithCap[int, int](capacity, func(int, uint64) uint64 { return 0 })
+			tbl.Set(1, -1) // keep Len nonzero throughout the delete race
+			for round := range 200 {
+				tbl.Set(0, round+1)
+				start := make(chan struct{})
+				var deleted atomic.Int32
+				var wrongValue atomic.Bool
+				var wg sync.WaitGroup
+				for range 32 {
+					wg.Go(func() {
+						<-start
+						if val, ok := tbl.Delete(0); ok {
+							deleted.Add(1)
+							if val != round+1 {
+								wrongValue.Store(true)
+							}
+						}
+					})
+				}
+				close(start)
+				wg.Wait()
+				require.EqualValues(t, 1, deleted.Load(), "round %d", round)
+				require.False(t, wrongValue.Load())
+				require.Equal(t, 1, tbl.Len())
+				require.Equal(t, -1, tbl.Get(1))
+			}
+		})
+	}
 }
 
 func newClusterTableC2() *TableC2[int, int] {

@@ -23,6 +23,7 @@ package swiss
 import (
 	"math"
 	"math/bits"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 
@@ -63,18 +64,14 @@ type TableC2[K comparable, V any] struct {
 	_     [pkg.CacheLineSize - 4]byte
 }
 
-// NewTableC2
-//
-// hintCapacity is a capacity hint helps the map select the appropriate initial bucket size to
-// reduce the number of grow/rehash cycles.
+// NewTableC2 creates a concurrent table with the minimum initial capacity.
 func NewTableC2[K comparable, V any](h HashFunc[K]) *TableC2[K, V] {
 	return NewTableC2WithHintCap[K, V](0, h)
 }
 
-// NewTableC2WithHintCap
-//
-// hintCapacity is a capacity hint helps the map select the appropriate initial bucket size to
-// reduce the number of grow/rehash cycles.
+// NewTableC2WithHintCap starts with a smaller allocation based on hintCap and
+// grows on demand. It does not reserve space for all hinted items up front;
+// use NewTableC2WithCap to request the initial capacity directly.
 func NewTableC2WithHintCap[K comparable, V any](hintCap int, h HashFunc[K]) *TableC2[K, V] {
 	numAllocBuckets := getAllocBuckets(int(math.Ceil(float64(hintCap) / 7)))
 	t := &TableC2[K, V]{
@@ -394,7 +391,7 @@ func (t *TableC2[K, V]) Delete(key K) (val V, existence bool) {
 		// Only groups with a match require a write-lock, and only for this brief moment.
 		gr.mtx.RUnlock()
 		gr.mtx.Lock()
-		if !gr.isMoved && gr.buckets[matched].key == key {
+		if !gr.isMoved && gr.control.GetTag(uint(matched)).IsFull() && gr.buckets[matched].key == key {
 			val = t.erase(storage, i, matched)
 			gr.mtx.Unlock()
 			return val, true
@@ -482,7 +479,10 @@ func (t *TableC2[K, V]) Range(cb func(key K, val V) (goOn bool)) {
 	// drop), so we can safely read every group in this snapshot.
 	storage := t.storage.Load()
 
-	i := uint(hash.MakeSeed() & uint64(len(storage.groups)-1))
+	// Iteration order needs a cheap random offset, not a new hash seed per group.
+	offset := rand.Uint64()
+	i := uint(offset>>3) & (uint(len(storage.groups)) - 1)
+	startBucket := uint(offset & 7)
 	grMask := uint(len(storage.groups)) - 1
 
 	// Use fixed-size stack arrays. A group holds at most 8 live entries, so
@@ -495,7 +495,7 @@ func (t *TableC2[K, V]) Range(cb func(key K, val V) (goOn bool)) {
 
 	for range storage.groups {
 		gr := &storage.groups[i]
-		j := uint(hash.MakeSeed() & 7) // hash.MakeSeed() % 8
+		j := startBucket
 
 		// Hold the read lock only long enough to copy live entries.
 		// RLock allows other goroutines to read concurrently; writes on this

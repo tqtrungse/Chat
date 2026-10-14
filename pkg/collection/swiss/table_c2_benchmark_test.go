@@ -17,6 +17,7 @@
 package swiss
 
 import (
+	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -25,6 +26,23 @@ import (
 
 	"xxx/pkg/hash"
 )
+
+func BenchmarkTableC2Range(b *testing.B) {
+	for _, size := range []int{1_024, 16_384} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			tbl := NewTableC2WithHintCap[int, int](size, hash.Int)
+			for key := range size {
+				tbl.Set(key, key)
+			}
+			cb := func(int, int) bool { return true }
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				tbl.Range(cb)
+			}
+		})
+	}
+}
 
 func BenchmarkSet_Sequential(b *testing.B) {
 	tbl := newIntTableC2()
