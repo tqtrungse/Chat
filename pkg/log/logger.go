@@ -47,7 +47,8 @@ type Logger struct {
 // NewLogger constructs a Logger.
 //
 // Log entries are buffered in memory (see FileConfig.BufferSize and
-// FileConfig.FlushInterval) and are only guaranteed to reach disk
+// FileConfig.FlushInterval). Error and higher levels flush immediately,
+// including any earlier buffered entries. Other entries reach the writer
 // after a successful call to Sync or closeFn. If the process exits without
 // calling one of them — e.g. it is killed, panics outside of this logger,
 // or the machine loses power — any buffered-but-not-yet-flushed log entries
@@ -60,7 +61,7 @@ type Logger struct {
 // goroutine, and closes the underlying rotating file when file logging is
 // enabled.
 //
-// Because log entries are buffered in memory until Sync or closeFn runs clos,
+// Because lower-severity log entries are buffered until Sync or closeFn runs,
 // callers MUST call closeFn during shutdown — or logs written shortly before
 // exit can be silently lost. Prefer calling it via defer closeFn() right after
 // construction, and also from a signal handler for processes that may be stopped
@@ -127,6 +128,15 @@ func NewLogger(cfg *FileConfig) (l *Logger, closeFn func() error) {
 
 	l.logger = zap.New(
 		core,
+
+		// Hooks run after the entry is written and before zap's panic/exit
+		// action, so Panic and Fatal also flush the buffered diagnostics.
+		zap.Hooks(func(entry zapcore.Entry) error {
+			if entry.Level >= zapcore.ErrorLevel {
+				return l.Sync()
+			}
+			return nil
+		}),
 
 		// Include the source file and line number of each log call.
 		zap.AddCaller(),

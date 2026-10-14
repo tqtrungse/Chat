@@ -94,6 +94,74 @@ func TestNewLogger_NilConfig_UsesStdout(t *testing.T) {
 	assert.NoError(t, closeFunc())
 }
 
+func TestErrorAndHigherFlushBufferedEntries(t *testing.T) {
+	for _, level := range []string{"error", "dpanic", "panic", "fatal"} {
+		t.Run(level, func(t *testing.T) {
+			logger, closeLogger, path := newFileLogger(t, &FileConfig{
+				BufferSize:    64 * 1024,
+				FlushInterval: time.Hour,
+			})
+			t.Cleanup(func() { require.NoError(t, closeLogger()) })
+			logger.Info("before failure")
+			logger.Warn("last warning")
+
+			switch level {
+			case "error":
+				logger.Error("failure")
+			case "dpanic":
+				logger.DPanic("failure")
+			case "panic":
+				require.Panics(t, func() { logger.Panic("failure") })
+			case "fatal":
+				// Exercise Fatal's write path without terminating the test process.
+				logger.logger = logger.logger.WithOptions(zap.WithFatalHook(zapcore.WriteThenGoexit))
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					logger.Fatal("failure")
+				}()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Fatal("Fatal did not finish")
+				}
+			}
+
+			// Inspect before Sync or close: the failure must flush its context.
+			entries := readLogLines(t, path)
+			require.Len(t, entries, 3)
+			require.Equal(t, "before failure", entries[0]["msg"])
+			require.Equal(t, "last warning", entries[1]["msg"])
+			require.Equal(t, level, entries[2]["level"])
+			require.Equal(t, "failure", entries[2]["msg"])
+		})
+	}
+}
+
+func TestErrorFlushesStdoutImmediately(t *testing.T) {
+	stdout, err := os.Create(filepath.Join(t.TempDir(), "stdout.log"))
+	require.NoError(t, err)
+	previousStdout := os.Stdout
+	os.Stdout = stdout
+	t.Cleanup(func() {
+		os.Stdout = previousStdout
+		require.NoError(t, stdout.Close())
+	})
+
+	logger, closeLogger := NewLogger(nil)
+	t.Cleanup(func() { require.NoError(t, closeLogger()) })
+	logger.Info("buffered context")
+	stat, err := stdout.Stat()
+	require.NoError(t, err)
+	require.Zero(t, stat.Size(), "Info should remain buffered")
+
+	logger.Error("stdout failure")
+	entries := readLogLines(t, stdout.Name())
+	require.Len(t, entries, 2)
+	require.Equal(t, "buffered context", entries[0]["msg"])
+	require.Equal(t, "stdout failure", entries[1]["msg"])
+}
+
 func TestNewLogger_FileConfig_WritesExpectedFields(t *testing.T) {
 	logger, closeFunc, path := newFileLogger(t, &FileConfig{MaxSize: 1})
 	require.NotNil(t, logger)
