@@ -54,6 +54,16 @@ func LoadConfig(serviceName string) (ConfigLoader, error) {
 	return defaultConfigLoader(filepath.Dir(path), fileName)
 }
 
+func SplitList(s string) []string {
+	var out []string
+	for p := range strings.SplitSeq(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func defaultConfigLoader(folderPath, fileName string) (ConfigLoader, error) {
 	v := viper.New()
 	v.AutomaticEnv()

@@ -17,7 +17,7 @@
 package nats
 
 import (
-	"strings"
+	"fmt"
 	"time"
 
 	"xxx/pkg"
@@ -53,22 +53,19 @@ type Config struct {
 	InboxWorkers int
 }
 
-func (c *Config) Load(loader pkg.ConfigLoader) {
-	if loader == nil {
-		return
-	}
-
-	var (
-		strs            = strings.Split(loader.GetString("BROKER_DELIVERY_BACKOFF"), ",")
-		deliveryBackOff = make([]time.Duration, len(strs))
-	)
-	for idx := range strs {
-		deliveryBackOff[idx], _ = time.ParseDuration(strings.TrimSpace(strs[idx]))
-	}
-
+func (c *Config) Load(loader pkg.ConfigLoader) error {
 	c.HubSubjectPrefix = loader.GetString("BROKER_HUB_SUBJECT_PREFIX")
 	c.MaxHops = loader.GetUint8("BROKER_MAX_HOPS")
 	c.PublishTimeout = loader.GetDuration("BROKER_PUBLISH_TIMEOUT")
 	c.InboxWorkers = loader.GetInt("BROKER_INBOX_WORKERS")
-	c.DeliveryBackOff = deliveryBackOff
+
+	c.DeliveryBackOff = nil // rỗng thì NewBroker dùng default
+	for _, s := range pkg.SplitList(loader.GetString("BROKER_DELIVERY_BACKOFF")) {
+		d, err := time.ParseDuration(s)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("BROKER_DELIVERY_BACKOFF: invalid duration %q", s)
+		}
+		c.DeliveryBackOff = append(c.DeliveryBackOff, d)
+	}
+	return nil
 }

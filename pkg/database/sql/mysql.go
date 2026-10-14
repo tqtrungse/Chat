@@ -31,10 +31,11 @@ type mysql struct {
 	db       *gorm.DB
 	primary  *sql.DB
 	replicas []*sql.DB
+	openPool func(context.Context, string, string, PoolConfig) (*sql.DB, error)
 }
 
 func NewMySql() DB {
-	return new(mysql)
+	return &mysql{openPool: openPool}
 }
 
 func (m *mysql) Open(ctx context.Context, cfg Config) error {
@@ -42,7 +43,7 @@ func (m *mysql) Open(ctx context.Context, cfg Config) error {
 		return ErrReopenDB
 	}
 
-	primary, err := openPool(
+	primary, err := m.openPool(
 		ctx,
 		"mysql",
 		buildMySqlDSN(
@@ -81,7 +82,7 @@ func (m *mysql) Open(ctx context.Context, cfg Config) error {
 
 	replicas := make([]*sql.DB, 0, len(cfg.ReplicaAddrs))
 	for i, replicaAddr := range cfg.ReplicaAddrs {
-		replica, repErr := openPool(
+		replica, repErr := m.openPool(
 			ctx,
 			"mysql",
 			buildMySqlDSN(
