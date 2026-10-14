@@ -111,6 +111,21 @@ func validConfig() Config {
 	}
 }
 
+func marshalValidInboxMessage(t *testing.T, recvDeviceID uint64) []byte {
+	t.Helper()
+	msg := &pbpriv.Message{
+		SendDeviceId: 1,
+		RecvDeviceId: recvDeviceID,
+		ChannelId:    1,
+		EncryptedKey: []byte("encrypted-key"),
+		EncryptedMsg: []byte("encrypted-message"),
+	}
+	require.NoError(t, msg.ValidateAll())
+	payload, err := proto.Marshal(msg)
+	require.NoError(t, err)
+	return payload
+}
+
 func mustNewBroker(
 	t *testing.T,
 	cfg Config,
@@ -537,7 +552,7 @@ func TestBroker_Resolve_ForwardsToNewHubAndIncrementsHops(t *testing.T) {
 	var got pbpriv.Message
 	err = proto.Unmarshal(natMsg.Data, &got)
 	require.NoError(t, err)
-	require.NotEqual(t, uint32(2), got.Hops)
+	require.Equal(t, uint32(2), got.Hops)
 }
 
 func TestBroker_Resolve_FallsBackToOfflineWhenForwardExceedsMaxHops(t *testing.T) {
@@ -759,13 +774,13 @@ func TestBroker_RunInboxConsumer_DeliversAndShutsDownCleanly(t *testing.T) {
 
 	baseline := nc.NumSubscriptions()
 	cancel, wait := startConsumer(t, br)
+	t.Cleanup(cancel)
 	waitForSubscription(t, nc, baseline)
 
-	payload, err := proto.Marshal(&pbpriv.Message{RecvDeviceId: 9})
-	require.NoError(t, err)
+	payload := marshalValidInboxMessage(t, 9)
 
 	inbox := fmt.Sprintf("%s%d", cfg.HubSubjectPrefix, br.hubID)
-	err = nc.Publish(inbox, payload)
+	err := nc.Publish(inbox, payload)
 	require.NoError(t, err)
 
 	waitFor(t, 2*time.Second, func() bool { return delivered.len() == 1 })
@@ -806,10 +821,7 @@ func TestBroker_RunInboxConsumer_ForwardsToNewHub(t *testing.T) {
 	}()
 	waitForSubscription(t, nc, baseline)
 
-	payload, _ := proto.Marshal(&pbpriv.Message{
-		RecvDeviceId: 1,
-		Hops:         0},
-	)
+	payload := marshalValidInboxMessage(t, 1)
 	inbox := fmt.Sprintf("%s%d", cfg.HubSubjectPrefix, br.hubID)
 	err = nc.Publish(inbox, payload)
 	require.NoError(t, err)
@@ -845,7 +857,7 @@ func TestBroker_RunInboxConsumer_PushesOfflineWhenDeviceUnreachable(t *testing.T
 	}()
 	waitForSubscription(t, nc, baseline)
 
-	payload, _ := proto.Marshal(&pbpriv.Message{RecvDeviceId: 77})
+	payload := marshalValidInboxMessage(t, 77)
 	inbox := fmt.Sprintf("%s%d", cfg.HubSubjectPrefix, br.hubID)
 	err := nc.Publish(inbox, payload)
 	require.NoError(t, err)
@@ -895,6 +907,7 @@ func TestBroker_RunInboxConsumer_ShutdownWaitsForInFlightHandler(t *testing.T) {
 	cfg := validConfig()
 
 	release := make(chan struct{})
+	releaseHandler := sync.OnceFunc(func() { close(release) })
 	started := make(chan struct{}, 1)
 	onMsg := func(*pbpriv.Message) (bool, uint64, error) {
 		started <- struct{}{}
@@ -911,35 +924,49 @@ func TestBroker_RunInboxConsumer_ShutdownWaitsForInFlightHandler(t *testing.T) {
 	)
 
 	baseline := nc.NumSubscriptions()
-	cancel, wait := startConsumer(t, br)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var consumeErr error
+	go func() {
+		consumeErr = br.RunInboxConsumer(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		releaseHandler()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("RunInboxConsumer did not return during cleanup")
+		}
+	})
 	waitForSubscription(t, nc, baseline)
 
-	payload, _ := proto.Marshal(&pbpriv.Message{RecvDeviceId: 1})
+	payload := marshalValidInboxMessage(t, 1)
 	inbox := fmt.Sprintf("%s%d", cfg.HubSubjectPrefix, br.hubID)
 	err := nc.Publish(inbox, payload)
 	require.NoError(t, err)
 
-	<-started // handler is now blocked inside onMessage
-	cancel()  // ask the consumer to shut down while the handler is in flight
-
-	doneEarly := make(chan struct{})
-	go func() {
-		_ = wait()
-		close(doneEarly)
-	}()
+	select {
+	case <-started:
+		// Handler is now blocked inside onMessage.
+	case <-time.After(2 * time.Second):
+		t.Fatal("inbox handler did not start")
+	}
+	cancel() // ask the consumer to shut down while the handler is in flight
 
 	select {
-	case <-doneEarly:
+	case <-done:
 		require.Fail(t, "RunInboxConsumer returned before the in-flight handler finished")
 	case <-time.After(200 * time.Millisecond):
 		// Expected: still blocked on wg.Wait().
 	}
 
-	close(release) // let the handler finish
+	releaseHandler() // let the handler finish
 
 	select {
-	case <-doneEarly:
-		// Good: it returned only after the handler drained.
+	case <-done:
+		require.ErrorIs(t, consumeErr, context.Canceled)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunInboxConsumer did not return after the handler finished")
 	}
