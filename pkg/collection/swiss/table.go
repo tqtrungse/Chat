@@ -57,18 +57,14 @@ type Table[K comparable, V any] struct {
 	groups []group[K, V]
 }
 
-// NewTable
-//
-// hintCapacity is a capacity hint helps the map select the appropriate initial bucket size to
-// reduce the number of grow/rehash cycles.
+// NewTable creates a table with the minimum initial capacity.
 func NewTable[K comparable, V any](h HashFunc[K]) *Table[K, V] {
 	return NewTableWithHintCap[K, V](0, h)
 }
 
-// NewTableWithHintCap
-//
-// hintCapacity is a capacity hint helps the map select the appropriate initial bucket size to
-// reduce the number of grow/rehash cycles.
+// NewTableWithHintCap starts with a smaller allocation based on hintCap and
+// grows on demand. It does not reserve space for all hinted items up front;
+// use NewTableWithCap when the initial capacity must hold that many items.
 func NewTableWithHintCap[K comparable, V any](hintCap int, h HashFunc[K]) *Table[K, V] {
 	numAllocBuckets := getAllocBuckets(int(math.Ceil(float64(hintCap) / 8)))
 	groups := make([]group[K, V], numAllocBuckets>>3) // divided by 8 (a group has 8 buckets).
