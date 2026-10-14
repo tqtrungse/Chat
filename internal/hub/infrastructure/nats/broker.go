@@ -107,9 +107,8 @@ func NewBroker(
 
 	b.publishTimeout = cfg.PublishTimeout
 	if cfg.PublishTimeout <= 0 {
-		// Core NATS publish is a local buffered write, not a round trip, so
-		// this now only bounds the Flush confirmation in Route — it no
-		// longer waits on a JetStream persistence/ack handshake.
+		// Route is a local buffered write; use this timeout when waiting
+		// for inbox handlers during shutdown.
 		b.publishTimeout = defaultPublishTimeout
 	}
 
@@ -131,9 +130,8 @@ func NewBroker(
 
 // Route delivers msg to dstHubID's inbox subject over core NATS pub/sub:
 // fire-and-forget, at-most-once, no persistence, no redelivery. A nil
-// return means the payload was handed to the local NATS client and a round
-// trip to the server (via Flush) confirmed the connection is alive — not
-// that dstHubID received or processed it.
+// return means the payload was handed to the local NATS client's write buffer.
+// It does not confirm that the server or dstHubID received or processed it.
 func (b *broker) Route(
 	ctx context.Context,
 	dstHubID uint64,
@@ -141,6 +139,9 @@ func (b *broker) Route(
 ) error {
 	if msg.Hops >= uint32(b.maxHops) {
 		return errMaxHopsExceeded
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	buf := slicepool.Get(b.pbMarshal.Size(msg))
@@ -154,13 +155,7 @@ func (b *broker) Route(
 	err = b.nc.Publish(pkg.BytesToString(subject), buf)
 	slicepool.Put(buf)
 	slicepool.Put(subject)
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, b.publishTimeout)
-	defer cancel()
-	return b.nc.FlushWithContext(ctx)
+	return err
 }
 
 // RunInboxConsumer subscribes to this hub's own inbox subject and dispatches

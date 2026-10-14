@@ -17,9 +17,11 @@
 package nats
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -36,7 +38,31 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func startTestNATS(t *testing.T) *nats.Conn {
+type pingCountingDialer struct {
+	net.Dialer
+	pings atomic.Int64
+}
+
+func (d *pingCountingDialer) Dial(network, address string) (net.Conn, error) {
+	conn, err := d.Dialer.Dial(network, address)
+	if err != nil {
+		return nil, err
+	}
+	return &pingCountingConn{Conn: conn, pings: &d.pings}, nil
+}
+
+type pingCountingConn struct {
+	net.Conn
+	pings *atomic.Int64
+}
+
+func (c *pingCountingConn) Write(data []byte) (int, error) {
+	// Test payloads contain no PING frames, so only protocol flushes count.
+	c.pings.Add(int64(bytes.Count(data, []byte("PING\r\n"))))
+	return c.Conn.Write(data)
+}
+
+func startTestNATS(t *testing.T, clientOptions ...nats.Option) *nats.Conn {
 	t.Helper()
 
 	opts := &natsserver.Options{
@@ -52,7 +78,7 @@ func startTestNATS(t *testing.T) *nats.Conn {
 	require.True(t, srv.ReadyForConnections(5*time.Second))
 	t.Cleanup(srv.Shutdown)
 
-	nc, err := nats.Connect(srv.ClientURL())
+	nc, err := nats.Connect(srv.ClientURL(), clientOptions...)
 	require.NoError(t, err)
 	t.Cleanup(nc.Close)
 
@@ -365,6 +391,24 @@ func TestBroker_Route_MaxHopsExceeded(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestBroker_RouteDoesNotFlushPerMessage(t *testing.T) {
+	dialer := &pingCountingDialer{}
+	nc := startTestNATS(t, nats.SetCustomDialer(dialer))
+	br := mustNewBroker(
+		t, validConfig(), 1, nc,
+		noopOnMessage(true, 0, nil),
+		func(context.Context, uint64, []byte) error { return nil },
+	)
+	before := dialer.pings.Load()
+	for range 32 {
+		require.NoError(t, br.Route(context.Background(), 42, &pbpriv.Message{RecvDeviceId: 7}))
+	}
+	// Flush once to ensure all writes reached the server before inspecting
+	// protocol traffic. Only this explicit flush should have sent a PING.
+	require.NoError(t, nc.FlushTimeout(time.Second))
+	require.EqualValues(t, 1, dialer.pings.Load()-before)
+}
+
 func TestBroker_Route_RespectsCallerContextCancellation(t *testing.T) {
 	nc := startTestNATS(t)
 	br := mustNewBroker(
@@ -378,6 +422,7 @@ func TestBroker_Route_RespectsCallerContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already canceled
+	before := nc.Stats().OutMsgs
 
 	err := br.Route(
 		ctx,
@@ -385,6 +430,7 @@ func TestBroker_Route_RespectsCallerContextCancellation(t *testing.T) {
 		&pbpriv.Message{RecvDeviceId: 7},
 	)
 	require.Equal(t, context.Canceled, err)
+	require.Equal(t, before, nc.Stats().OutMsgs, "canceled Route must not publish")
 }
 
 func TestBroker_Resolve_PropagatesOnMessageError(t *testing.T) {

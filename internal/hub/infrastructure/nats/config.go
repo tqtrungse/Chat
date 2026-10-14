@@ -32,11 +32,9 @@ type Config struct {
 	// Default: 5, maximum is 120
 	MaxHops uint8
 
-	// PublishTimeout bounds waiting for the NATS connection to flush the
-	// published message to the server.
-	//
-	// It does not guarantee that the destination hub received or processed
-	// the message.
+	// PublishTimeout is retained for configuration compatibility. Twice this
+	// duration bounds waiting for inbox handlers during shutdown. Route uses
+	// buffered publishing and does not wait for server confirmation.
 	//
 	// Default: 30s
 	PublishTimeout time.Duration
