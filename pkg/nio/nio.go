@@ -21,6 +21,7 @@ package nio
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/url"
@@ -617,7 +618,7 @@ func createListeners(addrs []string, opts ...Option) ([]*listener, *Options, err
 	for _, addr := range addrs {
 		proto, _, err := parseProtoAddr(addr)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("listen %s: %w", addr, err)
 		}
 		hasUDP = hasUDP || strings.HasPrefix(proto, "udp")
 		hasUnix = hasUnix || proto == "unix"
@@ -661,19 +662,28 @@ func createListeners(addrs []string, opts ...Option) ([]*listener, *Options, err
 		options.EdgeTriggeredIO = false
 	}
 
-	listeners := make([]*listener, len(addrs))
-	for i, a := range addrs {
+	listeners := make([]*listener, 0, len(addrs))
+	initialized := false
+	defer func() {
+		if !initialized {
+			for _, ln := range listeners {
+				ln.close()
+			}
+		}
+	}()
+	for _, a := range addrs {
 		proto, addr, err := parseProtoAddr(a)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("listen %s: %w", a, err)
 		}
 		ln, err := initListener(proto, addr, options)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("listen %s: %w", a, err)
 		}
-		listeners[i] = ln
+		listeners = append(listeners, ln)
 	}
 
+	initialized = true
 	return listeners, options, nil
 }
 

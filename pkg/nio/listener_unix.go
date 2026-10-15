@@ -137,7 +137,9 @@ func initListener(network, addr string, options *Options) (ln *listener, err err
 		sockOptStrs: sockOptStrs,
 		logger:      options.Logger,
 	}
-	err = ln.open()
+	if err = ln.open(); err != nil {
+		return nil, err
+	}
 
 	if options.TCPKeepAlive > 0 && ln.network == "tcp" &&
 		(runtime.GOOS == "linux" || runtime.GOOS == "freebsd" || runtime.GOOS == "dragonfly") {
@@ -145,13 +147,16 @@ func initListener(network, addr string, options *Options) (ln *listener, err err
 		// only when running on Linux, FreeBSD or DragonFlyBSD.
 		//
 		// Check out https://github.com/nginx/nginx/pull/337 for details.
-		err = setKeepAlive(
+		if err = setKeepAlive(
 			ln.fd,
 			true,
 			options.TCPKeepAlive,
 			options.TCPKeepInterval,
 			options.TCPKeepCount,
-		)
+		); err != nil {
+			ln.close()
+			return nil, err
+		}
 	}
 
 	return
