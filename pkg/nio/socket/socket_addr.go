@@ -21,9 +21,7 @@ package socket
 
 import (
 	"net"
-
-	"xxx/pkg"
-	slicepool "xxx/pkg/pool/slice"
+	"strconv"
 
 	"golang.org/x/sys/unix"
 )
@@ -158,22 +156,7 @@ func ip6ZoneToString(zone uint32) string {
 	if ifi, err := net.InterfaceByIndex(int(zone)); err == nil {
 		return ifi.Name
 	}
-	return itod(uint(zone))
-}
-
-// itod converts uint to a decimal string.
-func itod(v uint) string {
-	if v == 0 { // avoid string allocation
-		return "0"
-	}
-	// Assemble decimal in reverse order.
-	buf := slicepool.Get(32)
-	i := len(buf) - 1
-	for ; v > 0; v /= 10 {
-		buf[i] = byte(v%10 + '0')
-		i--
-	}
-	return pkg.BytesToString(buf[i+1:])
+	return strconv.FormatUint(uint64(zone), 10)
 }
 
 // Bigger than we need, not too big to worry about overflow.

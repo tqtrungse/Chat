@@ -24,17 +24,6 @@ import (
 	"testing"
 )
 
-func TestItod(t *testing.T) {
-	for _, value := range []uint{0, 1, 9, 10, 99, 100, 1_234_567_890, ^uint(0)} {
-		want := strconv.FormatUint(uint64(value), 10)
-		t.Run(want, func(t *testing.T) {
-			if got := itod(value); got != want {
-				t.Fatalf("itod(%d) = %q, want %q", value, got, want)
-			}
-		})
-	}
-}
-
 func TestIP6ZoneToStringFallback(t *testing.T) {
 	zone := ^uint32(0)
 	if _, err := net.InterfaceByIndex(int(zone)); err == nil {
