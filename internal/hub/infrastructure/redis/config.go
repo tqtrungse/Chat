@@ -80,20 +80,21 @@ type Config struct {
 
 	// DeviceBucketCount is how many bucket hashes ("devices:0".."devices:{N-1}")
 	// the device registry is split across. Pick N so that
-	// expectedMaxDevices / N stays comfortably under Redis's
-	// hash-max-listpack-entries (default 128) — e.g. target ~100 fields per
-	// bucket on average, since random distribution means some buckets will
-	// sit above the average.
+	// expectedMaxDevices / N stays comfortably under the configured Redis
+	// hash-max-listpack-entries threshold (1024 in
+	// infrastructure/redis/local/redis.conf). For example, 1 million devices
+	// across the default 4096 buckets average about 244 fields per bucket;
+	// allow headroom because some buckets will hold more than the average.
 	//
 	// IMPORTANT: treat this like a partition count — it's effectively fixed
 	// once there's real data in Redis. Changing it changes which bucket
-	// every deviceID maps to (bucket = deviceID % N), so existing entries
+	// a deviceID maps to (bucket = Mix64(deviceID) % N), so existing entries
 	// won't be found under the new bucket keys until a migration re-shards
 	// them. If you must change it later, write a one-off job that reads
 	// every "devices:*" bucket under the old N and re-writes each entry
 	// into its bucket under the new N.
 	//
-	// Default: 1024
+	// Default: 4096
 	DeviceBucketCount uint16
 
 	// VerifyExpiredNotifications verifies that Redis keyspace notifications for
