@@ -278,55 +278,30 @@ func (rb *coreRing) ReadFrom(r io.Reader) (n int64, err error) {
 			rb.grow(rb.Buffered() + RingMinRead)
 		}
 
+		var p []byte
 		if rb.w >= rb.r {
-			m, err = r.Read(rb.buf[rb.w:])
-			if m < 0 {
-				panic("RingBuf.ReadFrom: reader returned negative count from Read")
-			}
-			rb.isEmpty = false
-			rb.w += m
-			if rb.w >= rb.size {
-				rb.w -= rb.size
-			}
-			n += int64(m)
-			if err == io.EOF {
-				return n, nil
-			}
-			if err != nil {
-				return
-			}
-			m, err = r.Read(rb.buf[:rb.r])
-			if m < 0 {
-				panic("RingBuf.ReadFrom: reader returned negative count from Read")
-			}
-			rb.w += m
-			if rb.w >= rb.size {
-				rb.w -= rb.size
-			}
-			n += int64(m)
-			if err == io.EOF {
-				return n, nil
-			}
-			if err != nil {
-				return
-			}
+			p = rb.buf[rb.w:]
 		} else {
-			m, err = r.Read(rb.buf[rb.w:rb.r])
-			if m < 0 {
-				panic("RingBuf.ReadFrom: reader returned negative count from Read")
-			}
+			p = rb.buf[rb.w:rb.r]
+		}
+
+		m, err = r.Read(p)
+		if m < 0 {
+			panic("RingBuf.ReadFrom: reader returned negative count from Read")
+		}
+		if m > 0 {
 			rb.isEmpty = false
 			rb.w += m
 			if rb.w >= rb.size {
 				rb.w -= rb.size
 			}
 			n += int64(m)
-			if err == io.EOF {
-				return n, nil
-			}
-			if err != nil {
-				return
-			}
+		}
+		if err == io.EOF {
+			return n, nil
+		}
+		if err != nil {
+			return
 		}
 	}
 }
