@@ -790,6 +790,107 @@ func TestBroker_RunInboxConsumer_DeliversAndShutsDownCleanly(t *testing.T) {
 	require.Equal(t, context.Canceled, err)
 }
 
+func TestBroker_RunInboxConsumer_HandlerPanicReleasesSlotAndCompletesShutdown(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		panicOffline bool
+	}{
+		{name: "on_message"},
+		{name: "offline_store", panicOffline: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nc := startTestNATS(t)
+			cfg := validConfig()
+			cfg.InboxWorkers = 1
+			// Shutdown must finish before this fallback can hide a leaked wg count.
+			cfg.PublishTimeout = 5 * time.Second
+
+			const panicMessages = 3
+			recovered := make(chan any, panicMessages)
+			pool, closePool := workerpool.New(
+				workerpool.Config{NumWorkers: 1},
+				func(_ int, value any, _ []byte) { recovered <- value },
+			)
+			t.Cleanup(closePool)
+
+			var calls atomic.Int64
+			delivered := make(chan struct{}, 1)
+			handle := func() {
+				if calls.Add(1) <= panicMessages {
+					panic("inbox handler panic")
+				}
+				delivered <- struct{}{}
+			}
+			svc, err := NewBroker(
+				cfg, 1, nc, newTestLogger(t), pool,
+				func(*pbpriv.Message) (bool, uint64, error) {
+					if tc.panicOffline {
+						return false, 0, nil
+					}
+					handle()
+					return true, 0, nil
+				},
+				func(context.Context, uint64, []byte) error {
+					handle()
+					return nil
+				},
+			)
+			require.NoError(t, err)
+			br := svc.(*broker)
+
+			baseline := nc.NumSubscriptions()
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			var consumeErr error
+			go func() {
+				consumeErr = br.RunInboxConsumer(ctx)
+				close(done)
+			}()
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(3 * time.Second):
+					t.Error("consumer did not finish during cleanup")
+				}
+			})
+			waitForSubscription(t, nc, baseline)
+
+			inbox := fmt.Sprintf("%s%d", cfg.HubSubjectPrefix, br.hubID)
+			payload := marshalValidInboxMessage(t, 9)
+			// With one slot, every subsequent message needs the previous panic
+			// to release the semaphore. Observe the pool recovering each panic.
+			for range panicMessages {
+				require.NoError(t, nc.Publish(inbox, payload))
+				select {
+				case value := <-recovered:
+					require.Equal(t, "inbox handler panic", value)
+				case <-time.After(3 * time.Second):
+					t.Fatal("handler did not run; an earlier panic may have leaked its slot")
+				}
+			}
+
+			require.NoError(t, nc.Publish(inbox, payload))
+			select {
+			case <-delivered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("consumer did not deliver a normal message after handler panics")
+			}
+			require.Equal(t, int64(panicMessages+1), calls.Load())
+
+			// A returned semaphore alone is insufficient: each panicking task
+			// must also call wg.Done so shutdown does not wait for the timeout.
+			cancel()
+			select {
+			case <-done:
+				require.ErrorIs(t, consumeErr, context.Canceled)
+			case <-time.After(3 * time.Second):
+				t.Fatal("consumer shutdown still waits for panicking handlers")
+			}
+		})
+	}
+}
+
 func TestBroker_RunInboxConsumer_ForwardsToNewHub(t *testing.T) {
 	nc := startTestNATS(t)
 	cfg := validConfig()

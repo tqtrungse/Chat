@@ -180,9 +180,9 @@ func (b *broker) RunInboxConsumer(ctx context.Context) error {
 		wg.Add(1)
 
 		err := b.pool.Submit(func(_ *workerpool.Context) {
+			defer wg.Done()
+			defer func() { <-sem }()
 			b.handleInboxMessage(ctx, msg)
-			<-sem
-			wg.Done()
 		})
 		if err != nil {
 			<-sem

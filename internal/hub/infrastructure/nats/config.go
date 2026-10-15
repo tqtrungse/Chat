@@ -57,13 +57,13 @@ func (c *Config) Load(loader pkg.ConfigLoader) error {
 	c.PublishTimeout = loader.GetDuration("BROKER_PUBLISH_TIMEOUT")
 	c.InboxWorkers = loader.GetInt("BROKER_INBOX_WORKERS")
 
-	c.DeliveryBackOff = nil // rỗng thì NewBroker dùng default
-	for _, s := range pkg.SplitList(loader.GetString("BROKER_DELIVERY_BACKOFF")) {
-		d, err := time.ParseDuration(s)
-		if err != nil || d <= 0 {
-			return fmt.Errorf("BROKER_DELIVERY_BACKOFF: invalid duration %q", s)
+	c.DeliveryBackOff = nil // If it is empty, NewBroker will use default.
+	for _, str := range pkg.SplitList(loader.GetString("BROKER_DELIVERY_BACKOFF")) {
+		duration, err := time.ParseDuration(str)
+		if err != nil || duration <= 0 {
+			return fmt.Errorf("BROKER_DELIVERY_BACKOFF: invalid duration %q", str)
 		}
-		c.DeliveryBackOff = append(c.DeliveryBackOff, d)
+		c.DeliveryBackOff = append(c.DeliveryBackOff, duration)
 	}
 	return nil
 }
