@@ -180,10 +180,15 @@ var (
 	// reapDevicesInBucketScript conditionally deletes a batch of devices
 	// from one "devices:{bucket}" hash, but only for those still owned by
 	// the given hubID (a device may have already been re-claimed by a live
-	// hub via addDeviceScript/addDevicesScript in the meantime, in which
-	// case it's left alone). The caller (reapHub) first SPOPs a batch from
-	// the crashed hub's device set in Go, groups the results by bucket, then
-	// runs this once per bucket group. Returns the number removed.
+	// hub via batchAddDevicesScript in the meantime, in which case the
+	// mapping is left alone). The caller (reapHub) reads a batch from the
+	// hub's device set using SRANDMEMBER in Go, groups the results by bucket,
+	// then runs this once per bucket group.
+	//
+	// Each device is removed from the hub's set with SREM, regardless of its
+	// current owner. Selection does not remove members, so devices remain
+	// available for a later reap if processing fails before this script runs.
+	// Returns the number of device mappings actually deleted from the hash.
 	//
 	// KEYS[1] = devices:{bucket}
 	//
@@ -191,8 +196,8 @@ var (
 	//
 	// ARGV[1] = hubID (string)
 	//
-	// ARGV[2..] = deviceIDs (all hashing into this bucket, already popped
-	//             from the hub's device set)
+	// ARGV[2..] = deviceIDs (all hashing into this bucket, selected from the
+	//             hub's device set without removing them)
 	reapDevicesInBucketScript = redis.NewScript(`
 		local hubID = ARGV[1]
 		local removed = 0
