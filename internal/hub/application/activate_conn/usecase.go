@@ -38,7 +38,9 @@ import (
 const (
 	activationChallengeTTL = 5 * time.Second // challenge issued -> proof received
 	defaultPreAuthTimeout  = 10 * time.Second
+)
 
+const (
 	stageConnected  uint8 = iota // accepted, nothing valid received yet
 	stageChallenged              // challenge sent, waiting for proof
 )
