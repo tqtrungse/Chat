@@ -88,7 +88,7 @@ func TestMySQL_OpenWithoutReplicas(t *testing.T) {
 			require.Equal(t, 1, openedPools, "Open must create only the primary pool")
 			require.Same(t, primary, db.primary)
 			require.Empty(t, db.replicas)
-			require.Contains(t, db.db.Config.Plugins, "gorm:db_resolver")
+			require.Contains(t, db.db.Plugins, "gorm:db_resolver")
 
 			// Pointer identity checks the underlying SQL pool, rather than
 			// counting GORM handles or initialization queries.
