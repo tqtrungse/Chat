@@ -735,14 +735,13 @@ const file_pub_message_proto_rawDesc = "" +
 	"\x12ActiveConnProofReq\x12\x1d\n" +
 	"\x05proof\x18\x01 \x01(\fB\a\xfaB\x04z\x02h R\x05proof\"4\n" +
 	"\x13ActiveConnProofResp\x12\x1d\n" +
-	"\x04code\x18\x01 \x01(\x0e2\t.pub.CodeR\x04code\"\x8e\x01\n" +
+	"\x04code\x18\x01 \x01(\x0e2\t.pub.CodeR\x04code\"\x90\x01\n" +
 	"\n" +
 	"SendMsgReq\x12&\n" +
 	"\n" +
 	"channel_id\x18\x01 \x01(\x04B\a\xfaB\x042\x02(\x01R\tchannelId\x12$\n" +
-	"\tdedup_key\x18\x02 \x01(\x04B\a\xfaB\x042\x02(\x01R\bdedupKey\x122\n" +
-	"\x0frecv_device_ids\x18\x03 \x03(\x04B\n" +
-	"\xfaB\a\x92\x01\x04\b\x01\x18\x01R\rrecvDeviceIds\"C\n" +
+	"\tdedup_key\x18\x02 \x01(\x04B\a\xfaB\x042\x02(\x01R\bdedupKey\x124\n" +
+	"\x0frecv_device_ids\x18\x03 \x03(\x04B\f\xfaB\t\x92\x01\x06\b\x01\x10\t\x18\x01R\rrecvDeviceIds\"C\n" +
 	"\vSendMsgResp\x12\x1d\n" +
 	"\n" +
 	"channel_id\x18\x01 \x01(\x04R\tchannelId\x12\x15\n" +

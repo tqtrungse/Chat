@@ -540,10 +540,10 @@ func (m *SendMsgReq) validate(all bool) error {
 		errors = append(errors, err)
 	}
 
-	if len(m.GetRecvDeviceIds()) < 1 {
+	if l := len(m.GetRecvDeviceIds()); l < 1 || l > 9 {
 		err := SendMsgReqValidationError{
 			field:  "RecvDeviceIds",
-			reason: "value must contain at least 1 item(s)",
+			reason: "value must contain between 1 and 9 items, inclusive",
 		}
 		if !all {
 			return err

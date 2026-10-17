@@ -75,6 +75,7 @@ message SendMsgReq {
 
   repeated uint64 recv_device_ids = 3 [(validate.rules).repeated = {
     min_items: 1,
+    max_items: 9,
     unique: true,
   }];
 }
