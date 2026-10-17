@@ -17,10 +17,14 @@
 
 package ticket
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+
+	shareddevice "xxx/internal/shared/device"
+)
 
 func marshal(b []byte, t *Ticket) {
-	binary.LittleEndian.PutUint64(b[0:8], t.DeviceID)
+	binary.LittleEndian.PutUint64(b[0:8], t.DeviceID.Uint64())
 	binary.LittleEndian.PutUint64(b[8:16], uint64(t.ExpiresAt))
 
 	copy(b[16:48], t.Keys.RecvEnc[:])
@@ -33,7 +37,7 @@ func marshal(b []byte, t *Ticket) {
 
 func unmarshal(b []byte) *Ticket {
 	t := &Ticket{
-		DeviceID:  binary.LittleEndian.Uint64(b[0:]),
+		DeviceID:  shareddevice.ID(binary.LittleEndian.Uint64(b[0:])),
 		ExpiresAt: int64(binary.LittleEndian.Uint64(b[8:])),
 	}
 	copy(t.Keys.RecvEnc[:], b[16:48])

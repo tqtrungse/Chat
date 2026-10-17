@@ -17,14 +17,17 @@
 
 package ticket
 
-import "xxx/internal/shared/session"
+import (
+	shareddevice "xxx/internal/shared/device"
+	sharedsession "xxx/internal/shared/session"
+)
 
 // Ticket is the state that used to live in a pending session. It is sealed
 // (AES-GCM) with a cluster-wide key, so any hub can open it.
 type Ticket struct {
-	DeviceID      uint64
+	DeviceID      shareddevice.ID
 	ExpiresAt     int64
-	Keys          session.Keys
+	Keys          sharedsession.Keys
 	ActivationKey [32]byte
 	IdentityPub   [32]byte
 }

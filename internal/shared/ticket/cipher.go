@@ -22,6 +22,8 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"fmt"
+
+	shareddevice "xxx/internal/shared/device"
 )
 
 const (
@@ -79,10 +81,10 @@ func (s *Sealer) Seal(t *Ticket) ([]byte, error) {
 	if _, err := rand.Read(out[1:header]); err != nil {
 		return nil, err
 	}
-	return s.aeads[s.curID].Seal(out, out[1:header], pt[:], aad(t.DeviceID)), nil
+	return s.aeads[s.curID].Seal(out, out[1:header], pt[:], aad(t.DeviceID.Uint64())), nil
 }
 
-func (s *Sealer) Open(deviceID uint64, ticket []byte) (*Ticket, error) {
+func (s *Sealer) Open(deviceID shareddevice.ID, ticket []byte) (*Ticket, error) {
 	if len(ticket) != size {
 		return nil, ErrTicketInvalid
 	}
@@ -93,7 +95,7 @@ func (s *Sealer) Open(deviceID uint64, ticket []byte) (*Ticket, error) {
 	}
 
 	// dst=nil: never mutates the caller's buffer (it aliases the nio read buffer).
-	pt, err := aead.Open(nil, ticket[1:header], ticket[header:], aad(deviceID))
+	pt, err := aead.Open(nil, ticket[1:header], ticket[header:], aad(deviceID.Uint64()))
 	if err != nil {
 		return nil, ErrTicketInvalid
 	}

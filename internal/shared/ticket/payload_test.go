@@ -21,6 +21,8 @@ import (
 	"math"
 	"testing"
 
+	shareddevice "xxx/internal/shared/device"
+
 	slicepool "xxx/pkg/pool/slice"
 
 	"github.com/stretchr/testify/require"
@@ -88,7 +90,7 @@ func TestTicketPayload_UnmarshalCopiesInput(t *testing.T) {
 	clear(plain)
 
 	require.Equal(t, before, *got, "the decoded ticket must own its key material")
-	require.Equal(t, uint64(0x12A), got.DeviceID)
+	require.Equal(t, shareddevice.ID(0x12A), got.DeviceID)
 	require.Equal(t, int64(0x1234), got.ExpiresAt)
 }
 
@@ -100,7 +102,7 @@ func TestTicketPayload_AADUsesLittleEndianDeviceID(t *testing.T) {
 func TestTicketPayload_RoundTripExtremes(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
-		deviceID  uint64
+		deviceID  shareddevice.ID
 		expiresAt int64
 	}{
 		{"zero", 0, 0},

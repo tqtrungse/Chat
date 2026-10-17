@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"time"
 
+	shareddevice "xxx/internal/shared/device"
 	sharedticket "xxx/internal/shared/ticket"
 
 	slicepool "xxx/pkg/pool/slice"
@@ -78,7 +79,7 @@ func NewTicketVerifier(
 
 // Open verifies IAM's signature before decrypting.
 // The caller owns the returned ticket and must call Clear when finished.
-func (v *TicketVerifier) Open(deviceID uint64, wire []byte) (*sharedticket.Ticket, error) {
+func (v *TicketVerifier) Open(deviceID shareddevice.ID, wire []byte) (*sharedticket.Ticket, error) {
 	if len(wire) != sharedticket.SignedSize || wire[0] != sharedticket.SignedVersion {
 		return nil, sharedticket.ErrTicketInvalid
 	}

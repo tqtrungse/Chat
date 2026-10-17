@@ -12,6 +12,7 @@ package mocks
 import (
 	reflect "reflect"
 	time "time"
+	device "xxx/internal/shared/device"
 	ticket "xxx/internal/shared/ticket"
 
 	gomock "go.uber.org/mock/gomock"
@@ -56,7 +57,7 @@ func (mr *MockTicketVerifierMockRecorder) CheckExpiry(arg0, now any) *gomock.Cal
 }
 
 // Open mocks base method.
-func (m *MockTicketVerifier) Open(deviceID uint64, arg1 []byte) (*ticket.Ticket, error) {
+func (m *MockTicketVerifier) Open(deviceID device.ID, arg1 []byte) (*ticket.Ticket, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Open", deviceID, arg1)
 	ret0, _ := ret[0].(*ticket.Ticket)

@@ -85,11 +85,11 @@ func TestRouter_FacadeDelegatesActivationLifecycleAndCapacity(t *testing.T) {
 			return nil
 		},
 	}
-	const deviceID = uint64(0x91)
+	const deviceID = shareddevice.ID(0x91)
 	ticket := testTicket(deviceID)
 	verified := false
 	verifier := testTicketVerifier{
-		open: func(id uint64, _ []byte) (*sharedticket.Ticket, error) {
+		open: func(id shareddevice.ID, _ []byte) (*sharedticket.Ticket, error) {
 			require.Equal(t, deviceID, id)
 			return ticket, nil
 		},
@@ -109,7 +109,7 @@ func TestRouter_FacadeDelegatesActivationLifecycleAndCapacity(t *testing.T) {
 	require.Zero(t, router.CurConns())
 	require.Equal(t, 250*time.Millisecond, router.Tick())
 	token := make([]byte, tokenSize)
-	binary.LittleEndian.PutUint64(token, deviceID)
+	binary.LittleEndian.PutUint64(token, deviceID.Uint64())
 	prepared, err := router.PrepareActivation(token, []byte("ticket"), []byte("signature"))
 	require.NoError(t, err)
 	require.Same(t, ticket, prepared)
@@ -145,7 +145,7 @@ func TestRouter_AsyncSendAndAsyncSendConnSerializeFrames(t *testing.T) {
 	t.Cleanup(cancel)
 	conn, _ := newTestConn()
 	id := shareddevice.ID(0xA1)
-	keys := testTicket(uint64(id)).Keys
+	keys := testTicket(id).Keys
 	_, err := router.registry.Replace(id, conn, newSession(keys, id, time.Now().Unix()))
 	require.NoError(t, err)
 	var frames [][]byte

@@ -54,7 +54,7 @@ func newLifecycleForTest(
 	return lifecycle, presence
 }
 
-func testTicket(deviceID uint64) *sharedticket.Ticket {
+func testTicket(deviceID shareddevice.ID) *sharedticket.Ticket {
 	ticket := &sharedticket.Ticket{
 		DeviceID:  deviceID,
 		ExpiresAt: time.Now().Add(time.Minute).Unix(),
@@ -86,7 +86,7 @@ func TestLifecycle_PrepareActivationValidatesTokenBeforeOpeningTicket(t *testing
 	openCalls := 0
 	lifecycle := newConnectionLifecycle(
 		testSigner{},
-		testTicketVerifier{open: func(uint64, []byte) (*sharedticket.Ticket, error) {
+		testTicketVerifier{open: func(shareddevice.ID, []byte) (*sharedticket.Ticket, error) {
 			openCalls++
 			return nil, nil
 		}},
@@ -106,7 +106,7 @@ func TestLifecycle_PrepareActivationValidatesTokenBeforeOpeningTicket(t *testing
 
 func TestLifecycle_PrepareActivationOpensAndVerifiesTicket(t *testing.T) {
 	verifierTicket := testTicket(0x12A)
-	var openedDeviceID uint64
+	var openedDeviceID shareddevice.ID
 	var openedTicket []byte
 	var verifiedPub, verifiedPayload, verifiedSign []byte
 	ticketBlob := []byte("ticket envelope")
@@ -118,7 +118,7 @@ func TestLifecycle_PrepareActivationOpensAndVerifiesTicket(t *testing.T) {
 			verifiedSign = append([]byte(nil), sign...)
 			return nil
 		}},
-		testTicketVerifier{open: func(id uint64, ticket []byte) (*sharedticket.Ticket, error) {
+		testTicketVerifier{open: func(id shareddevice.ID, ticket []byte) (*sharedticket.Ticket, error) {
 			openedDeviceID = id
 			openedTicket = append([]byte(nil), ticket...)
 			return verifierTicket, nil
@@ -130,7 +130,7 @@ func TestLifecycle_PrepareActivationOpensAndVerifiesTicket(t *testing.T) {
 		&presenceSync{},
 	)
 	token := make([]byte, tokenSize)
-	binary.LittleEndian.PutUint64(token, verifierTicket.DeviceID)
+	binary.LittleEndian.PutUint64(token, verifierTicket.DeviceID.Uint64())
 
 	got, err := lifecycle.PrepareActivation(token, ticketBlob, signature)
 
@@ -147,10 +147,10 @@ func TestLifecycle_PrepareActivationClearsTicketWhenSignatureFails(t *testing.T)
 	wantErr := errors.New("bad device signature")
 	ticket := testTicket(0x12A)
 	token := make([]byte, tokenSize)
-	binary.LittleEndian.PutUint64(token, ticket.DeviceID)
+	binary.LittleEndian.PutUint64(token, ticket.DeviceID.Uint64())
 	lifecycle := newConnectionLifecycle(
 		testSigner{verify: func([]byte, []byte, []byte) error { return wantErr }},
-		testTicketVerifier{open: func(uint64, []byte) (*sharedticket.Ticket, error) { return ticket, nil }},
+		testTicketVerifier{open: func(shareddevice.ID, []byte) (*sharedticket.Ticket, error) { return ticket, nil }},
 		time.Second,
 		newConnectionRegistry(1),
 		newTestLogger(t),
@@ -165,7 +165,7 @@ func TestLifecycle_PrepareActivationClearsTicketWhenSignatureFails(t *testing.T)
 	require.Zero(t, ticket.Keys)
 	require.Zero(t, ticket.ActivationKey)
 	require.Zero(t, ticket.IdentityPub)
-	require.Equal(t, uint64(0x12A), ticket.DeviceID)
+	require.Equal(t, shareddevice.ID(0x12A), ticket.DeviceID)
 	require.NotZero(t, ticket.ExpiresAt)
 }
 

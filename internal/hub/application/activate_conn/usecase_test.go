@@ -45,7 +45,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const testDeviceID uint64 = 0x12A
+const testDeviceID shareddevice.ID = 0x12A
 
 type usecaseTestEnv struct {
 	uc             *connActivator
@@ -109,11 +109,15 @@ func newUsecaseTestEnv(t *testing.T, cfg Config) *usecaseTestEnv {
 	signer := connectionmocks.NewMockSigner(ctrl)
 	cache := connectionmocks.NewMockDistributedCache(ctrl)
 	cb := connectionmocks.NewMockCircuitBreaker(ctrl)
-	cb.EXPECT().Execute(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, fn func(context.Context) error) error {
-			return fn(ctx)
-		},
-	).AnyTimes()
+	cb.
+		EXPECT().
+		Execute(gomock.Any(), gomock.Any()).
+		DoAndReturn(
+			func(ctx context.Context, fn func(context.Context) error) error {
+				return fn(ctx)
+			},
+		).
+		AnyTimes()
 
 	router := connection.NewRouter(
 		rootCtx,
@@ -161,7 +165,7 @@ func (e *usecaseTestEnv) mockConn(t *testing.T) *testConn {
 
 func newActiveRequest() *pbpub.ActiveConnReq {
 	token := make([]byte, 8)
-	binary.LittleEndian.PutUint64(token, testDeviceID)
+	binary.LittleEndian.PutUint64(token, testDeviceID.Uint64())
 	return &pbpub.ActiveConnReq{
 		Token:  token,
 		Sign:   bytes.Repeat([]byte{0xA3}, 64),
@@ -170,7 +174,10 @@ func newActiveRequest() *pbpub.ActiveConnReq {
 }
 
 func newTestTicket() *sharedticket.Ticket {
-	ticket := &sharedticket.Ticket{DeviceID: testDeviceID, ExpiresAt: time.Now().Add(time.Hour).Unix()}
+	ticket := &sharedticket.Ticket{
+		DeviceID:  shareddevice.ID(testDeviceID),
+		ExpiresAt: time.Now().Add(time.Hour).Unix(),
+	}
 	for i := range ticket.Keys.RecvEnc {
 		ticket.Keys.RecvEnc[i] = byte(i + 1)
 		ticket.Keys.SendEnc[i] = byte(i + 2)
@@ -202,12 +209,20 @@ func (e *usecaseTestEnv) startChallenge(t *testing.T, conn *testConn) (
 
 	req := newActiveRequest()
 	ticket := newTestTicket()
-	e.ticketVerifier.EXPECT().Open(testDeviceID, gomock.Eq(req.Ticket)).Return(ticket, nil).Times(1)
-	e.signer.EXPECT().Verify(
-		gomock.Eq(ticket.IdentityPub[:]),
-		gomock.Eq(req.Ticket),
-		gomock.Eq(req.Sign),
-	).Return(nil).Times(1)
+	e.ticketVerifier.
+		EXPECT().
+		Open(testDeviceID, gomock.Eq(req.Ticket)).
+		Return(ticket, nil).
+		Times(1)
+	e.signer.
+		EXPECT().
+		Verify(
+			gomock.Eq(ticket.IdentityPub[:]),
+			gomock.Eq(req.Ticket),
+			gomock.Eq(req.Sign),
+		).
+		Return(nil).
+		Times(1)
 
 	var challenge []byte
 	conn.writeFn = func(frame []byte) (int, error) {
@@ -371,15 +386,27 @@ func TestProve_ActivatesSessionAndSendsAuthenticatedAck(t *testing.T) {
 	require.NoError(t, err)
 	defer connKeys.Clear()
 
-	env.ticketVerifier.EXPECT().CheckExpiry(gomock.Any(), gomock.Any()).Return(nil).Times(1)
-	env.cache.EXPECT().BatchAddDevices(gomock.Any(), gomock.Any()).Return(nil, nil).Times(1)
+	env.ticketVerifier.
+		EXPECT().
+		CheckExpiry(gomock.Any(), gomock.Any()).
+		Return(nil).
+		Times(1)
+	env.cache.
+		EXPECT().
+		BatchAddDevices(gomock.Any(), gomock.Any()).
+		Return(nil, nil).
+		Times(1)
 	deleteStarted := make(chan struct{})
-	env.cache.EXPECT().BatchDelDevices(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(context.Context, []shareddevice.ID) error {
-			close(deleteStarted)
-			return nil
-		},
-	).Times(1)
+	env.cache.
+		EXPECT().
+		BatchDelDevices(gomock.Any(), gomock.Any()).
+		DoAndReturn(
+			func(context.Context, []shareddevice.ID) error {
+				close(deleteStarted)
+				return nil
+			},
+		).
+		Times(1)
 	ackWritten := make(chan []byte, 1)
 	conn.asyncWriteFn = func(frame []byte, callback nio.AsyncCallback) error {
 		copyOfFrame := bytes.Clone(frame)
@@ -436,7 +463,11 @@ func TestActivate_TicketOpenFailureClosesAndReleasesPendingState(t *testing.T) {
 	conn := env.mockConn(t)
 	require.True(t, env.uc.Admit(conn))
 	req := newActiveRequest()
-	env.ticketVerifier.EXPECT().Open(testDeviceID, gomock.Eq(req.Ticket)).Return(nil, errors.New("invalid ticket")).Times(1)
+	env.ticketVerifier.
+		EXPECT().
+		Open(testDeviceID, gomock.Eq(req.Ticket)).
+		Return(nil, errors.New("invalid ticket")).
+		Times(1)
 
 	action := env.uc.Activate(conn, marshalFrame(t, pbpub.MsgType_REQ_ACTIVE_CONN, req))
 	require.Equal(t, nio.Close, action)

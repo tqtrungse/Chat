@@ -27,6 +27,8 @@ import (
 	"testing"
 	"time"
 
+	shareddevice "xxx/internal/shared/device"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,7 +62,7 @@ func newTicketTestSealer(t *testing.T, curID byte, ids ...byte) *Sealer {
 // newTicketTestTicket returns a ticket with every field populated with
 // distinct random data, so a marshaling bug (wrong offset, overlapping
 // fields, a field dropped) cannot hide behind an all-zero field.
-func newTicketTestTicket(t *testing.T, deviceID uint64, expiresAt int64) *Ticket {
+func newTicketTestTicket(t *testing.T, deviceID shareddevice.ID, expiresAt int64) *Ticket {
 	t.Helper()
 
 	tk := &Ticket{DeviceID: deviceID, ExpiresAt: expiresAt}
@@ -88,7 +90,7 @@ func ticketExpiry(d time.Duration) int64 {
 func requireTicketOpenFails(
 	t *testing.T,
 	s *Sealer,
-	deviceID uint64,
+	deviceID shareddevice.ID,
 	tk []byte,
 	want error,
 	msgAndArgs ...any,
@@ -140,7 +142,7 @@ func TestTicket_RoundTripAndTamper(t *testing.T) {
 func TestTicket_RoundTrip_DeviceIDBoundaries(t *testing.T) {
 	s := newTicketTestSealer(t, 1, 1)
 
-	for _, id := range []uint64{0, 1, math.MaxUint64} {
+	for _, id := range []shareddevice.ID{0, 1, math.MaxUint64} {
 		in := newTicketTestTicket(t, id, ticketExpiry(20*time.Second))
 		tk, err := s.Seal(in)
 		require.NoError(t, err)
@@ -272,7 +274,7 @@ func TestTicket_Open_DoesNotMutateInput(t *testing.T) {
 
 	cases := []struct {
 		name     string
-		deviceID uint64
+		deviceID shareddevice.ID
 		tk       []byte
 	}{
 		{"valid", 42, valid},
@@ -504,7 +506,7 @@ func TestTicket_ConcurrentSealOpen(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, goroutines)
 	for g := range goroutines {
-		in := newTicketTestTicket(t, uint64(g), ticketExpiry(20*time.Second))
+		in := newTicketTestTicket(t, shareddevice.ID(g), ticketExpiry(20*time.Second))
 
 		wg.Add(1)
 		go func(g int, in *Ticket) {

@@ -45,11 +45,11 @@ func (s testSigner) Verify(identityPub, payload, sign []byte) error {
 }
 
 type testTicketVerifier struct {
-	open        func(deviceID uint64, ticket []byte) (*sharedticket.Ticket, error)
+	open        func(deviceID shareddevice.ID, ticket []byte) (*sharedticket.Ticket, error)
 	checkExpiry func(ticket *sharedticket.Ticket, now time.Time) error
 }
 
-func (v testTicketVerifier) Open(deviceID uint64, ticket []byte) (*sharedticket.Ticket, error) {
+func (v testTicketVerifier) Open(deviceID shareddevice.ID, ticket []byte) (*sharedticket.Ticket, error) {
 	if v.open != nil {
 		return v.open(deviceID, ticket)
 	}

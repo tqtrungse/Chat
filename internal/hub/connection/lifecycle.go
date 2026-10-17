@@ -133,7 +133,7 @@ func (l *connectionLifecycle) PrepareActivation(token, ticket, sign []byte) (*sh
 	}
 
 	deviceID := binary.LittleEndian.Uint64(token)
-	t, err := l.ticketVerifier.Open(deviceID, ticket)
+	t, err := l.ticketVerifier.Open(sharedevice.ID(deviceID), ticket)
 	if err != nil {
 		return nil, err
 	}
