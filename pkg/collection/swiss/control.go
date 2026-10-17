@@ -38,7 +38,7 @@ func setTag(g control, idx uint, tag tag) control {
 }
 
 func (c control) GetTag(idx uint) tag {
-	return tag((c >> (idx << 3)) & 0xFF) // SỬA Ở ĐÂY
+	return tag((c >> (idx << 3)) & 0xFF)
 }
 
 // MatchTag

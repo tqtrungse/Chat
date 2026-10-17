@@ -62,8 +62,6 @@ type PoolConfig struct {
 	// MaxIdleConns will be reduced to match the MaxOpenConns limit.
 	//
 	// If n <= 0, no idle connections are retained.
-	//
-	// Default: 4
 	MaxIdleConns int
 
 	// ConnMaxLifetime sets the maximum amount of time a connection may be reused.

@@ -58,12 +58,6 @@ package mpsc
 // by an isolated atomic-only microbenchmark (planned); treat as the leading
 // hypothesis, not a proven root cause.
 //
-// Scope: this override is limited to darwin/arm64, NOT arm64 in general.
-// Apple Silicon's fabric is a specific implementation; server-grade arm64
-// (Graviton, Ampere Altra) has a different coherence design and has not
-// been benchmarked -- do not assume the same conclusion holds there without
-// separate data.
-//
 // Re-verify if: (a) Go's runtime/compiler atomic codegen for arm64 changes,
 // (b) benchmarked on PushPop (consumer-contended) workload, not just
 // Push-only -- this decision was made from producer-heavy numbers and may

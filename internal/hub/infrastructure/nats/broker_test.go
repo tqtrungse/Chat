@@ -719,7 +719,7 @@ func TestBroker_RetryLocalDelivery_ExhaustsBudgetThenPushesOffline(t *testing.T)
 }
 
 // TestBroker_RetryLocalDelivery_IgnoresCancellationOfAWithoutCancelContext is a
-// characterization test -- see "READ ME FIRST" at the top of this file.
+// characterization test.
 // It currently passes: retryLocalDelivery runs the full backoff schedule to
 // completion even though the parent context was canceled before the call.
 func TestBroker_RetryLocalDelivery_IgnoresCancellationOfAWithoutCancelContext(t *testing.T) {
