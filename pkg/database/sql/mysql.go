@@ -51,7 +51,7 @@ func (m *mysql) Open(ctx context.Context, cfg Config) error {
 			cfg.Passwd,
 			cfg.PrimaryAddr,
 			cfg.DBName,
-			cfg.MultiStatements,
+			false,
 		),
 		cfg.Pool,
 	)
@@ -90,7 +90,7 @@ func (m *mysql) Open(ctx context.Context, cfg Config) error {
 				cfg.Passwd,
 				replicaAddr,
 				cfg.DBName,
-				cfg.MultiStatements,
+				false,
 			),
 			cfg.Pool,
 		)

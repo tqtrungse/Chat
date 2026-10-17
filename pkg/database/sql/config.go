@@ -24,13 +24,12 @@ import (
 )
 
 type Config struct {
-	User            string
-	Passwd          string
-	DBName          string
-	PrimaryAddr     string
-	ReplicaAddrs    []string
-	MultiStatements bool
-	Pool            PoolConfig
+	User         string
+	Passwd       string
+	DBName       string
+	PrimaryAddr  string
+	ReplicaAddrs []string
+	Pool         PoolConfig
 }
 
 func (c *Config) Load(loader pkg.ConfigLoader) {
@@ -42,7 +41,6 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 	c.DBName = strings.TrimSpace(loader.GetString("SQL_DATABASE_NAME"))
 	c.PrimaryAddr = strings.TrimSpace(loader.GetString("SQL_DATABASE_PRIMARY_ADDRESS"))
 	c.ReplicaAddrs = pkg.SplitList(loader.GetString("SQL_DATABASE_REPLICA_ADDRESSES"))
-	c.MultiStatements = loader.GetBool("SQL_DATABASE_MULTI_STATEMENTS")
 	c.Pool.Load(loader)
 }
 

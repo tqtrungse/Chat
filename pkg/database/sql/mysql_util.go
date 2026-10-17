@@ -66,7 +66,7 @@ func buildMySqlDSN(
 		MultiStatements: multiStatements,
 		ParseTime:       true,
 		Params: map[string]string{
-			"charset": "utf8mb4",
+			"charset": "utf8mb4", // specify the connection charset
 		},
 	}
 	return cfg.FormatDSN()
