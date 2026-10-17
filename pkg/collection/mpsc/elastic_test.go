@@ -179,8 +179,6 @@ func TestElastic_TryPop_DrainsFullyAfterClose(t *testing.T) {
 // after Close(), even across node boundaries the consumer hasn't reached
 // yet.
 //
-// KNOWN BUG in the reviewed elastic.go: Pop() has an extra
-//
 //	if e.IsClosed() { return value, false }
 //
 // right after the "current node is closed and drained" check. That check
