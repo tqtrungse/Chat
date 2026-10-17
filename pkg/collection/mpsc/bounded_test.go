@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"xxx/pkg"
 	"xxx/pkg/backoff"
 
 	"github.com/stretchr/testify/require"
@@ -617,4 +618,49 @@ func TestBounded_TryPush_NoSpuriousFull(t *testing.T) {
 	}
 	wg.Wait()
 	require.Zero(t, failed.Load())
+}
+
+func TestBounded_SendIdxWrap(t *testing.T) {
+	for _, capacity := range []int{1, 2, 8, 256} {
+		q := newBoundedNearWrap(t, capacity, 2)
+		c := int(q.capacity)
+
+		// Push/Pop xuyên qua điểm wrap.
+		for i := 0; i < 4*c+3; i++ {
+			require.False(t, q.Push(i))
+			v, closed := q.Pop()
+			require.False(t, closed)
+			require.Equal(t, i, v)
+		}
+
+		// Full detection + FIFO ngay quanh điểm wrap.
+		q = newBoundedNearWrap(t, capacity, 2)
+		for round := 0; round < 5; round++ {
+			for i := 0; i < c; i++ {
+				require.Truef(t, q.TryPush(i), "cap=%d round=%d i=%d", c, round, i)
+			}
+			require.Falsef(t, q.TryPush(-1), "cap=%d round=%d: phải đầy", c, round)
+			for i := 0; i < c; i++ {
+				v, ok := q.TryPop()
+				require.True(t, ok)
+				require.Equal(t, i, v)
+			}
+		}
+	}
+}
+
+// Place the queue away from the wrap `laps` lap
+// point (start based on capacity because capacity | 2^32).
+func newBoundedNearWrap(t *testing.T, capacity int, laps uint32) *Bounded[int] {
+	q, err := NewBounded[int](capacity)
+	require.NoError(t, err)
+
+	start := 0 - laps*q.capacity
+	q.readIdx = start
+	q.state.Store(uint64(start) << sendIdxShift)
+	for j := uint32(0); j < q.capacity; j++ {
+		idx := start + j
+		q.ring[pkg.CacheRemap(idx, q.capacity, q.entrySize)].Cycle.Store((idx >> q.n) << 1)
+	}
+	return q
 }

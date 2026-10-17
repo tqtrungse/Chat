@@ -51,7 +51,8 @@ type Bounded[V any] struct {
 	entrySize uint32
 	capacity  uint32
 	n         uint32
-	_         [pkg.CacheLineSize - unsafe.Sizeof([]entry[V]{}) - 12]byte
+	cycleMask uint32 // 2^(33-n) - 1
+	_         [pkg.CacheLineSize - unsafe.Sizeof([]entry[V]{}) - 16]byte
 }
 
 func NewBounded[V any](capacity int) (*Bounded[V], error) {
@@ -61,13 +62,15 @@ func NewBounded[V any](capacity int) (*Bounded[V], error) {
 	if capacity > math.MaxUint16 {
 		return nil, fmt.Errorf("capacity can not over %d", math.MaxUint16)
 	}
-	rawCapacity := uint32(pkg.NextPowerOfTwo(capacity))
 
+	rawCapacity := uint32(pkg.NextPowerOfTwo(capacity))
+	n := uint32(bits.TrailingZeros64(uint64(rawCapacity)))
 	return &Bounded[V]{
 		ring:      make([]entry[V], rawCapacity),
 		entrySize: uint32(unsafe.Sizeof(entry[V]{})),
 		capacity:  rawCapacity,
-		n:         uint32(bits.TrailingZeros64(uint64(rawCapacity))),
+		n:         n,
+		cycleMask: uint32(uint64(1)<<(33-n) - 1), // n=0 -> 0xFFFFFFFF, naural wrap
 	}, nil
 }
 
@@ -90,16 +93,22 @@ claim:
 		mapIdx = pkg.CacheRemap(idx, b.capacity, b.entrySize)
 		ent = &b.ring[mapIdx]
 
-		switch diff := int32(ent.Cycle.Load() - cycle); {
+		// Compare modulo M = cycleMask+1 to withstand the sendIdx wrap.
+		diff := (ent.Cycle.Load() - cycle) & b.cycleMask
+		switch {
 		case diff == 0:
 			if b.state.CompareAndSwap(s, s+sendIdxOne) {
 				break claim
 			}
-		case diff < 0: // slot của lap trước chưa được consume: đầy thật
+
+		// "negative" according to modulo M: the previous lap's slot has not been consumed,
+		// it is completely full.
+		case diff > b.cycleMask>>1:
 			b.state.Add(^(pusherOne - 1))
 			return false
 		}
-		s = b.state.Load() // thua CAS hoặc idx đã cũ: thử lại với state mới
+		// Lost to old CAS or idx: try again with new state.
+		s = b.state.Load()
 	}
 
 	ent.Value = value
@@ -167,7 +176,7 @@ func (b *Bounded[V]) TryPop() (value V, ok bool) {
 	if cycle == cycleEnt {
 		value = ent.Value
 		ent.Value = pkg.ZeroValue[V]()
-		ent.Cycle.Store(cycleEnt + 1)
+		ent.Cycle.Store((cycleEnt + 1) & b.cycleMask)
 		b.readIdx++
 		return value, true
 	}
@@ -192,7 +201,7 @@ func (b *Bounded[V]) Pop() (value V, closed bool) {
 		if cycle == cycleEnt {
 			value = ent.Value
 			ent.Value = pkg.ZeroValue[V]()
-			ent.Cycle.Store(cycleEnt + 1)
+			ent.Cycle.Store((cycleEnt + 1) & b.cycleMask)
 			if parked {
 				b.metaReaderWait.Store(readerUnpared)
 			}
@@ -288,7 +297,7 @@ func (b *Bounded[V]) Drain(fn func(V)) {
 		if cycleEnt&1 != 0 {
 			fn(ent.Value)
 			ent.Value = pkg.ZeroValue[V]()
-			ent.Cycle.Store(cycleEnt + 1)
+			ent.Cycle.Store((cycleEnt + 1) & b.cycleMask)
 		}
 		b.readIdx++
 	}
