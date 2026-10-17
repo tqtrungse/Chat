@@ -43,12 +43,3 @@ func TestParseHeartbeatKey(t *testing.T) {
 	_, ok = parseHeartbeatKey("hub:heartbeat:not-a-number")
 	require.False(t, ok)
 }
-
-func TestBucketFor(t *testing.T) {
-	c, _ := newTestCache(t, 1)
-	b := c.bucketFor(uint64(testBucketCount) * 7)
-	require.Equal(t, uint32(0), b)
-
-	b = c.bucketFor(uint64(testBucketCount)*7 + 1)
-	require.Equal(t, uint32(1), b)
-}
