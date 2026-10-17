@@ -86,7 +86,7 @@ func NewBroker(
 	// `proto.MarshalAppend` will either panic or write corrupted data.
 	// So we must set `maxHops` less than 127 to be able to use `MarshalOptions.UseCachedSize`.
 	if cfg.MaxHops > limitMaxHops {
-		return nil, errMaxHopsExceeded
+		return nil, fmt.Errorf("broker: MaxHops %d exceeds limit %d", cfg.MaxHops, limitMaxHops)
 	}
 
 	b := &broker{
