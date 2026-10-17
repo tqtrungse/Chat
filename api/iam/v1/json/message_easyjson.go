@@ -112,7 +112,7 @@ func easyjson4086215fDecodeXxxApiIamV1Json1(in *jlexer.Lexer, out *ExchangeKeyRe
 			if in.IsNull() {
 				in.Skip()
 			} else {
-				out.DeviceID = uint64(in.Uint64())
+				out.DeviceID = string(in.String())
 			}
 		case "client_pub_key":
 			if in.IsNull() {
@@ -138,7 +138,7 @@ func easyjson4086215fEncodeXxxApiIamV1Json1(out *jwriter.Writer, in ExchangeKeyR
 	{
 		const prefix string = ",\"device_id\":"
 		out.RawString(prefix[1:])
-		out.Uint64(uint64(in.DeviceID))
+		out.String(string(in.DeviceID))
 	}
 	{
 		const prefix string = ",\"client_pub_key\":"

@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -39,7 +40,7 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-const testExchangeDeviceID uint64 = 0x12A
+const testExchangeDeviceID = "298"
 
 type usecaseTestDeps struct {
 	uc      exchange_key.Usecase
@@ -70,7 +71,7 @@ func newUsecaseTestDeps(t *testing.T) usecaseTestDeps {
 func expectDeviceLookup(
 	t *testing.T,
 	deps usecaseTestDeps,
-	deviceID uint64,
+	deviceID shareddevice.ID,
 	meta *exchange_key.DeviceMeta,
 	findErr error,
 ) {
@@ -81,7 +82,7 @@ func expectDeviceLookup(
 			return fn(ctx)
 		},
 	)
-	deps.reader.EXPECT().FindDeviceMeta(gomock.Any(), shareddevice.ID(deviceID)).Return(meta, findErr)
+	deps.reader.EXPECT().FindDeviceMeta(gomock.Any(), deviceID).Return(meta, findErr)
 }
 
 func validExchangeRequest() json.ExchangeKeyReq {
@@ -151,12 +152,13 @@ func TestExchange_Success(t *testing.T) {
 	sealedTicket := []byte("sealed-ticket-envelope")
 	var sealed *sharedticket.Ticket
 	startedAt := time.Now()
+	deviceID, _ := strconv.ParseUint(req.DeviceID, 10, 64)
 
-	expectDeviceLookup(t, deps, req.DeviceID, meta, nil)
+	expectDeviceLookup(t, deps, shareddevice.ID(deviceID), meta, nil)
 	const derivationDomain = "xxx/iam/exchange-key/v1"
 	expectedInfo := make([]byte, 0, len(derivationDomain)+8)
 	expectedInfo = append(expectedInfo, derivationDomain...)
-	expectedInfo = binary.LittleEndian.AppendUint64(expectedInfo, req.DeviceID)
+	expectedInfo = binary.LittleEndian.AppendUint64(expectedInfo, deviceID)
 	deps.deriver.EXPECT().DeriveKeys(&clientPub, expectedInfo).Return(expectedDerived, serverPub, nil)
 	deps.issuer.EXPECT().Seal(gomock.Any()).DoAndReturn(func(ticket *sharedticket.Ticket) ([]byte, error) {
 		sealed = ticket
@@ -218,7 +220,8 @@ func TestExchange_RejectsMissingOrForeignDevice(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			deps := newUsecaseTestDeps(t)
 			req := validExchangeRequest()
-			expectDeviceLookup(t, deps, req.DeviceID, tt.meta, nil)
+			deviceID, _ := strconv.ParseUint(req.DeviceID, 10, 64)
+			expectDeviceLookup(t, deps, shareddevice.ID(deviceID), tt.meta, nil)
 
 			resp, err := deps.uc.Exchange(context.Background(), subject, req)
 
@@ -233,7 +236,8 @@ func TestExchange_RejectsInactiveDevice(t *testing.T) {
 	req := validExchangeRequest()
 	meta := activeDeviceMeta("user-123")
 	meta.State = device.StateLocked
-	expectDeviceLookup(t, deps, req.DeviceID, meta, nil)
+	deviceID, _ := strconv.ParseUint(req.DeviceID, 10, 64)
+	expectDeviceLookup(t, deps, shareddevice.ID(deviceID), meta, nil)
 
 	resp, err := deps.uc.Exchange(context.Background(), "user-123", req)
 
@@ -255,7 +259,7 @@ func TestExchange_PropagatesDatabaseAndReaderErrors(t *testing.T) {
 		{
 			name: "device reader error",
 			setup: func(t *testing.T, deps usecaseTestDeps, wantErr error) {
-				expectDeviceLookup(t, deps, testExchangeDeviceID, nil, wantErr)
+				expectDeviceLookup(t, deps, shareddevice.ID(298), nil, wantErr)
 			},
 		},
 	}
@@ -277,7 +281,8 @@ func TestExchange_PropagatesDatabaseAndReaderErrors(t *testing.T) {
 func TestExchange_PropagatesKeyDerivationError(t *testing.T) {
 	deps := newUsecaseTestDeps(t)
 	req := validExchangeRequest()
-	expectDeviceLookup(t, deps, req.DeviceID, activeDeviceMeta("user-123"), nil)
+	deviceID, _ := strconv.ParseUint(req.DeviceID, 10, 64)
+	expectDeviceLookup(t, deps, shareddevice.ID(deviceID), activeDeviceMeta("user-123"), nil)
 	wantErr := errors.New("key derivation failed")
 	deps.deriver.EXPECT().DeriveKeys(gomock.Any(), gomock.Any()).Return(exchange_key.DerivedKeys{}, [32]byte{}, wantErr)
 
@@ -291,7 +296,8 @@ func TestExchange_PropagatesTicketSealErrorAndClearsKeys(t *testing.T) {
 	deps := newUsecaseTestDeps(t)
 	req := validExchangeRequest()
 	expectedDerived := derivedKeysForTest()
-	expectDeviceLookup(t, deps, req.DeviceID, activeDeviceMeta("user-123"), nil)
+	deviceID, _ := strconv.ParseUint(req.DeviceID, 10, 64)
+	expectDeviceLookup(t, deps, shareddevice.ID(deviceID), activeDeviceMeta("user-123"), nil)
 	deps.deriver.EXPECT().DeriveKeys(gomock.Any(), gomock.Any()).Return(expectedDerived, [32]byte{}, nil)
 	wantErr := errors.New("ticket seal failed")
 	var sealed *sharedticket.Ticket

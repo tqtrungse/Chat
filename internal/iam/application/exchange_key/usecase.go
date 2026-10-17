@@ -19,6 +19,7 @@ package exchange_key
 import (
 	"context"
 	"encoding/binary"
+	"strconv"
 	"time"
 
 	"xxx/api/iam/v1/json"
@@ -63,14 +64,19 @@ func (ke *keyExchanger) Exchange(
 	subject string,
 	req json.ExchangeKeyReq,
 ) (*json.ExchangeKeyResp, error) {
-	if req.DeviceID == 0 || len(req.ClientPubKey) != 32 || subject == "" {
+	if len(req.DeviceID) == 0 || len(req.ClientPubKey) != 32 || subject == "" {
+		return nil, ErrRequestInvalid
+	}
+
+	deviceID, err := strconv.ParseUint(req.DeviceID, 10, 64)
+	if err != nil {
 		return nil, ErrRequestInvalid
 	}
 
 	var meta *DeviceMeta
-	err := ke.db.WithDB(ctx, sql.TxSourcePrimary, func(dbCtx context.Context) error {
+	err = ke.db.WithDB(ctx, sql.TxSourcePrimary, func(dbCtx context.Context) error {
 		var findErr error
-		meta, findErr = ke.deviceMetaReader.FindDeviceMeta(dbCtx, shareddevice.ID(req.DeviceID))
+		meta, findErr = ke.deviceMetaReader.FindDeviceMeta(dbCtx, shareddevice.ID(deviceID))
 		return findErr
 	})
 	if err != nil {
@@ -88,7 +94,7 @@ func (ke *keyExchanger) Exchange(
 
 	info := make([]byte, 0, len(keyDerivationInfo)+8)
 	info = append(info, keyDerivationInfo...)
-	info = binary.LittleEndian.AppendUint64(info, req.DeviceID)
+	info = binary.LittleEndian.AppendUint64(info, deviceID)
 
 	var (
 		resp    = new(json.ExchangeKeyResp)
@@ -101,7 +107,7 @@ func (ke *keyExchanger) Exchange(
 	}
 
 	t := &sharedticket.Ticket{
-		DeviceID:      req.DeviceID,
+		DeviceID:      shareddevice.ID(deviceID),
 		ExpiresAt:     time.Now().Add(ticketTTL).Unix(),
 		Keys:          derived.Session,
 		ActivationKey: derived.Activation,

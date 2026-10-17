@@ -7,7 +7,7 @@
 package json
 
 type ExchangeKeyReq struct {
-	DeviceID uint64 `json:"device_id"`
+	DeviceID string `json:"device_id"`
 
 	// If the Base64 string is valid and decodes to exactly 32 bytes, it fits perfectly into a `[32]byte` array without
 	// error.
