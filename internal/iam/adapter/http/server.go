@@ -42,7 +42,7 @@ const claimsContextKey contextKey = iota
 
 var (
 	errAuthHeaderNotFound = errors.New("missing or invalid Authorization header")
-	errAuthVerify         = errors.New("failed to varify token")
+	errAuthVerify         = errors.New("failed to verify token")
 	errJsonMarshall       = errors.New("failed to marshall JSON")
 )
 
