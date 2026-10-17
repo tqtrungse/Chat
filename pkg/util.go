@@ -28,15 +28,10 @@ import (
 )
 
 const (
-	serviceBits = uint64(8) // max 256 service
-	ordinalBits = uint64(8) // max 256 replicas per service
-	machineBits = serviceBits + ordinalBits
-)
-
-const (
 	PtrSize       = unsafe.Sizeof(uintptr(0))
 	CacheLineSize = unsafe.Sizeof(cpu.CacheLinePad{})
 
+	ordinalBits       = uint64(8) // max 256 replicas per service
 	halfCacheLineSize = uint32(CacheLineSize / 2)
 )
 
@@ -52,8 +47,7 @@ func NextPowerOfTwo(v int) uint {
 	if v <= 1 {
 		return 1
 	}
-	nBits := int(unsafe.Sizeof(uint(0))) << 3
-	return 1 << (nBits - bits.LeadingZeros64(uint64(v)-1))
+	return 1 << bits.Len(uint(v-1))
 }
 
 // CacheRemap remaps an index to spread small entries across cache-line halves.
@@ -66,24 +60,37 @@ func NextPowerOfTwo(v int) uint {
 // transposed between groups so consecutive logical indices are distributed
 // across different cache-line halves rather than clustered together.
 //
-// The returned value is always an index in the range [0, capacity).
+// Condition: capacity > 0. When capacity is a power of 2, the result is a
+// permutation of [0, capacity). For other values of capacity, the function
+// does not perform a remapping and instead returns index % capacity
+// (which is still a permutation, though cache optimization is lost).
 //
 // Forked from https://github.com/bytedance/gopkg
 func CacheRemap(index, capacity, entrySize uint32) uint32 {
-	rawIndex := index % capacity
-	if entrySize >= halfCacheLineSize {
+	if capacity&(capacity-1) == 0 && capacity != 0 {
+		return cacheRemapPow2(index, capacity, entrySize)
+	}
+	return index % capacity // capacity == 0 vẫn panic chia cho 0, như hành vi cũ
+}
+
+func cacheRemapPow2(index, capacity, entrySize uint32) uint32 {
+	rawIndex := index & (capacity - 1)
+	if entrySize == 0 || entrySize >= halfCacheLineSize {
 		return rawIndex
 	}
 
-	entriesPerHalfLine := halfCacheLineSize / entrySize
-	if capacity <= entriesPerHalfLine {
+	// Number of entries in half a cache line, rounded down to a power of 2.
+	e := uint32(1) << (bits.Len32(halfCacheLineSize/entrySize) - 1)
+	if capacity <= e {
 		return rawIndex
 	}
 
-	groupCount := capacity / entriesPerHalfLine
-	groupNum := rawIndex % groupCount
-	groupIdx := rawIndex / groupCount
-	return groupNum*entriesPerHalfLine + groupIdx
+	eBits := uint(bits.TrailingZeros32(e))
+	groupBits := uint(bits.TrailingZeros32(capacity)) - eBits // groupCount = 1 << groupBits
+
+	groupNum := rawIndex & (1<<groupBits - 1)
+	groupIdx := rawIndex >> groupBits // always < e
+	return groupNum<<eBits | groupIdx
 }
 
 // MachineIDFromHostname get machine ID from K8S StatefullSet host name.
