@@ -36,6 +36,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	defaultReadBufferCap  = 4 * 4096
+	defaultWriteBufferCap = 4 * 4096
+)
+
 type Server struct {
 	nio.BuiltinEventEngine
 	eng       nio.Engine
@@ -56,6 +61,12 @@ func NewServer(
 	msgSender send_message.Usecase,
 	cleanup func(),
 ) *Server {
+	if cfg.ReadBufferCap <= 0 {
+		cfg.ReadBufferCap = defaultReadBufferCap
+	}
+	if cfg.WriteBufferCap <= 0 {
+		cfg.WriteBufferCap = defaultWriteBufferCap
+	}
 	return &Server{
 		ctx:       ctx,
 		ready:     make(chan struct{}),
@@ -83,11 +94,11 @@ func (s *Server) Run() error {
 		nio.WithLoadBalancing(nio.LeastConnections),
 
 		// Limits for read buffer in kernel-space (on RAM).
-		nio.WithSocketRecvBuffer(int(s.cfg.ReadBufferCap)),
+		nio.WithSocketRecvBuffer(s.cfg.ReadBufferCap),
 
 		// Limits for read buffer in user-space (on RAM).
-		nio.WithReadBufferCap(int(s.cfg.ReadBufferCap)),
-		nio.WithWriteBufferCap(int(s.cfg.WriteBufferCap)),
+		nio.WithReadBufferCap(s.cfg.ReadBufferCap),
+		nio.WithWriteBufferCap(s.cfg.WriteBufferCap),
 
 		// Data is immediately sent after writing.
 		nio.WithTCPNoDelay(nio.TCPNoDelay),

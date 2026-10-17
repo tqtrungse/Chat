@@ -48,7 +48,7 @@ type Config struct {
 	// or equal to its real amount.
 	//
 	// Default: 4KB
-	ReadBufferCap uint16
+	ReadBufferCap int
 
 	// WriteBufferCap is the maximum number of bytes that a static outbound buffer can hold,
 	// if the data exceeds this value.
@@ -57,7 +57,7 @@ type Config struct {
 	// or equal to its real amount.
 	//
 	// Default: 4KB
-	WriteBufferCap uint16
+	WriteBufferCap int
 }
 
 func (c *Config) Load(loader pkg.ConfigLoader) {
@@ -68,6 +68,6 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 	c.TCPKeepAlive = loader.GetDuration("TCP_SERVER_KEEP_ALIVE")
 	c.TCPKeepInterval = loader.GetDuration("TCP_SERVER_KEEP_INTERVAL")
 	c.TCPKeepCount = loader.GetInt("TCP_SERVER_KEEP_COUNT")
-	c.ReadBufferCap = loader.GetUint16("TCP_SERVER_READ_BUFFER")
-	c.WriteBufferCap = loader.GetUint16("TCP_SERVER_WRITE_BUFFER")
+	c.ReadBufferCap = loader.GetInt("TCP_SERVER_READ_BUFFER")
+	c.WriteBufferCap = loader.GetInt("TCP_SERVER_WRITE_BUFFER")
 }
