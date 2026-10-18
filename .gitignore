@@ -1,4 +1,5 @@
-/infrastructure/root-ca/
 /cmd/iam/.local
-/infrastructure/redis/local/.local.env
-/infrastructure/nats/local/.local.env
+/deploy/root-ca/
+/deploy/redis/local/.local.env
+/deploy/nats/local/.local.env
+/deploy/scylla/local

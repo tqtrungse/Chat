@@ -23,7 +23,6 @@ import (
 	"xxx/internal/hub/connection"
 	"xxx/internal/hub/domain/channel"
 	"xxx/internal/hub/domain/message"
-	"xxx/internal/hub/infrastructure/datastore/scylla/entity"
 	sharedevice "xxx/internal/shared/device"
 
 	"xxx/pkg/database/scylla"
@@ -86,7 +85,7 @@ func (m *msgReader) ListOfflineMsgs(
 	numRows := iter.NumRows()
 	msgs := make([]message.Offline, 0, numRows)
 	for range numRows {
-		var om entity.OfflineMessage
+		var om model.OfflineMessage
 		if !iter.StructScan(&om) {
 			break
 		}

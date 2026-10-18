@@ -25,8 +25,7 @@ import (
 	iamhttp "xxx/internal/iam/adapter/http"
 	"xxx/internal/iam/application/exchange_key"
 	"xxx/internal/iam/infrastructure/crypto"
-	"xxx/internal/iam/infrastructure/datastore/mysql"
-
+	"xxx/internal/iam/infrastructure/mysql"
 	"xxx/pkg"
 	"xxx/pkg/database/sql"
 	"xxx/pkg/log"

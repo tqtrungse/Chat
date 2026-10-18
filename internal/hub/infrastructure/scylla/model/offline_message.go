@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package entity
+package model
 
 type OfflineMessage struct {
 	DeviceID       int64  `db:"device_id"`

@@ -21,7 +21,7 @@ import (
 	"errors"
 
 	"xxx/internal/iam/application/exchange_key"
-	"xxx/internal/iam/infrastructure/datastore/mysql/model"
+	"xxx/internal/iam/infrastructure/mysql/model"
 	shareddevice "xxx/internal/shared/device"
 
 	"xxx/pkg/database/sql"
