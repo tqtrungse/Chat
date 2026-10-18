@@ -95,7 +95,7 @@ func TestNewLogger_NilConfig_UsesStdout(t *testing.T) {
 }
 
 func TestErrorAndHigherFlushBufferedEntries(t *testing.T) {
-	for _, level := range []string{"error", "dpanic", "panic", "fatal"} {
+	for _, level := range []string{"dpanic", "panic", "fatal"} {
 		t.Run(level, func(t *testing.T) {
 			logger, closeLogger, path := newFileLogger(t, &FileConfig{
 				BufferSize:    64 * 1024,
@@ -136,30 +136,6 @@ func TestErrorAndHigherFlushBufferedEntries(t *testing.T) {
 			require.Equal(t, "failure", entries[2]["msg"])
 		})
 	}
-}
-
-func TestErrorFlushesStdoutImmediately(t *testing.T) {
-	stdout, err := os.Create(filepath.Join(t.TempDir(), "stdout.log"))
-	require.NoError(t, err)
-	previousStdout := os.Stdout
-	os.Stdout = stdout
-	t.Cleanup(func() {
-		os.Stdout = previousStdout
-		require.NoError(t, stdout.Close())
-	})
-
-	logger, closeLogger := NewLogger(nil)
-	t.Cleanup(func() { require.NoError(t, closeLogger()) })
-	logger.Info("buffered context")
-	stat, err := stdout.Stat()
-	require.NoError(t, err)
-	require.Zero(t, stat.Size(), "Info should remain buffered")
-
-	logger.Error("stdout failure")
-	entries := readLogLines(t, stdout.Name())
-	require.Len(t, entries, 2)
-	require.Equal(t, "buffered context", entries[0]["msg"])
-	require.Equal(t, "stdout failure", entries[1]["msg"])
 }
 
 func TestNewLogger_FileConfig_WritesExpectedFields(t *testing.T) {

@@ -132,7 +132,7 @@ func NewLogger(cfg *FileConfig) (l *Logger, closeFn func() error) {
 		// Hooks run after the entry is written and before zap's panic/exit
 		// action, so Panic and Fatal also flush the buffered diagnostics.
 		zap.Hooks(func(entry zapcore.Entry) error {
-			if entry.Level >= zapcore.ErrorLevel {
+			if entry.Level >= zapcore.DPanicLevel {
 				return l.Sync()
 			}
 			return nil
