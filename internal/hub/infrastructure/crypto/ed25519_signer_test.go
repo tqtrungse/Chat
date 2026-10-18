@@ -92,10 +92,10 @@ func TestEd25519Signature_Verify_SignatureFromDifferentPayload(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestEd25519Signature_Verify_MalformedSignatureLengthReturnsError checks
-// the companion case: unlike a malformed public key, ed25519.Verify does
-// NOT panic on a wrong-length signature -- it returns false, which this
-// wrapper correctly surfaces as an error.
+// TestEd25519Signature_Verify_MalformedPublicKeyLength checks that a wrong-length
+// public key never panics: unlike a wrong-length signature, ed25519.Verify panics
+// on a bad public key, so Verify guards it with a length check and returns
+// ErrSignerInvalidPubKey.
 func TestEd25519Signature_Verify_MalformedSignatureLengthReturnsError(t *testing.T) {
 	pub, _ := genEd25519KeyPair(t)
 	v := NewEd25519Signer()

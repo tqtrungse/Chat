@@ -54,7 +54,7 @@ func DefaultConnConfig() ConnConfig {
 	hostname, _ := os.Hostname()
 	return ConnConfig{
 		Name:          hostname,
-		MaxReconnects: -1,
+		MaxReconnects: 60,
 		ReconnectWait: 2 * time.Second,
 	}
 }

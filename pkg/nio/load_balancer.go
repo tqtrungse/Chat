@@ -136,7 +136,8 @@ func (lb *leastConnectionsLoadBalancer) next(_ net.Addr) (el *eventloop) {
 // Hash load-balancer
 // ------------------
 
-// hash converts a string to a unique hash code.
+// hash converts a string to a non-negative CRC32-based hash code.
+// Different strings may collide; it is not a unique identifier.
 func (*sourceAddrHashLoadBalancer) hash(s string) int {
 	v := int(crc32.ChecksumIEEE(pkg.StringToBytes(s)))
 	if v >= 0 {

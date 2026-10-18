@@ -305,9 +305,8 @@ func TestBroker_New_DefaultsWhenZeroValue(t *testing.T) {
 	require.Equal(t, uint32(128), br.inboxWorkers)
 }
 
-// TestBroker_New_PreservesCustomValues encodes the INTENDED behavior for a
-// caller who explicitly sets these fields away from zero. See the "READ ME
-// FIRST" comment at the top of this file -- this currently fails.
+// TestBroker_New_PreservesCustomValues checks that explicitly configured
+// (non-zero) values are kept instead of being replaced by defaults.
 func TestBroker_New_PreservesCustomValues(t *testing.T) {
 	nc := startTestNATS(t)
 	cfg := Config{

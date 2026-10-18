@@ -37,8 +37,8 @@ import (
 )
 
 const (
-	defaultReadBufferCap  = 4 * 4096
-	defaultWriteBufferCap = 4 * 4096
+	defaultReadBufferCap  = 4 * 1024
+	defaultWriteBufferCap = 4 * 1024
 )
 
 type Server struct {
@@ -61,6 +61,9 @@ func NewServer(
 	msgSender send_message.Usecase,
 	cleanup func(),
 ) *Server {
+	if cfg.TCPKeepAlive <= 0 {
+		cfg.TCPKeepAlive = 30 * time.Second
+	}
 	if cfg.ReadBufferCap <= 0 {
 		cfg.ReadBufferCap = defaultReadBufferCap
 	}

@@ -39,7 +39,7 @@ type Config struct {
 	// Default: 30s
 	PublishTimeout time.Duration
 
-	// DeliveryRetryBackoff defines delays between local delivery retries.
+	// DeliveryBackOff defines delays between local delivery retries.
 	// The number of entries is the maximum number of retry attempts.
 	//
 	// Default: [100ms, 500ms, 1s, 2s, 5s]

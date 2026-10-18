@@ -187,7 +187,7 @@ func TestNewLogger_FileConfig_WritesExpectedFields(t *testing.T) {
 func TestCallerSkip_ReportsCallSiteNotWrapper(t *testing.T) {
 	logger, closeFunc, path := newFileLogger(t, &FileConfig{})
 
-	logger.Info("caller check") // this line's number is asserted below
+	logger.Info("caller check") // the reported caller must point at this file, not logger.go
 	require.NoError(t, logger.Sync())
 	require.NoError(t, closeFunc())
 

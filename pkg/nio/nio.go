@@ -61,7 +61,7 @@ const (
 const defaultMaxPendingRegistrations = 8192
 
 var (
-	// shutdownPollInterval is how often we poll to check whether engine has been shut down during gnet.Stop().
+	// shutdownPollInterval is how often Engine.Stop polls to check whether the engine has been shut down.
 	shutdownPollInterval = 500 * time.Millisecond
 
 	// MaxStreamBufferCap is the default buffer size for each stream-oriented connection(TCP/Unix).
@@ -77,8 +77,8 @@ type (
 		// The parameter engine has information and various utilities.
 		OnBoot(eng Engine) (action Action)
 
-		// OnShutdown fires when the engine is being shut down, it is called right after
-		// all event-loops and connections are closed.
+		// OnShutdown fires when the engine is being shut down, before the event-loops
+		// are told to exit and before their connections are closed.
 		OnShutdown(eng Engine)
 
 		// OnOpen fires when a new connection has been opened.
@@ -438,8 +438,9 @@ func (e Engine) DupListener(network, addr string) (fd int, err error) {
 	return
 }
 
-// Stop gracefully shuts down this Engine without interrupting any active event-loops,
-// it waits indefinitely for connections and event-loops to be closed and then shuts down.
+// Stop gracefully shuts down this Engine without interrupting any active event-loops.
+// It blocks until the engine has finished shutting down or ctx is done,
+// in which case ctx.Err() is returned.
 func (e Engine) Stop(ctx context.Context) error {
 	if err := e.Validate(); err != nil {
 		return err
@@ -472,8 +473,8 @@ func (*BuiltinEventEngine) OnBoot(_ Engine) (action Action) {
 	return
 }
 
-// OnShutdown fires when the engine is being shut down, it is called right after
-// all event-loops and connections are closed.
+// OnShutdown fires when the engine is being shut down, before the event-loops
+// are told to exit and before their connections are closed.
 func (*BuiltinEventEngine) OnShutdown(_ Engine) {
 }
 
@@ -503,7 +504,7 @@ func (*BuiltinEventEngine) OnTick() (delay time.Duration, action Action) {
 type (
 	// AsyncCallback is a callback that will be invoked after the asynchronous function finishes.
 	//
-	// Note that the parameter gnet.Conn might have been already released when it's UDP protocol,
+	/// Note that the parameter Conn might have been already released when it's UDP protocol,
 	// thus it shouldn't be accessed.
 	// This callback will be executed in event-loop, thus it must not block, otherwise,
 	// it blocks the event-loop.
@@ -531,7 +532,8 @@ type (
 //	udp6  - IPv6
 //	unix  - Unix Domain Socket
 //
-// The "tcp" network scheme is assumed when one is not specified.
+// A scheme prefix is required: an address without one is rejected
+// with ErrInvalidNetworkAddress.
 func Run(eventHandler EventHandler, protoAddr string, opts ...Option) error {
 	listeners, options, err := createListeners([]string{protoAddr}, opts...)
 	if err != nil {

@@ -44,7 +44,7 @@ var (
 		500 * time.Millisecond, // Second attempt: Fast retry if the Hub has just reconnected the socket
 		1 * time.Second,        // Third attempt: Hub starts showing signs of overload
 		2 * time.Second,        // Fourth attempt: Wait for network stability
-		5 * time.Second,        // Fifth and subsequent attempts: Cap - Repeat every 5 seconds to avoid exhausting the CPU/NATS
+		5 * time.Second,        // Fifth attempt: final retry delay; once the schedule is exhausted the message goes offline
 	}
 )
 

@@ -283,10 +283,10 @@ func (c *cache) IsInfraError(err error) bool {
 		return false
 
 	// The deadline reached all the way down to the Redis call without an
-	// answer. This assumes the ctx passed into the guarded call (see
-	// RedisBreaker.Execute in redis_breaker.go) is scoped specifically to
-	// that Redis call — if so, this means Redis or the network to it was
-	// too slow, not that some unrelated caller-side budget ran out.
+	// answer. This assumes the ctx passed into the guarded call (see cb.circuitBreaker.Execute)
+	// is scoped specifically to that Redis call ...
+	// A recovered panic bypasses this function entirely (see cb.New's IsExcluded)
+	// and always counts as a failure.
 	case errors.Is(err, context.DeadlineExceeded):
 		return true
 
@@ -503,9 +503,10 @@ func (c *cache) BatchAddDevices(
 // deleted" from "some were already owned elsewhere", matching how
 // batchAddDevices also discards its Lua script's changed count).
 //
-// One Lua call per distinct bucket present in deviceIDs, same shape as
-// batchAddDevices — see batchDelDeviceScript for why the PUBLISH payload is
-// precomputed here rather than built in Lua.
+// One Lua call handles every bucket present in deviceIDs (unlike what the
+// name might suggest, buckets are not split into separate calls); see
+// batchDelDeviceScript for why the PUBLISH payload is precomputed here
+// rather than built in Lua.
 func (c *cache) BatchDelDevices(
 	ctx context.Context,
 	deviceIDs []shareddevice.ID,
@@ -517,7 +518,7 @@ func (c *cache) BatchDelDevices(
 	var (
 		hubDeviceKey = pkg.Concat(hubDevicesPrefix, c.hubID)
 		bHubID       = pkg.U64ToBytes(c.hubID)
-		byBucket     = make(map[uint32][]int) // bucket -> indices vào deviceIDs
+		byBucket     = make(map[uint32][]int) // bucket -> indices into deviceIDs
 		order        = make([]uint32, 0)
 	)
 
@@ -725,7 +726,7 @@ func (c *cache) addHub(ctx context.Context) error {
 	return c.rdb.SAdd(ctx, hubsKey, bHubID).Err()
 }
 
-// reapHub removes a hub from the "hubs" hash, announces its departure, and
+// reapHub removes a hub from the "hubs" set, announces its departure, and
 // drains its device set in bounded batches so a hub owning many devices
 // doesn't block Redis for too long in one shot: each batch is SRandMemberN'd from
 // "hub:devices:<hubID>" in Go, grouped by bucket, then deleted from the
@@ -861,8 +862,8 @@ func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
 
 // checkSelfReaped verifies this hub is still present in "hubs" after a gap
 // long enough that another instance could have reaped it as crashed. If it's
-// gone, this re-registers the hub entry itself (best-effort — a live hub
-// should be visible in "hubs" again so other hubs route new devices to it),
+// gone, this re-registers the hub entry itself (log and continue. Don't return
+// early on this error — the app still needs the OnSelfReaped callback below),
 // and always notifies the app via OnSelfReaped regardless of whether that
 // re-registration succeeded. The app still needs to know: it may believe it
 // owns TCP connections / devices that were reassigned to a live hub while

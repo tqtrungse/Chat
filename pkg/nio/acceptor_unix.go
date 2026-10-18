@@ -22,6 +22,7 @@
 package nio
 
 import (
+	"errors"
 	"runtime"
 
 	errorx "xxx/pkg/nio/error"
@@ -92,12 +93,15 @@ func (el *eventloop) accept(fd int, ev netpoll.IOEvent, flags netpoll.IOFlags) e
 	}
 
 	nfd, sa, err := socket.Accept(fd)
-	switch err {
-	case nil:
-	case unix.EINTR, unix.EAGAIN, unix.ECONNRESET, unix.ECONNABORTED:
-		// ECONNRESET or ECONNABORTED could indicate that a socket
-		// in the Accept queue was closed before we Accept()ed it.
-		// It's a silly error, let's retry it.
+	switch {
+	case err == nil:
+	case errors.Is(err, unix.EINTR),
+		errors.Is(err, unix.EAGAIN),
+		errors.Is(err, unix.ECONNRESET),
+		errors.Is(err, unix.ECONNABORTED):
+		// ECONNRESET or ECONNABORTED could indicate that a socket in the Accept queue
+		// was closed before we Accept()ed it. Ignore it for now; the poller will
+		// report the listener again if more connections are pending.
 		return nil
 	default:
 		el.getLogger().Error("Accept() failed due to", zap.Error(err))

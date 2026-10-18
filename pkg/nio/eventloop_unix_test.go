@@ -157,7 +157,8 @@ func (s *benchmarkServerGC) OnBoot(eng Engine) (action Action) {
 	return
 }
 
-// TestServeGC generate fake data asynchronously, if you need to test, manually open the comment.
+// TestServeGC generates fake connections asynchronously.
+// The large cases are skipped unless testBigGC is set to true.
 func TestServeGC(t *testing.T) {
 	t.Run("gc-loop", func(t *testing.T) {
 		t.Run("1-loop-10000", func(t *testing.T) {

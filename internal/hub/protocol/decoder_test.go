@@ -556,7 +556,7 @@ func TestDecoder_DecodeS_InvalidCipherSize_TooSmall(t *testing.T) {
 		msg,
 		nil,
 	)
-	binary.LittleEndian.PutUint16(packet[16:18], 10) // <= fakeTagSize, must be rejected
+	binary.LittleEndian.PutUint16(packet[16:18], 10) // <= authTagSize (16), must be rejected
 
 	_, _, code, err := d.DecodeS(secretKey, 0, packet)
 	require.Error(t, err)

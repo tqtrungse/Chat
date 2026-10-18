@@ -282,7 +282,8 @@ func (p *Poller) AddWrite(pa *PollAttachment, edgeTriggered bool) error {
 	return os.NewSyscallError("kevent add", err)
 }
 
-// ModRead modifies the given file descriptor with readable event in the poller.
+// ModRead stops monitoring writable events for the given file descriptor,
+// leaving only the readable event registered.
 func (p *Poller) ModRead(pa *PollAttachment, _ bool) error {
 	var evs [1]unix.Kevent_t
 	evs[0].Ident = keventIdent(pa.FD)

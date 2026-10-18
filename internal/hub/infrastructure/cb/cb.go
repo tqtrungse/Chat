@@ -29,7 +29,7 @@ import (
 const defaultConsecutiveFailures = 5
 
 // panicError wraps a value recovered from a panic inside a guarded call.
-// It exists so the breaker's failure classifier (see NewRedisBreaker) can
+// It exists so the breaker's failure classifier (see New's IsExcluded) can
 // recognize it deterministically and never exclude it from accounting —
 // unlike gobreaker's own built-in recover, which converts a panic into a
 // plain fmt.Errorf("%v", e) that an infra-error classifier has no way to

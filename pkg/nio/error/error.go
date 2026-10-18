@@ -26,7 +26,8 @@ var (
 	ErrEmptyEngine = errors.New("nio: the internal engine is empty")
 	// ErrEngineShutdown occurs when server is closing.
 	ErrEngineShutdown = errors.New("nio: server is going to be shutdown")
-	// ErrEngineInShutdown occurs when attempting to shut the server down more than once.
+	// ErrEngineInShutdown occurs when an operation is attempted on an engine
+	// that is already shut down or shutting down.
 	ErrEngineInShutdown = errors.New("nio: server is already in shutdown")
 	// ErrAcceptSocket occurs when acceptor does not accept the new connection properly.
 	ErrAcceptSocket = errors.New("nio: accept a new connection error")

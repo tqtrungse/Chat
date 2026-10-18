@@ -59,7 +59,7 @@ type Options struct {
 	// This option is server-only.
 	ReusePort bool
 
-	// MulticastInterfaceIndex is the index of the interface name where the multicast UDP addresses will be bound to.
+	// WithMulticastInterfaceIndex sets the index of the network interface that UDP multicast sockets will be bound to.
 	// This option is server-only.
 	MulticastInterfaceIndex int
 
