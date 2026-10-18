@@ -26,6 +26,13 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+var (
+	ErrIssuerRequired   = errors.New("JWT issuer is required")
+	ErrAudienceRequired = errors.New("JWT audience is required")
+	ErrJwksUrlRequired  = errors.New("JWT JWKS URL is required")
+	ErrTokenInvalid     = errors.New("invalid token")
+)
+
 type AuthConfig struct {
 	Issuer   string
 	Audience string
@@ -44,13 +51,13 @@ type Auth struct {
 
 func NewAuth(ctx context.Context, cfg AuthConfig) (*Auth, error) {
 	if cfg.Issuer == "" {
-		return nil, errors.New("JWT issuer is required")
+		return nil, ErrIssuerRequired
 	}
 	if cfg.Audience == "" {
-		return nil, errors.New("JWT audience is required")
+		return nil, ErrAudienceRequired
 	}
 	if cfg.JWKSURL == "" {
-		return nil, errors.New("JWT JWKS URL is required")
+		return nil, ErrJwksUrlRequired
 	}
 
 	jwks, err := keyfunc.NewDefaultCtx(ctx, []string{cfg.JWKSURL})
@@ -75,10 +82,10 @@ func (v *Auth) Verify(token string) (*Claims, error) {
 		jwt.WithExpirationRequired(),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("invalid token: %w", err)
+		return nil, fmt.Errorf("failed to parse claims: %w", err)
 	}
 	if !tk.Valid {
-		return nil, errors.New("invalid token")
+		return nil, ErrTokenInvalid
 	}
 	return claims, nil
 }
