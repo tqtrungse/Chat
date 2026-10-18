@@ -14,24 +14,13 @@
  * limitations under the License.
  */
 
-package pkg
+package bs
 
 import (
 	"strconv"
-	"unsafe"
 
 	slicepool "xxx/pkg/pool/slice"
 )
-
-// BytesToString converts byte slice to a string without any memory allocation.
-func BytesToString(b []byte) string {
-	return unsafe.String(unsafe.SliceData(b), len(b))
-}
-
-// StringToBytes converts string to a byte slice without any memory allocation.
-func StringToBytes(s string) []byte {
-	return unsafe.Slice(unsafe.StringData(s), len(s))
-}
 
 // Concat appends the base-10 representation of value to prefix and returns
 // the resulting byte slice.

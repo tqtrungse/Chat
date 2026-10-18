@@ -23,6 +23,7 @@ import (
 	"xxx/internal/hub/connection"
 	"xxx/internal/hub/domain/channel"
 	"xxx/internal/hub/domain/message"
+	"xxx/internal/hub/infrastructure/scylla/model"
 	sharedevice "xxx/internal/shared/device"
 
 	"xxx/pkg/database/scylla"

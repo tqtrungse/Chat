@@ -23,9 +23,9 @@ import (
 	"sync"
 	"time"
 
-	"xxx/pkg"
 	"xxx/pkg/backoff"
 	"xxx/pkg/batcher"
+	"xxx/pkg/bit"
 	"xxx/pkg/log"
 	workerpool "xxx/pkg/pool/worker"
 
@@ -102,7 +102,7 @@ func newPresenceSync(
 		batcher.Config[deviceOp]{
 			BatchSize: cfg.BatchSize,
 			Linger:    cfg.Linger,
-			Hash:      func(op deviceOp) uint64 { return pkg.Mix64(op.DeviceID.Uint64()) },
+			Hash:      func(op deviceOp) uint64 { return bit.Mix64(op.DeviceID.Uint64()) },
 			Flush:     s.flush,
 		},
 	)

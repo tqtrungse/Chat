@@ -32,8 +32,8 @@ import (
 	"xxx/internal/hub/protocol"
 	shareddevice "xxx/internal/shared/device"
 
-	"xxx/pkg"
 	"xxx/pkg/config"
+	"xxx/pkg/k8s"
 	"xxx/pkg/log"
 	workerpool "xxx/pkg/pool/worker"
 
@@ -65,7 +65,7 @@ func Run(ctx context.Context) (retErr error) {
 			return fmt.Errorf("service ID is required")
 		}
 
-		hubID, err = pkg.MachineIDFromHostname(serviceID)
+		hubID, err = k8s.MachineIDFromHostname(serviceID)
 		if err != nil {
 			return fmt.Errorf("failed to get machine ID from hostname %w", err)
 		}

@@ -21,8 +21,10 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"xxx/pkg"
 	"xxx/pkg/backoff"
+	"xxx/pkg/cpu"
+	"xxx/pkg/generic"
+	"xxx/pkg/os"
 )
 
 const segmentSize = 1024
@@ -37,14 +39,14 @@ type entry[V any] struct {
 // mutex, no per-item allocation beyond the (fixed-size) buf array.
 type boundedSegment[V any] struct {
 	sendIdx atomic.Uint64
-	_       [pkg.CacheLineSize - 8]byte
+	_       [cpu.CacheLineSize - 8]byte
 
 	readIdx atomic.Uint64
-	_       [pkg.CacheLineSize - 8]byte
+	_       [cpu.CacheLineSize - 8]byte
 
 	mtx  sync.Mutex
 	next atomic.Pointer[boundedSegment[V]]
-	_    [pkg.CacheLineSize - pkg.PtrSize - unsafe.Sizeof(sync.Mutex{})]byte
+	_    [cpu.CacheLineSize - os.PtrSize - unsafe.Sizeof(sync.Mutex{})]byte
 
 	buf       [segmentSize]entry[V]
 	entrySize uint32
@@ -98,19 +100,19 @@ func (s *boundedSegment[V]) tryClaimPopN(want int) (start, claimed int) {
 }
 
 func (s *boundedSegment[V]) read(idx int) V {
-	mapIdx := pkg.CacheRemap(uint32(idx), segmentSize, s.entrySize)
+	mapIdx := cpu.CacheRemap(uint32(idx), segmentSize, s.entrySize)
 	c := &s.buf[mapIdx]
 	b := backoff.Cpu{}
 	for !c.Cycle.Load() {
 		b.Snooze()
 	}
 	item := c.Value
-	c.Value = pkg.ZeroValue[V]()
+	c.Value = generic.ZeroValue[V]()
 	return item
 }
 
 func (s *boundedSegment[V]) publish(idx int, value V) {
-	mapIdx := pkg.CacheRemap(uint32(idx), segmentSize, s.entrySize)
+	mapIdx := cpu.CacheRemap(uint32(idx), segmentSize, s.entrySize)
 	s.buf[mapIdx].Value = value
 	s.buf[mapIdx].Cycle.Store(true) // release: consumer's Load below pairs with this
 }
@@ -127,10 +129,10 @@ func (s *boundedSegment[V]) publish(idx int, value V) {
 // Zero value is not usable; use New.
 type elastic[V any] struct {
 	head atomic.Pointer[boundedSegment[V]]
-	_    [pkg.CacheLineSize - pkg.PtrSize]byte
+	_    [cpu.CacheLineSize - os.PtrSize]byte
 
 	tail atomic.Pointer[boundedSegment[V]]
-	_    [pkg.CacheLineSize - pkg.PtrSize]byte
+	_    [cpu.CacheLineSize - os.PtrSize]byte
 }
 
 func newElastic[V any]() *elastic[V] {

@@ -23,11 +23,11 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"xxx/pkg"
+	"xxx/pkg/cpu"
 )
 
 var (
-	minBitSize = bits.Len(uint(pkg.CacheLineSize)) - 1
+	minBitSize = bits.Len(uint(cpu.CacheLineSize)) - 1
 	minSize    = 1 << minBitSize
 )
 

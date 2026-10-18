@@ -23,8 +23,9 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"xxx/pkg"
 	"xxx/pkg/backoff"
+	"xxx/pkg/cpu"
+	"xxx/pkg/os"
 )
 
 var (
@@ -44,16 +45,16 @@ type Pool struct {
 	global              *elastic[Task]
 	globalCheckInterval uint32
 	globalBatchSize     uint32
-	_                   [pkg.CacheLineSize - 2*pkg.PtrSize - unsafe.Sizeof([]*worker{}) - 8]byte
+	_                   [cpu.CacheLineSize - 2*os.PtrSize - unsafe.Sizeof([]*worker{}) - 8]byte
 
 	// The closed bit and number of active Submit calls share one word so
 	// admission cannot race shutdown's check for outstanding submitters.
 	submitState atomic.Uint64
-	_           [pkg.CacheLineSize - unsafe.Sizeof(atomic.Uint64{})]byte
+	_           [cpu.CacheLineSize - unsafe.Sizeof(atomic.Uint64{})]byte
 
 	tasksWg   sync.WaitGroup // outstanding submitted-or-spawned-but-unfinished tasks
 	workersWg sync.WaitGroup // running worker goroutines, for close to join
-	_         [pkg.CacheLineSize - 2*unsafe.Sizeof(sync.WaitGroup{})]byte
+	_         [cpu.CacheLineSize - 2*unsafe.Sizeof(sync.WaitGroup{})]byte
 
 	wakeCh chan struct{}
 	doneCh chan struct{}

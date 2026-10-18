@@ -14,15 +14,15 @@ package hash
 import (
 	"unsafe"
 
-	"xxx/pkg"
+	"xxx/pkg/os"
 )
 
 // Hash function for swiss.Table internal use.
 // Security relies on per-process random hashkey.
 
 const (
-	c0 = uint64(8-pkg.PtrSize)/4*2860486313 + uint64(pkg.PtrSize-4)/4*33054211828000289
-	c1 = uint64(8-pkg.PtrSize)/4*3267000013 + uint64(pkg.PtrSize-4)/4*23344194077549503
+	c0 = uint64(8-os.PtrSize)/4*2860486313 + uint64(os.PtrSize-4)/4*33054211828000289
+	c1 = uint64(8-os.PtrSize)/4*3267000013 + uint64(os.PtrSize-4)/4*23344194077549503
 	m  = 0x79d5f9e0de1e8cf5
 )
 

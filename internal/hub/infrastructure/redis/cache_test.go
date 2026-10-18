@@ -25,7 +25,7 @@ import (
 
 	shareddevice "xxx/internal/shared/device"
 
-	"xxx/pkg"
+	"xxx/pkg/bs"
 	"xxx/pkg/log"
 	slicepool "xxx/pkg/pool/slice"
 
@@ -186,23 +186,23 @@ func TestBatchAddDevices_MultipleBuckets_AllDevicesOwnedCorrectly(t *testing.T) 
 
 	for _, dev := range devices {
 		bucket := c.bucketFor(dev.Uint64())
-		deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
-		bDeviceID := pkg.U64ToBytes(dev.Uint64())
+		deviceKey := bs.Concat(devicesPrefix, uint64(bucket))
+		bDeviceID := bs.U64ToBytes(dev.Uint64())
 		owner := ""
 		owner, err = c.rdb.HGet(
 			ctx,
-			pkg.BytesToString(deviceKey),
-			pkg.BytesToString(bDeviceID),
+			bs.BytesToString(deviceKey),
+			bs.BytesToString(bDeviceID),
 		).Result()
 
 		require.NoError(t, err)
 		require.Equal(t, "9", owner)
 
 		inSet := false
-		hubDeviceKey := pkg.Concat(hubDevicesPrefix, uint64(9))
+		hubDeviceKey := bs.Concat(hubDevicesPrefix, uint64(9))
 		inSet, err = c.rdb.SIsMember(
 			ctx,
-			pkg.BytesToString(hubDeviceKey),
+			bs.BytesToString(hubDeviceKey),
 			bDeviceID,
 		).Result()
 
@@ -222,20 +222,20 @@ func TestBatchAddDevices_MovesDevicesFromOldHub(t *testing.T) {
 
 	for _, dev := range devices {
 		bucket := c.bucketFor(dev.Uint64())
-		deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
-		bDeviceID := pkg.U64ToBytes(dev.Uint64())
-		hubDeviceKey := pkg.Concat(hubDevicesPrefix, uint64(1))
+		deviceKey := bs.Concat(devicesPrefix, uint64(bucket))
+		bDeviceID := bs.U64ToBytes(dev.Uint64())
+		hubDeviceKey := bs.Concat(hubDevicesPrefix, uint64(1))
 
 		require.NoError(t, c.rdb.HSet(
 			ctx,
-			pkg.BytesToString(deviceKey),
-			pkg.BytesToString(bDeviceID),
+			bs.BytesToString(deviceKey),
+			bs.BytesToString(bDeviceID),
 			"1",
 		).Err())
 
 		require.NoError(t, c.rdb.SAdd(
 			ctx,
-			pkg.BytesToString(hubDeviceKey),
+			bs.BytesToString(hubDeviceKey),
 			bDeviceID,
 		).Err())
 
@@ -247,16 +247,16 @@ func TestBatchAddDevices_MovesDevicesFromOldHub(t *testing.T) {
 	_, err := c.BatchAddDevices(ctx, devices)
 	require.NoError(t, err)
 
-	oldHubKey := pkg.Concat(hubDevicesPrefix, uint64(1))
+	oldHubKey := bs.Concat(hubDevicesPrefix, uint64(1))
 	defer slicepool.Put(oldHubKey)
 
-	newHubKey := pkg.Concat(hubDevicesPrefix, uint64(2))
+	newHubKey := bs.Concat(hubDevicesPrefix, uint64(2))
 	defer slicepool.Put(newHubKey)
 
 	// The old hub must no longer own any device.
 	oldCount, err := c.rdb.SCard(
 		ctx,
-		pkg.BytesToString(oldHubKey),
+		bs.BytesToString(oldHubKey),
 	).Result()
 	require.NoError(t, err)
 	require.Equal(t, int64(0), oldCount)
@@ -264,20 +264,20 @@ func TestBatchAddDevices_MovesDevicesFromOldHub(t *testing.T) {
 	// The new hub must own every device.
 	newCount, err := c.rdb.SCard(
 		ctx,
-		pkg.BytesToString(newHubKey),
+		bs.BytesToString(newHubKey),
 	).Result()
 	require.NoError(t, err)
 	require.Equal(t, int64(len(devices)), newCount)
 
 	for _, dev := range devices {
 		bucket := c.bucketFor(dev.Uint64())
-		deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
-		bDeviceID := pkg.U64ToBytes(dev.Uint64())
+		deviceKey := bs.Concat(devicesPrefix, uint64(bucket))
+		bDeviceID := bs.U64ToBytes(dev.Uint64())
 
 		owner, err := c.rdb.HGet(
 			ctx,
-			pkg.BytesToString(deviceKey),
-			pkg.BytesToString(bDeviceID),
+			bs.BytesToString(deviceKey),
+			bs.BytesToString(bDeviceID),
 		).Result()
 
 		slicepool.Put(deviceKey)
@@ -288,7 +288,7 @@ func TestBatchAddDevices_MovesDevicesFromOldHub(t *testing.T) {
 
 		inNewHub, err := c.rdb.SIsMember(
 			ctx,
-			pkg.BytesToString(newHubKey),
+			bs.BytesToString(newHubKey),
 			bDeviceID,
 		).Result()
 
@@ -308,13 +308,13 @@ func TestBatchAddDevices_DuplicateDeviceIDs(t *testing.T) {
 
 	for _, dev := range []shareddevice.ID{1, 5, 9} {
 		bucket := c.bucketFor(dev.Uint64())
-		key := pkg.Concat(devicesPrefix, uint64(bucket))
-		field := pkg.U64ToBytes(dev.Uint64())
+		key := bs.Concat(devicesPrefix, uint64(bucket))
+		field := bs.U64ToBytes(dev.Uint64())
 
 		owner, err := c.rdb.HGet(
 			ctx,
-			pkg.BytesToString(key),
-			pkg.BytesToString(field),
+			bs.BytesToString(key),
+			bs.BytesToString(field),
 		).Result()
 
 		slicepool.Put(key)
@@ -345,14 +345,14 @@ func TestListHubsByDevices_MixedFoundAndMissing_PreservesInputOrder(t *testing.T
 	owners := map[shareddevice.ID]uint64{0: 10, 1: 20, 2: 30, 3: 40, 5: 50}
 	for dev, hub := range owners {
 		bucket := c.bucketFor(dev.Uint64())
-		deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
-		bDeviceID := pkg.U64ToBytes(dev.Uint64())
-		bHubID := pkg.U64ToBytes(hub)
+		deviceKey := bs.Concat(devicesPrefix, uint64(bucket))
+		bDeviceID := bs.U64ToBytes(dev.Uint64())
+		bHubID := bs.U64ToBytes(hub)
 
 		err := c.rdb.HSet(
 			ctx,
-			pkg.BytesToString(deviceKey),
-			pkg.BytesToString(bDeviceID),
+			bs.BytesToString(deviceKey),
+			bs.BytesToString(bDeviceID),
 			bHubID,
 		).Err()
 
@@ -395,8 +395,8 @@ func TestDelDevice_OwnedByCaller_RemovesAndPublishes(t *testing.T) {
 	require.NoError(t, err)
 
 	bucket := c.bucketFor(dev.Uint64())
-	deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
-	bDeviceID := pkg.U64ToBytes(dev.Uint64())
+	deviceKey := bs.Concat(devicesPrefix, uint64(bucket))
+	bDeviceID := bs.U64ToBytes(dev.Uint64())
 	defer func() {
 		slicepool.Put(deviceKey)
 		slicepool.Put(bDeviceID)
@@ -404,16 +404,16 @@ func TestDelDevice_OwnedByCaller_RemovesAndPublishes(t *testing.T) {
 
 	exists, err := c.rdb.HExists(
 		ctx,
-		pkg.BytesToString(deviceKey),
-		pkg.BytesToString(bDeviceID),
+		bs.BytesToString(deviceKey),
+		bs.BytesToString(bDeviceID),
 	).Result()
 	require.NoError(t, err)
 	require.False(t, exists)
 
-	hubDeviceKey := pkg.Concat(hubDevicesPrefix, uint64(1))
+	hubDeviceKey := bs.Concat(hubDevicesPrefix, uint64(1))
 	inSet, err := c.rdb.SIsMember(
 		ctx,
-		pkg.BytesToString(hubDeviceKey),
+		bs.BytesToString(hubDeviceKey),
 		bDeviceID,
 	).Result()
 	slicepool.Put(hubDeviceKey)
@@ -424,7 +424,7 @@ func TestDelDevice_OwnedByCaller_RemovesAndPublishes(t *testing.T) {
 	case msg := <-sub.Channel():
 		require.Len(t, msg.Payload, 16)
 
-		buf := pkg.StringToBytes(msg.Payload)
+		buf := bs.StringToBytes(msg.Payload)
 		gotDev := binary.LittleEndian.Uint64(buf[:8])
 		gotHub := binary.LittleEndian.Uint64(buf[8:16])
 		require.Equal(t, dev.Uint64(), gotDev)
@@ -440,9 +440,9 @@ func TestDelDevice_NotOwner_NoOp(t *testing.T) {
 		ctx          = ctxT(t)
 		dev          = shareddevice.ID(600)
 		bucket       = c.bucketFor(dev.Uint64())
-		hubDeviceKey = pkg.Concat(hubDevicesPrefix, uint64(1))
-		deviceKey    = pkg.Concat(devicesPrefix, uint64(bucket))
-		bDeviceID    = pkg.U64ToBytes(dev.Uint64())
+		hubDeviceKey = bs.Concat(hubDevicesPrefix, uint64(1))
+		deviceKey    = bs.Concat(devicesPrefix, uint64(bucket))
+		bDeviceID    = bs.U64ToBytes(dev.Uint64())
 	)
 	defer func() {
 		slicepool.Put(deviceKey)
@@ -453,15 +453,15 @@ func TestDelDevice_NotOwner_NoOp(t *testing.T) {
 	// Owned by hub 1, not by the caller.
 	err := c.rdb.HSet(
 		ctx,
-		pkg.BytesToString(deviceKey),
-		pkg.BytesToString(bDeviceID),
+		bs.BytesToString(deviceKey),
+		bs.BytesToString(bDeviceID),
 		"1",
 	).Err()
 	require.NoError(t, err)
 
 	err = c.rdb.SAdd(
 		ctx,
-		pkg.BytesToString(hubDeviceKey),
+		bs.BytesToString(hubDeviceKey),
 		bDeviceID,
 	).Err()
 	require.NoError(t, err)
@@ -471,8 +471,8 @@ func TestDelDevice_NotOwner_NoOp(t *testing.T) {
 
 	owner, err := c.rdb.HGet(
 		ctx,
-		pkg.BytesToString(deviceKey),
-		pkg.BytesToString(bDeviceID),
+		bs.BytesToString(deviceKey),
+		bs.BytesToString(bDeviceID),
 	).Result()
 	require.NoError(t, err)
 	require.Equal(t, "1", owner)
@@ -552,10 +552,10 @@ func TestReapHub_DrainsDevicesAcrossBuckets(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, isMember)
 
-	hubDeviceKey := pkg.Concat(hubDevicesPrefix, uint64(1))
+	hubDeviceKey := bs.Concat(hubDevicesPrefix, uint64(1))
 	remaining, err := c.rdb.SCard(
 		ctx,
-		pkg.BytesToString(hubDeviceKey),
+		bs.BytesToString(hubDeviceKey),
 	).Result()
 	slicepool.Put(hubDeviceKey)
 	require.NoError(t, err)
@@ -563,12 +563,12 @@ func TestReapHub_DrainsDevicesAcrossBuckets(t *testing.T) {
 
 	for _, dev := range devices {
 		bucket := c.bucketFor(dev.Uint64())
-		deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
-		bDeviceID := pkg.U64ToBytes(dev.Uint64())
+		deviceKey := bs.Concat(devicesPrefix, uint64(bucket))
+		bDeviceID := bs.U64ToBytes(dev.Uint64())
 		exists, err := c.rdb.HExists(
 			ctx,
-			pkg.BytesToString(deviceKey),
-			pkg.BytesToString(bDeviceID),
+			bs.BytesToString(deviceKey),
+			bs.BytesToString(bDeviceID),
 		).Result()
 		slicepool.Put(deviceKey)
 		slicepool.Put(bDeviceID)
@@ -589,10 +589,10 @@ func TestReapHub_LeavesReclaimedDeviceAlone(t *testing.T) {
 		ctx           = ctxT(t)
 		dev           = shareddevice.ID(700)
 		bucket        = c.bucketFor(dev.Uint64())
-		hubDeviceKey  = pkg.Concat(hubDevicesPrefix, uint64(1))
-		hubDeviceKey2 = pkg.Concat(hubDevicesPrefix, uint64(2))
-		deviceKey     = pkg.Concat(devicesPrefix, uint64(bucket))
-		bDeviceID     = pkg.U64ToBytes(dev.Uint64())
+		hubDeviceKey  = bs.Concat(hubDevicesPrefix, uint64(1))
+		hubDeviceKey2 = bs.Concat(hubDevicesPrefix, uint64(2))
+		deviceKey     = bs.Concat(devicesPrefix, uint64(bucket))
+		bDeviceID     = bs.U64ToBytes(dev.Uint64())
 	)
 	defer func() {
 		slicepool.Put(deviceKey)
@@ -604,7 +604,7 @@ func TestReapHub_LeavesReclaimedDeviceAlone(t *testing.T) {
 	// Device was owned by hub 1 (about to crash)...
 	err := c.rdb.SAdd(
 		ctx,
-		pkg.BytesToString(hubDeviceKey),
+		bs.BytesToString(hubDeviceKey),
 		bDeviceID,
 	).Err()
 	require.NoError(t, err)
@@ -612,15 +612,15 @@ func TestReapHub_LeavesReclaimedDeviceAlone(t *testing.T) {
 	// ...but by the time we reap, hub 2 already reclaimed it in devices:{bucket}.
 	err = c.rdb.HSet(
 		ctx,
-		pkg.BytesToString(deviceKey),
-		pkg.BytesToString(bDeviceID),
+		bs.BytesToString(deviceKey),
+		bs.BytesToString(bDeviceID),
 		"2",
 	).Err()
 	require.NoError(t, err)
 
 	err = c.rdb.SAdd(
 		ctx,
-		pkg.BytesToString(hubDeviceKey2),
+		bs.BytesToString(hubDeviceKey2),
 		bDeviceID,
 	).Err()
 	require.NoError(t, err)
@@ -630,15 +630,15 @@ func TestReapHub_LeavesReclaimedDeviceAlone(t *testing.T) {
 
 	owner, err := c.rdb.HGet(
 		ctx,
-		pkg.BytesToString(deviceKey),
-		pkg.BytesToString(bDeviceID),
+		bs.BytesToString(deviceKey),
+		bs.BytesToString(bDeviceID),
 	).Result()
 	require.NoError(t, err)
 	require.Equal(t, "2", owner)
 
 	stillInOld, err := c.rdb.SIsMember(
 		ctx,
-		pkg.BytesToString(hubDeviceKey),
+		bs.BytesToString(hubDeviceKey),
 		bDeviceID,
 	).Result()
 	require.NoError(t, err)
@@ -646,7 +646,7 @@ func TestReapHub_LeavesReclaimedDeviceAlone(t *testing.T) {
 
 	stillInNew, err := c.rdb.SIsMember(
 		ctx,
-		pkg.BytesToString(hubDeviceKey2),
+		bs.BytesToString(hubDeviceKey2),
 		bDeviceID,
 	).Result()
 	require.NoError(t, err)
@@ -661,7 +661,7 @@ func TestReapHub_SecondCallerYieldsWhenLockHeld(t *testing.T) {
 
 	// Simulate another instance already holding the reap lock for hub 1.
 	other := sharedCache(t, mr, 99)
-	lockKey := pkg.BytesToString(pkg.Concat(hubReapLockPrefix, uint64(1)))
+	lockKey := bs.BytesToString(bs.Concat(hubReapLockPrefix, uint64(1)))
 	err = other.rdb.SetNX(ctx, lockKey, 1, time.Minute).Err()
 	require.NoError(t, err)
 
@@ -682,7 +682,7 @@ func TestReapHub_NoDevices_StillRemovesHubAndHeartbeat(t *testing.T) {
 	err := c.addHub(ctx)
 	require.NoError(t, err)
 
-	hbKey := pkg.BytesToString(pkg.Concat(hubHeartbeatPrefix, uint64(1)))
+	hbKey := bs.BytesToString(bs.Concat(hubHeartbeatPrefix, uint64(1)))
 	err = c.rdb.Set(ctx, hbKey, 1, time.Minute).Err()
 	require.NoError(t, err)
 
@@ -721,12 +721,12 @@ func TestReapHub_DrainsDevicesAcrossMultipleBatches(t *testing.T) {
 	require.False(t, isMember)
 
 	// Hub device set must be completely drained.
-	hubDeviceKey := pkg.Concat(hubDevicesPrefix, uint64(1))
+	hubDeviceKey := bs.Concat(hubDevicesPrefix, uint64(1))
 	defer slicepool.Put(hubDeviceKey)
 
 	count, err := c.rdb.SCard(
 		ctx,
-		pkg.BytesToString(hubDeviceKey),
+		bs.BytesToString(hubDeviceKey),
 	).Result()
 	require.NoError(t, err)
 	require.Equal(t, int64(0), count)
@@ -734,13 +734,13 @@ func TestReapHub_DrainsDevicesAcrossMultipleBatches(t *testing.T) {
 	// No device may still point to the reaped hub.
 	for _, dev := range devices {
 		bucket := c.bucketFor(dev.Uint64())
-		deviceKey := pkg.Concat(devicesPrefix, uint64(bucket))
-		bDeviceID := pkg.U64ToBytes(dev.Uint64())
+		deviceKey := bs.Concat(devicesPrefix, uint64(bucket))
+		bDeviceID := bs.U64ToBytes(dev.Uint64())
 
 		exists, err := c.rdb.HExists(
 			ctx,
-			pkg.BytesToString(deviceKey),
-			pkg.BytesToString(bDeviceID),
+			bs.BytesToString(deviceKey),
+			bs.BytesToString(bDeviceID),
 		).Result()
 
 		slicepool.Put(deviceKey)
@@ -885,10 +885,10 @@ func TestStart_Success_RegistersHubAndSubscribes(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, isMember)
 
-	hubHeartbeatKey := pkg.Concat(hubHeartbeatPrefix, uint64(1))
+	hubHeartbeatKey := bs.Concat(hubHeartbeatPrefix, uint64(1))
 	ttl, err := c.rdb.PTTL(
 		ctx,
-		pkg.BytesToString(hubHeartbeatKey),
+		bs.BytesToString(hubHeartbeatKey),
 	).Result()
 	slicepool.Put(hubHeartbeatKey)
 	require.NoError(t, err)

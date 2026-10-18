@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
-	"xxx/pkg"
 	"xxx/pkg/backoff"
+	"xxx/pkg/cpu"
 
 	"github.com/stretchr/testify/require"
 )
@@ -660,7 +660,7 @@ func newBoundedNearWrap(t *testing.T, capacity int, laps uint32) *Bounded[int] {
 	q.state.Store(uint64(start) << sendIdxShift)
 	for j := uint32(0); j < q.capacity; j++ {
 		idx := start + j
-		q.ring[pkg.CacheRemap(idx, q.capacity, q.entrySize)].Cycle.Store((idx >> q.n) << 1)
+		q.ring[cpu.CacheRemap(idx, q.capacity, q.entrySize)].Cycle.Store((idx >> q.n) << 1)
 	}
 	return q
 }

@@ -21,8 +21,9 @@ import (
 
 	shareddevice "xxx/internal/shared/device"
 
-	"xxx/pkg"
+	"xxx/pkg/bit"
 	"xxx/pkg/collection/swiss"
+	"xxx/pkg/cpu"
 	"xxx/pkg/hash"
 	"xxx/pkg/nio"
 )
@@ -40,7 +41,7 @@ const (
 // replacement wins the old session's active-to-closed transition.
 type connectionRegistry struct {
 	meta atomic.Uint32
-	_    [pkg.CacheLineSize - 4]byte
+	_    [cpu.CacheLineSize - 4]byte
 
 	conns    [nShards]*swiss.TableC2[shareddevice.ID, nio.Conn]
 	maxConns uint32
@@ -151,5 +152,5 @@ func (r *connectionRegistry) releaseSlot() {
 }
 
 func (r *connectionRegistry) bucketFor(deviceID shareddevice.ID) int {
-	return int(pkg.Mix64(deviceID.Uint64())) & mask
+	return int(bit.Mix64(deviceID.Uint64())) & mask
 }

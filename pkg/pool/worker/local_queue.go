@@ -21,7 +21,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"xxx/pkg"
+	"xxx/pkg/cpu"
+	"xxx/pkg/generic"
 )
 
 // 1. Each local queue has exactly one owner.
@@ -71,10 +72,10 @@ func unpackHead(n uint64) (share, cur uint32) {
 //	=> CAS head + read source
 type local[V any] struct {
 	head atomic.Uint64 // packed (share, cur) — see package doc
-	_    [pkg.CacheLineSize - 8]byte
+	_    [cpu.CacheLineSize - 8]byte
 
 	tail atomic.Uint32 // single writer (the owning Local), many readers
-	_    [pkg.CacheLineSize - 4]byte
+	_    [cpu.CacheLineSize - 4]byte
 
 	buf       [capacity]V
 	entrySize uint32
@@ -83,7 +84,7 @@ type local[V any] struct {
 // newLocal creates a fresh local queue.
 func newLocal[V any]() *local[V] {
 	return &local[V]{
-		entrySize: uint32(unsafe.Sizeof(pkg.ZeroValue[V]())),
+		entrySize: uint32(unsafe.Sizeof(generic.ZeroValue[V]())),
 	}
 }
 
@@ -141,7 +142,7 @@ func (l *local[V]) Push(task V, e *elastic[V]) {
 // pushFinish writes task into the slot at tail and publishes it by
 // advancing tail.
 func (l *local[V]) pushFinish(task V, tail uint32) {
-	mapIdx := pkg.CacheRemap(tail&mask, capacity, l.entrySize)
+	mapIdx := cpu.CacheRemap(tail&mask, capacity, l.entrySize)
 	l.buf[mapIdx] = task
 	l.tail.Store(tail + 1) // publish
 }
@@ -176,7 +177,7 @@ func (l *local[V]) pushOverflow(task V, head, tail uint32, e *elastic[V]) bool {
 	batch := make([]V, numTasksTaken, numTasksTaken+1)
 	for i := range numTasksTaken {
 		idx := (int(head) + numTasksTaken + i) & mask
-		mapIdx := pkg.CacheRemap(uint32(idx), capacity, l.entrySize)
+		mapIdx := cpu.CacheRemap(uint32(idx), capacity, l.entrySize)
 		batch[i] = l.buf[mapIdx]
 	}
 	batch = append(batch, task)
@@ -211,7 +212,7 @@ func (l *local[V]) PushBatchNoOverflow(tasks []V) {
 	}
 
 	for _, t := range tasks {
-		mapIdx := pkg.CacheRemap(tail&mask, capacity, l.entrySize)
+		mapIdx := cpu.CacheRemap(tail&mask, capacity, l.entrySize)
 		l.buf[mapIdx] = t
 		tail++
 	}
@@ -228,7 +229,7 @@ func (l *local[V]) Pop() (item V, ok bool) {
 		tail := l.tail.Load()
 
 		if cur == tail {
-			return pkg.ZeroValue[V](), false
+			return generic.ZeroValue[V](), false
 		}
 
 		nextReal := cur + 1
@@ -245,7 +246,7 @@ func (l *local[V]) Pop() (item V, ok bool) {
 		}
 		head = l.head.Load()
 	}
-	mapIdx := pkg.CacheRemap(idx, capacity, l.entrySize)
+	mapIdx := cpu.CacheRemap(idx, capacity, l.entrySize)
 	return l.buf[mapIdx], true
 }
 
@@ -263,16 +264,16 @@ func (l *local[V]) MoveTo(dst *local[V]) (item V, ok bool) {
 	// reserved if a third party is concurrently sharing INTO dst too.
 	dstShare, _ := unpackHead(dst.head.Load())
 	if dstTail-dstShare > capacity/2 {
-		return pkg.ZeroValue[V](), false
+		return generic.ZeroValue[V](), false
 	}
 
 	n := l.moveInto2(dst, dstTail)
 	if n == 0 {
-		return pkg.ZeroValue[V](), false
+		return generic.ZeroValue[V](), false
 	}
 
 	n--
-	mapIdx := pkg.CacheRemap((dstTail+n)&mask, capacity, l.entrySize)
+	mapIdx := cpu.CacheRemap((dstTail+n)&mask, capacity, l.entrySize)
 	ret := dst.buf[mapIdx]
 
 	if n == 0 {
@@ -325,8 +326,8 @@ func (l *local[V]) moveInto2(dst *local[V], dstTail uint32) uint32 {
 
 	first, _ := unpackHead(nextPacked) // == srcShare: the batch's starting index
 	for i := uint32(0); i < n; i++ {
-		dstMapIdx := pkg.CacheRemap((dstTail+i)&mask, capacity, l.entrySize)
-		mapIdx := pkg.CacheRemap((first+i)&mask, capacity, l.entrySize)
+		dstMapIdx := cpu.CacheRemap((dstTail+i)&mask, capacity, l.entrySize)
+		mapIdx := cpu.CacheRemap((first+i)&mask, capacity, l.entrySize)
 		dst.buf[dstMapIdx] = l.buf[mapIdx]
 	}
 

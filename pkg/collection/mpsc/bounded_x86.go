@@ -25,8 +25,10 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"xxx/pkg"
 	"xxx/pkg/backoff"
+	"xxx/pkg/bit"
+	"xxx/pkg/cpu"
+	"xxx/pkg/generic"
 )
 
 const (
@@ -37,22 +39,22 @@ const (
 
 type Bounded[V any] struct {
 	readIdx uint32
-	_       [pkg.CacheLineSize - 4]byte
+	_       [cpu.CacheLineSize - 4]byte
 
 	sem            uint32
 	metaReaderWait atomic.Uint32
-	_              [pkg.CacheLineSize - 8]byte
+	_              [cpu.CacheLineSize - 8]byte
 
 	// state store [sendIdx (32bit) | activePushers (31bit) | closed (1bit)]
 	state atomic.Uint64
-	_     [pkg.CacheLineSize - 8]byte
+	_     [cpu.CacheLineSize - 8]byte
 
 	ring      []entry[V]
 	entrySize uint32
 	capacity  uint32
 	n         uint32
 	cycleMask uint32 // 2^(33-n) - 1
-	_         [pkg.CacheLineSize - unsafe.Sizeof([]entry[V]{}) - 16]byte
+	_         [cpu.CacheLineSize - unsafe.Sizeof([]entry[V]{}) - 16]byte
 }
 
 func NewBounded[V any](capacity int) (*Bounded[V], error) {
@@ -63,7 +65,7 @@ func NewBounded[V any](capacity int) (*Bounded[V], error) {
 		return nil, fmt.Errorf("capacity can not over %d", math.MaxUint16)
 	}
 
-	rawCapacity := uint32(pkg.NextPowerOfTwo(capacity))
+	rawCapacity := uint32(bit.NextPowerOfTwo(capacity))
 	n := uint32(bits.TrailingZeros64(uint64(rawCapacity)))
 	return &Bounded[V]{
 		ring:      make([]entry[V], rawCapacity),
@@ -90,7 +92,7 @@ claim:
 		}
 		idx := uint32(s >> sendIdxShift)
 		cycle = (idx >> b.n) << 1
-		mapIdx = pkg.CacheRemap(idx, b.capacity, b.entrySize)
+		mapIdx = cpu.CacheRemap(idx, b.capacity, b.entrySize)
 		ent = &b.ring[mapIdx]
 
 		// Compare modulo M = cycleMask+1 to withstand the sendIdx wrap.
@@ -136,7 +138,7 @@ func (b *Bounded[V]) Push(value V) (closed bool) {
 	var (
 		idx    = uint32(s>>sendIdxShift) - 1
 		cycle  = (idx >> b.n) << 1
-		mapIdx = pkg.CacheRemap(idx, b.capacity, b.entrySize)
+		mapIdx = cpu.CacheRemap(idx, b.capacity, b.entrySize)
 		ent    = &b.ring[mapIdx]
 		bc     = backoff.Cpu{}
 	)
@@ -168,19 +170,19 @@ func (b *Bounded[V]) Push(value V) (closed bool) {
 func (b *Bounded[V]) TryPop() (value V, ok bool) {
 	var (
 		cycle    = (b.readIdx>>b.n)<<1 + 1
-		mapIdx   = pkg.CacheRemap(b.readIdx, b.capacity, b.entrySize)
+		mapIdx   = cpu.CacheRemap(b.readIdx, b.capacity, b.entrySize)
 		ent      = &b.ring[mapIdx]
 		cycleEnt = ent.Cycle.Load()
 	)
 
 	if cycle == cycleEnt {
 		value = ent.Value
-		ent.Value = pkg.ZeroValue[V]()
+		ent.Value = generic.ZeroValue[V]()
 		ent.Cycle.Store((cycleEnt + 1) & b.cycleMask)
 		b.readIdx++
 		return value, true
 	}
-	return pkg.ZeroValue[V](), false
+	return generic.ZeroValue[V](), false
 }
 
 // Pop retrieves the next value. After Close() has been called, Pop may
@@ -192,7 +194,7 @@ func (b *Bounded[V]) Pop() (value V, closed bool) {
 		bc     = backoff.Cpu{}
 		parked = false
 		cycle  = (b.readIdx>>b.n)<<1 + 1
-		mapIdx = pkg.CacheRemap(b.readIdx, b.capacity, b.entrySize)
+		mapIdx = cpu.CacheRemap(b.readIdx, b.capacity, b.entrySize)
 		ent    = &b.ring[mapIdx]
 	)
 
@@ -200,7 +202,7 @@ func (b *Bounded[V]) Pop() (value V, closed bool) {
 		cycleEnt := ent.Cycle.Load()
 		if cycle == cycleEnt {
 			value = ent.Value
-			ent.Value = pkg.ZeroValue[V]()
+			ent.Value = generic.ZeroValue[V]()
 			ent.Cycle.Store((cycleEnt + 1) & b.cycleMask)
 			if parked {
 				b.metaReaderWait.Store(readerUnpared)
@@ -236,7 +238,7 @@ func (b *Bounded[V]) Pop() (value V, closed bool) {
 			//b.readIdx++
 			//bc.Reset()
 			//continue
-			return pkg.ZeroValue[V](), true
+			return generic.ZeroValue[V](), true
 		}
 
 		bc.Snooze()
@@ -290,13 +292,13 @@ func (b *Bounded[V]) Drain(fn func(V)) {
 	sendIdx := uint32(b.state.Load() >> sendIdxShift)
 	for b.readIdx != sendIdx {
 		var (
-			ent      = &b.ring[pkg.CacheRemap(b.readIdx, b.capacity, b.entrySize)]
+			ent      = &b.ring[cpu.CacheRemap(b.readIdx, b.capacity, b.entrySize)]
 			cycleEnt = ent.Cycle.Load()
 		)
 
 		if cycleEnt&1 != 0 {
 			fn(ent.Value)
-			ent.Value = pkg.ZeroValue[V]()
+			ent.Value = generic.ZeroValue[V]()
 			ent.Cycle.Store((cycleEnt + 1) & b.cycleMask)
 		}
 		b.readIdx++

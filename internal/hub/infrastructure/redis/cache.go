@@ -33,7 +33,8 @@ import (
 	"xxx/internal/hub/domain/message"
 	shareddevice "xxx/internal/shared/device"
 
-	"xxx/pkg"
+	"xxx/pkg/bit"
+	"xxx/pkg/bs"
 	"xxx/pkg/log"
 	slicepool "xxx/pkg/pool/slice"
 	workerpool "xxx/pkg/pool/worker"
@@ -222,12 +223,12 @@ func (c *cache) ListHubsByDevices(
 	for bucket, idxs := range byBucket {
 		fields := make([]string, len(idxs))
 		for j, idx := range idxs {
-			fields[j] = pkg.BytesToString(pkg.U64ToBytes(deviceIDs[idx].Uint64()))
+			fields[j] = bs.BytesToString(bs.U64ToBytes(deviceIDs[idx].Uint64()))
 		}
-		bucketKey := pkg.Concat(devicesPrefix, uint64(bucket))
+		bucketKey := bs.Concat(devicesPrefix, uint64(bucket))
 		arrKeys = append(arrKeys, bucketKey)
 		arrFields = append(arrFields, fields)
-		cmds[bucket] = pipe.HMGet(ctx, pkg.BytesToString(bucketKey), fields...)
+		cmds[bucket] = pipe.HMGet(ctx, bs.BytesToString(bucketKey), fields...)
 	}
 
 	_, err := pipe.Exec(ctx)
@@ -238,7 +239,7 @@ func (c *cache) ListHubsByDevices(
 	}
 	for _, fields := range arrFields {
 		for _, field := range fields {
-			slicepool.Put(pkg.StringToBytes(field))
+			slicepool.Put(bs.StringToBytes(field))
 		}
 	}
 
@@ -382,8 +383,8 @@ func (c *cache) BatchAddDevices(
 	}
 
 	var (
-		hubDeviceKey = pkg.Concat(hubDevicesPrefix, c.hubID)
-		bHubID       = pkg.U64ToBytes(c.hubID)
+		hubDeviceKey = bs.Concat(hubDevicesPrefix, c.hubID)
+		bHubID       = bs.U64ToBytes(c.hubID)
 		byBucket     = make(map[uint32][]int) // bucket -> indices to deviceIDs
 		order        = make([]uint32, 0)
 		flattened    = make([]shareddevice.ID, 0, len(deviceIDs)) // The device order after flattening follows the bucket pattern, matching the ARGV.
@@ -403,9 +404,9 @@ func (c *cache) BatchAddDevices(
 		args = make([]any, 2+len(order)+len(deviceIDs))
 	)
 
-	keys[0] = pkg.BytesToString(hubDeviceKey)
+	keys[0] = bs.BytesToString(hubDeviceKey)
 	for _, b := range order {
-		keys[i] = pkg.BytesToString(pkg.Concat(devicesPrefix, uint64(b)))
+		keys[i] = bs.BytesToString(bs.Concat(devicesPrefix, uint64(b)))
 		i += 1
 	}
 
@@ -421,10 +422,10 @@ func (c *cache) BatchAddDevices(
 		for _, idx := range idxs {
 			deviceID := deviceIDs[idx]
 
-			args[i] = pkg.U64ToBytes(deviceID.Uint64())
+			args[i] = bs.U64ToBytes(deviceID.Uint64())
 			i += 1
 
-			keys[pendingKeyIdx] = pkg.BytesToString(pkg.Concat(pendingBucketsPrefix, deviceID.Uint64()))
+			keys[pendingKeyIdx] = bs.BytesToString(bs.Concat(pendingBucketsPrefix, deviceID.Uint64()))
 			pendingKeyIdx += 1
 
 			flattened = append(flattened, deviceID)
@@ -436,7 +437,7 @@ func (c *cache) BatchAddDevices(
 	// cleanup.
 	slicepool.Put(bHubID)
 	for _, key := range keys {
-		slicepool.Put(pkg.StringToBytes(key))
+		slicepool.Put(bs.StringToBytes(key))
 	}
 	for i = 2; i < len(args); i += 1 {
 		switch arg := args[i].(type) {
@@ -512,8 +513,8 @@ func (c *cache) BatchDelDevices(
 	}
 
 	var (
-		hubDeviceKey = pkg.Concat(hubDevicesPrefix, c.hubID)
-		bHubID       = pkg.U64ToBytes(c.hubID)
+		hubDeviceKey = bs.Concat(hubDevicesPrefix, c.hubID)
+		bHubID       = bs.U64ToBytes(c.hubID)
 		byBucket     = make(map[uint32][]int) // bucket -> indices into deviceIDs
 		order        = make([]uint32, 0)
 	)
@@ -533,9 +534,9 @@ func (c *cache) BatchDelDevices(
 	)
 
 	keys[0] = eventDelDevice
-	keys[1] = pkg.BytesToString(hubDeviceKey)
+	keys[1] = bs.BytesToString(hubDeviceKey)
 	for _, b := range order {
-		keys[i] = pkg.BytesToString(pkg.Concat(devicesPrefix, uint64(b)))
+		keys[i] = bs.BytesToString(bs.Concat(devicesPrefix, uint64(b)))
 		i += 1
 	}
 
@@ -559,7 +560,7 @@ func (c *cache) BatchDelDevices(
 		args[i] = len(idxs)
 		i += 1
 		for _, idx := range idxs {
-			args[i] = pkg.U64ToBytes(deviceIDs[idx].Uint64())
+			args[i] = bs.U64ToBytes(deviceIDs[idx].Uint64())
 			args[i+1] = payloads[idx]
 			i += 2
 		}
@@ -571,7 +572,7 @@ func (c *cache) BatchDelDevices(
 	slicepool.Put(bHubID)
 	slicepool.Put(hubDeviceKey)
 	for idx := 2; idx < len(keys); idx += 1 {
-		slicepool.Put(pkg.StringToBytes(keys[idx]))
+		slicepool.Put(bs.StringToBytes(keys[idx]))
 	}
 	// Every deviceID-bytes AND payload slot in args is a []byte from
 	// slicepool; every count slot is a plain int. A type switch over every
@@ -654,10 +655,10 @@ func (c *cache) start(rootCtx context.Context) error {
 	// "hubs" entry with no lease behind it at all if the Set fails after —
 	// which never self-heals, since a key that was never created can never
 	// emit an expired event for onExpiredKeyEvent to react to.
-	hubHeartbeatKey := pkg.Concat(hubHeartbeatPrefix, c.hubID)
+	hubHeartbeatKey := bs.Concat(hubHeartbeatPrefix, c.hubID)
 	defer slicepool.Put(hubHeartbeatKey)
 
-	err = c.rdb.Set(rootCtx, pkg.BytesToString(hubHeartbeatKey), 1, c.heartbeatTTL).Err()
+	err = c.rdb.Set(rootCtx, bs.BytesToString(hubHeartbeatKey), 1, c.heartbeatTTL).Err()
 	if err != nil {
 		return err
 	}
@@ -717,7 +718,7 @@ func (c *cache) setCallback(cb Callbacks) bool {
 // addHub registers this hub in the global hub registry with no expiration.
 // The hub's liveness is tracked separately by its heartbeat key.
 func (c *cache) addHub(ctx context.Context) error {
-	bHubID := pkg.U64ToBytes(c.hubID)
+	bHubID := bs.U64ToBytes(c.hubID)
 	defer slicepool.Put(bHubID)
 	return c.rdb.SAdd(ctx, hubsKey, bHubID).Err()
 }
@@ -733,13 +734,13 @@ func (c *cache) addHub(ctx context.Context) error {
 // the rest return immediately.
 func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
 	var (
-		bHubID         = pkg.U64ToBytes(hubID)
-		reapHubLockKey = pkg.Concat(hubReapLockPrefix, hubID)
+		bHubID         = bs.U64ToBytes(hubID)
+		reapHubLockKey = bs.Concat(hubReapLockPrefix, hubID)
 	)
 
 	acquired, err := c.rdb.SetNX(
 		ctx,
-		pkg.BytesToString(reapHubLockKey),
+		bs.BytesToString(reapHubLockKey),
 		1,
 		reapLockTTL,
 	).Result()
@@ -758,7 +759,7 @@ func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
 	defer func() {
 		delErr := c.rdb.Del(
 			ctx,
-			pkg.BytesToString(reapHubLockKey),
+			bs.BytesToString(reapHubLockKey),
 		).Err()
 		if delErr != nil {
 			c.logger.Error(
@@ -781,7 +782,7 @@ func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
 		return err
 	}
 
-	hubDeviceKey := pkg.Concat(hubDevicesPrefix, hubID)
+	hubDeviceKey := bs.Concat(hubDevicesPrefix, hubID)
 	for {
 		// SRANDMEMBER: read without deleting. Deletion (both from hub set and
 		// devices hash) only occurs after the corresponding HDEL has finished running
@@ -789,7 +790,7 @@ func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
 		// in hub:devices:<hubID> so that the next reap can pick it up automatically.
 		popped, popErr := c.rdb.SRandMemberN(
 			ctx,
-			pkg.BytesToString(hubDeviceKey),
+			bs.BytesToString(hubDeviceKey),
 			int64(c.reapBatchSize),
 		).Result()
 		if popErr != nil {
@@ -813,7 +814,7 @@ func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
 		}
 
 		for bucket, ids := range byBucket {
-			deviceBucketKey := pkg.Concat(devicesPrefix, uint64(bucket))
+			deviceBucketKey := bs.Concat(devicesPrefix, uint64(bucket))
 
 			args := make([]any, 1+len(ids))
 			args[0] = bHubID
@@ -825,8 +826,8 @@ func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
 				ctx,
 				c.rdb,
 				[]string{
-					pkg.BytesToString(deviceBucketKey),
-					pkg.BytesToString(hubDeviceKey),
+					bs.BytesToString(deviceBucketKey),
+					bs.BytesToString(hubDeviceKey),
 				},
 				args...,
 			).Err()
@@ -844,10 +845,10 @@ func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
 		}
 	}
 
-	hubHeartbeatKey := pkg.Concat(hubHeartbeatPrefix, hubID)
+	hubHeartbeatKey := bs.Concat(hubHeartbeatPrefix, hubID)
 	err = c.rdb.Del(
 		ctx,
-		pkg.BytesToString(hubHeartbeatKey),
+		bs.BytesToString(hubHeartbeatKey),
 	).Err()
 
 	slicepool.Put(hubDeviceKey)
@@ -872,7 +873,7 @@ func (c *cache) checkSelfReaped(ctx context.Context) {
 	}
 	defer c.selfReapChecking.Store(false)
 
-	bHubID := pkg.U64ToBytes(c.hubID)
+	bHubID := bs.U64ToBytes(c.hubID)
 	exists, err := c.rdb.SIsMember(
 		ctx,
 		hubsKey,
@@ -922,7 +923,7 @@ func (c *cache) verifyTurnOnExpiredNotifications(ctx context.Context) error {
 func (c *cache) handleEvents(ctx context.Context) {
 	var (
 		ticker          = time.NewTicker(c.heartbeatInterval)
-		hubHeartbeatKey = pkg.Concat(hubHeartbeatPrefix, c.hubID)
+		hubHeartbeatKey = bs.Concat(hubHeartbeatPrefix, c.hubID)
 
 		// go-redis gives no explicit "reconnected" event — the pool retries and
 		// reconnects transparently under the hood. We only ever observe pass/fail
@@ -943,7 +944,7 @@ func (c *cache) handleEvents(ctx context.Context) {
 		case <-ticker.C:
 			err := c.rdb.Set(
 				ctx,
-				pkg.BytesToString(hubHeartbeatKey),
+				bs.BytesToString(hubHeartbeatKey),
 				1,
 				c.heartbeatTTL,
 			).Err()
@@ -977,7 +978,7 @@ func (c *cache) handleEvents(ctx context.Context) {
 				continue
 			}
 
-			buf := pkg.StringToBytes(delDeviceMsg.Payload)
+			buf := bs.StringToBytes(delDeviceMsg.Payload)
 			hubID := binary.LittleEndian.Uint64(buf[8:16])
 			if hubID != c.hubID {
 				c.callbacks.OnDeviceDeleted(
@@ -1020,7 +1021,7 @@ func (c *cache) handleEvents(ctx context.Context) {
 
 // bucketFor returns the registry bucket for the given device ID.
 func (c *cache) bucketFor(id uint64) uint32 {
-	return uint32(pkg.Mix64(id) % uint64(c.deviceBucketCount))
+	return uint32(bit.Mix64(id) % uint64(c.deviceBucketCount))
 }
 
 // subscribe creates a Redis Pub/Sub subscription and waits until Redis

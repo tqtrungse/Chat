@@ -23,8 +23,11 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"xxx/pkg"
 	"xxx/pkg/backoff"
+	"xxx/pkg/bit"
+	"xxx/pkg/cpu"
+	"xxx/pkg/generic"
+	"xxx/pkg/os"
 )
 
 const (
@@ -44,11 +47,11 @@ type entry[V any] struct {
 // Elastic is MPSC unbounded queue assembled from a linked chain of fixed-size ring buffers.
 type Elastic[V any] struct {
 	head *rbNode[V]
-	_    [pkg.CacheLineSize - pkg.PtrSize]byte
+	_    [cpu.CacheLineSize - os.PtrSize]byte
 
 	tail   atomic.Pointer[rbNode[V]]
 	closed atomic.Bool
-	_      [pkg.CacheLineSize - pkg.PtrSize - 4]byte
+	_      [cpu.CacheLineSize - os.PtrSize - 4]byte
 }
 
 func NewElastic[V any](nodeCap int) (*Elastic[V], error) {
@@ -185,33 +188,33 @@ func (e *Elastic[V]) Close() {
 
 type rbNode[V any] struct {
 	rb *rb[V]
-	_  [pkg.CacheLineSize - pkg.PtrSize]byte
+	_  [cpu.CacheLineSize - os.PtrSize]byte
 
 	mtx sync.Mutex
-	_   [pkg.CacheLineSize - unsafe.Sizeof(sync.Mutex{})]byte
+	_   [cpu.CacheLineSize - unsafe.Sizeof(sync.Mutex{})]byte
 
 	next     atomic.Pointer[rbNode[V]]
 	initNext atomic.Bool
-	_        [pkg.CacheLineSize - pkg.PtrSize - 4]byte
+	_        [cpu.CacheLineSize - os.PtrSize - 4]byte
 }
 
 type rb[V any] struct {
 	readIdx uint32
-	_       [pkg.CacheLineSize - 4]byte
+	_       [cpu.CacheLineSize - 4]byte
 
 	// state store [sendIdx (32bit) | activePushers (31bit) | closed (1bit)]
 	state atomic.Uint64
-	_     [pkg.CacheLineSize - 8]byte
+	_     [cpu.CacheLineSize - 8]byte
 
 	ring      []entry[V]
 	entrySize uint32
 	capacity  uint32
 	n         uint32
-	_         [pkg.CacheLineSize - unsafe.Sizeof([]entry[V]{}) - 12]byte
+	_         [cpu.CacheLineSize - unsafe.Sizeof([]entry[V]{}) - 12]byte
 }
 
 func newRb[V any](capacity int) *rb[V] {
-	rawCapacity := uint32(pkg.NextPowerOfTwo(capacity))
+	rawCapacity := uint32(bit.NextPowerOfTwo(capacity))
 	return &rb[V]{
 		ring:      make([]entry[V], rawCapacity),
 		entrySize: uint32(unsafe.Sizeof(entry[V]{})),
@@ -235,7 +238,7 @@ func (r *rb[V]) tryPush(value V) (added bool) {
 		// Separate the sendIdx. Subtract 1 to get back the exact index that was just reserved.
 		idx    = uint32(s>>sendIdxShift) - 1
 		cycle  = (idx >> r.n) << 1
-		mapIdx = pkg.CacheRemap(idx, r.capacity, r.entrySize)
+		mapIdx = cpu.CacheRemap(idx, r.capacity, r.entrySize)
 		ent    = &r.ring[mapIdx]
 	)
 
@@ -253,14 +256,14 @@ func (r *rb[V]) tryPush(value V) (added bool) {
 func (r *rb[V]) tryPop() (value V, ok bool, closed bool) {
 	var (
 		cycle    = (r.readIdx>>r.n)<<1 + 1
-		mapIdx   = pkg.CacheRemap(r.readIdx, r.capacity, r.entrySize)
+		mapIdx   = cpu.CacheRemap(r.readIdx, r.capacity, r.entrySize)
 		ent      = &r.ring[mapIdx]
 		cycleEnt = ent.Cycle.Load()
 	)
 
 	if cycle == cycleEnt {
 		value = ent.Value
-		ent.Value = pkg.ZeroValue[V]()
+		ent.Value = generic.ZeroValue[V]()
 		ent.Cycle.Store(cycleEnt + 1)
 		r.readIdx++
 		return value, true, false
@@ -280,7 +283,7 @@ func (r *rb[V]) tryPop() (value V, ok bool, closed bool) {
 
 	// drain.
 	for r.readIdx != sendIdx {
-		ent = &r.ring[pkg.CacheRemap(r.readIdx, r.capacity, r.entrySize)]
+		ent = &r.ring[cpu.CacheRemap(r.readIdx, r.capacity, r.entrySize)]
 		cycleEnt = ent.Cycle.Load()
 		// Skip abandoned slots that no one has written to yet.
 		if cycleEnt&1 == 0 {
@@ -288,7 +291,7 @@ func (r *rb[V]) tryPop() (value V, ok bool, closed bool) {
 			continue
 		}
 		value = ent.Value
-		ent.Value = pkg.ZeroValue[V]()
+		ent.Value = generic.ZeroValue[V]()
 		ent.Cycle.Store(cycleEnt + 1)
 		r.readIdx++
 		return value, true, false

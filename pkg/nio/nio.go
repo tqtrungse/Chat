@@ -30,7 +30,7 @@ import (
 	"strings"
 	"time"
 
-	"xxx/pkg"
+	"xxx/pkg/bit"
 	"xxx/pkg/buffer"
 	"xxx/pkg/collection/swiss"
 	"xxx/pkg/hash"
@@ -589,7 +589,7 @@ func createListeners(addrs []string, opts ...Option) ([]*listener, *Options, err
 
 	if options.EdgeTriggeredIOChunk > 0 {
 		options.EdgeTriggeredIO = true
-		options.EdgeTriggeredIOChunk = int(pkg.NextPowerOfTwo(options.EdgeTriggeredIOChunk))
+		options.EdgeTriggeredIOChunk = int(bit.NextPowerOfTwo(options.EdgeTriggeredIOChunk))
 	} else if options.EdgeTriggeredIO {
 		options.EdgeTriggeredIOChunk = 1 << 20 // 1MB
 	}
@@ -601,7 +601,7 @@ func createListeners(addrs []string, opts ...Option) ([]*listener, *Options, err
 	case rbc <= buffer.RingDefaultBufferSize:
 		options.ReadBufferCap = buffer.RingDefaultBufferSize
 	default:
-		options.ReadBufferCap = int(pkg.NextPowerOfTwo(rbc))
+		options.ReadBufferCap = int(bit.NextPowerOfTwo(rbc))
 	}
 
 	wbc := options.WriteBufferCap
@@ -611,7 +611,7 @@ func createListeners(addrs []string, opts ...Option) ([]*listener, *Options, err
 	case wbc <= buffer.RingDefaultBufferSize:
 		options.WriteBufferCap = buffer.RingDefaultBufferSize
 	default:
-		options.WriteBufferCap = int(pkg.NextPowerOfTwo(wbc))
+		options.WriteBufferCap = int(bit.NextPowerOfTwo(wbc))
 	}
 
 	var hasUDP, hasUnix bool

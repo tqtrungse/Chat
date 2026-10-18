@@ -21,7 +21,8 @@ import (
 	"errors"
 	"io"
 
-	"xxx/pkg"
+	"xxx/pkg/bit"
+	"xxx/pkg/bs"
 	slicepool "xxx/pkg/pool/slice"
 )
 
@@ -53,7 +54,7 @@ func newCoreRing(size int) *coreRing {
 	if size == 0 {
 		return &coreRing{isEmpty: true}
 	}
-	size = int(pkg.NextPowerOfTwo(size))
+	size = int(bit.NextPowerOfTwo(size))
 	return &coreRing{
 		buf:     slicepool.Get(size),
 		size:    size,
@@ -366,7 +367,7 @@ func (rb *coreRing) WriteByte(c byte) error {
 
 // WriteString writes the contents of the string s to buffer, which accepts a slice of bytes.
 func (rb *coreRing) WriteString(s string) (int, error) {
-	return rb.Write(pkg.StringToBytes(s))
+	return rb.Write(bs.StringToBytes(s))
 }
 
 // WriteTo implements io.WriterTo.
@@ -476,7 +477,7 @@ func (rb *coreRing) grow(newCap int) {
 		if newCap <= RingDefaultBufferSize {
 			newCap = RingDefaultBufferSize
 		} else {
-			newCap = int(pkg.NextPowerOfTwo(newCap))
+			newCap = int(bit.NextPowerOfTwo(newCap))
 		}
 	} else {
 		doubleCap := n + n

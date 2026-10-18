@@ -21,7 +21,7 @@ import (
 	"hash/crc32"
 	"net"
 
-	"xxx/pkg"
+	"xxx/pkg/bs"
 )
 
 // LoadBalancing represents the type of load-balancing algorithm.
@@ -139,7 +139,7 @@ func (lb *leastConnectionsLoadBalancer) next(_ net.Addr) (el *eventloop) {
 // hash converts a string to a non-negative CRC32-based hash code.
 // Different strings may collide; it is not a unique identifier.
 func (*sourceAddrHashLoadBalancer) hash(s string) int {
-	v := int(crc32.ChecksumIEEE(pkg.StringToBytes(s)))
+	v := int(crc32.ChecksumIEEE(bs.StringToBytes(s)))
 	if v >= 0 {
 		return v
 	}

@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"xxx/pkg"
+	"xxx/pkg/cpu"
 )
 
 func newTestLocal() *local[int] {
@@ -1144,7 +1144,7 @@ func TestLocal_CacheRemapIsPermutation(t *testing.T) {
 	seen := make([]bool, capacity)
 
 	for i := range uint32(capacity) {
-		idx := pkg.CacheRemap(
+		idx := cpu.CacheRemap(
 			i,
 			capacity,
 			l.entrySize,

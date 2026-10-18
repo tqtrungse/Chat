@@ -18,7 +18,7 @@ import (
 	"math/bits"
 	"unsafe"
 
-	"xxx/pkg"
+	"xxx/pkg/os"
 )
 
 // Int
@@ -26,7 +26,7 @@ import (
 // Hashes for [~int | ~uint].
 func Int[T ~int | ~uint](v T, seed uint64) uint64 {
 	a := uint64(v)
-	return mix64(m^uint64(pkg.PtrSize), mix64(a^hashkey[1], a^seed^hashkey[0]))
+	return mix64(m^uint64(os.PtrSize), mix64(a^hashkey[1], a^seed^hashkey[0]))
 }
 
 // Int8
@@ -66,7 +66,7 @@ func Int64[T ~int64 | ~uint64](v T, seed uint64) uint64 {
 // Hashes for [~uintptr].
 func Uintptr[T ~uintptr](v T, seed uint64) uint64 {
 	a := uint64(v)
-	return mix64(m^uint64(pkg.PtrSize), mix64(a^hashkey[1], a^seed^hashkey[0]))
+	return mix64(m^uint64(os.PtrSize), mix64(a^hashkey[1], a^seed^hashkey[0]))
 }
 
 // Float32

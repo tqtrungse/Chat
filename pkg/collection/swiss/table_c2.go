@@ -27,9 +27,11 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"xxx/pkg"
 	"xxx/pkg/backoff"
+	"xxx/pkg/cpu"
+	"xxx/pkg/generic"
 	"xxx/pkg/hash"
+	"xxx/pkg/os"
 )
 
 type groupC2[K comparable, V any] struct {
@@ -51,17 +53,17 @@ func newGroupC2[K comparable, V any]() groupC2[K, V] {
 type TableC2[K comparable, V any] struct {
 	seed uint64
 	h    HashFunc[K]
-	_    [pkg.CacheLineSize - pkg.PtrSize - 8]byte
+	_    [cpu.CacheLineSize - os.PtrSize - 8]byte
 
 	storage    atomic.Pointer[storageC2[K, V]]
 	resizeWait atomic.Pointer[chan struct{}]
-	_          [pkg.CacheLineSize - 2*pkg.PtrSize]byte
+	_          [cpu.CacheLineSize - 2*os.PtrSize]byte
 
 	growthLeft atomic.Int32
-	_          [pkg.CacheLineSize - 4]byte
+	_          [cpu.CacheLineSize - 4]byte
 
 	items atomic.Int32
-	_     [pkg.CacheLineSize - 4]byte
+	_     [cpu.CacheLineSize - 4]byte
 }
 
 // NewTableC2 creates a concurrent table with the minimum initial capacity.
@@ -612,8 +614,8 @@ func (t *TableC2[K, V]) erase(storage *storageC2[K, V], i, j int) (preValue V) {
 	}
 	preValue = gr.buckets[j].val
 	gr.control = setTag(gr.control, uint(j), taG)
-	gr.buckets[j].key = pkg.ZeroValue[K]()
-	gr.buckets[j].val = pkg.ZeroValue[V]()
+	gr.buckets[j].key = generic.ZeroValue[K]()
+	gr.buckets[j].val = generic.ZeroValue[V]()
 	t.items.Add(-1)
 	return
 }

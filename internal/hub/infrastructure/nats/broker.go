@@ -26,7 +26,7 @@ import (
 	pbpriv "xxx/api/hub/v1/proto/gen/priv"
 	"xxx/internal/hub/connection"
 
-	"xxx/pkg"
+	"xxx/pkg/bs"
 	"xxx/pkg/log"
 	slicepool "xxx/pkg/pool/slice"
 	workerpool "xxx/pkg/pool/worker"
@@ -151,8 +151,8 @@ func (b *broker) Route(
 		return err
 	}
 
-	subject := pkg.Concat(b.hubSubjectPrefix, dstHubID)
-	err = b.nc.Publish(pkg.BytesToString(subject), buf)
+	subject := bs.Concat(b.hubSubjectPrefix, dstHubID)
+	err = b.nc.Publish(bs.BytesToString(subject), buf)
 	slicepool.Put(buf)
 	slicepool.Put(subject)
 	return err

@@ -18,7 +18,8 @@ import (
 	"math/bits"
 	_ "unsafe"
 
-	"xxx/pkg"
+	"xxx/pkg/bit"
+	"xxx/pkg/generic"
 	"xxx/pkg/hash"
 )
 
@@ -541,8 +542,8 @@ func (t *Table[K, V]) erase(i, j int) {
 		t.growthLeft += 1
 	}
 	gr.control = setTag(gr.control, uint(j), taG)
-	gr.buckets[j].key = pkg.ZeroValue[K]()
-	gr.buckets[j].val = pkg.ZeroValue[V]()
+	gr.buckets[j].key = generic.ZeroValue[K]()
+	gr.buckets[j].val = generic.ZeroValue[V]()
 	t.items -= 1
 }
 
@@ -572,7 +573,7 @@ func getAllocBuckets(cap int) uint {
 	}
 	// Load factor: 87.5% (7/8)
 	adjustCapacity := (cap * 8) / 7
-	return pkg.NextPowerOfTwo(adjustCapacity)
+	return bit.NextPowerOfTwo(adjustCapacity)
 }
 
 func getActualUsedBuckets(bucketMask uint) uint {
