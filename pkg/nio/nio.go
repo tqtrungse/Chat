@@ -504,16 +504,14 @@ func (*BuiltinEventEngine) OnTick() (delay time.Duration, action Action) {
 type (
 	// AsyncCallback is a callback that will be invoked after the asynchronous function finishes.
 	//
-	/// Note that the parameter Conn might have been already released when it's UDP protocol,
+	// Note that the parameter Conn might have been already released when it's UDP protocol,
 	// thus it shouldn't be accessed.
 	// This callback will be executed in event-loop, thus it must not block, otherwise,
 	// it blocks the event-loop.
 	AsyncCallback func(c Conn, err error) error
 
-	// RunnableFunc defines the common protocol of an execution on an event-loop.
-	// This interface should be implemented and passed to an event-loop in some way,
-	// then the event-loop will invoke Run to perform the execution.
-	// !!!Caution: Run must not contain any blocking operations like heavy disk or
+	// RunnableFunc is a function executed on an event-loop via EventLoop.Execute.
+	// !!!Caution: it must not contain any blocking operations like heavy disk or
 	// network I/O, or else it will block the event-loop.
 	RunnableFunc func(ctx context.Context) error
 )
@@ -629,11 +627,10 @@ func createListeners(addrs []string, opts ...Option) ([]*listener, *Options, err
 	// SO_REUSEPORT enables duplicate address and port bindings across various
 	// Unix-like OSs, whereas there is platform-specific inconsistency:
 	// Linux implemented SO_REUSEPORT with load balancing for incoming connections
-	// while *BSD implemented it for only binding to the same address and port, which
-	// makes it pointless to enable SO_REUSEPORT on *BSD and Darwin for gnet with
-	// multiple event-loops because only the first or last event-loop will be constantly
-	// woken up to accept incoming connections and handle I/O events while the rest of
-	// event-loops remain idle.
+	// while *BSD implemented it for only binding to the same address and port, which makes it pointless
+	// to enable SO_REUSEPORT on *BSD and Darwin for nio with multiple event-loops because only the first
+	// or last event-loop will be constantly woken up to accept incoming connections and handle I/O events
+	// while the rest of event-loops remain idle.
 	// Thus, we disable SO_REUSEPORT on *BSD and Darwin by default.
 	//
 	// Note that FreeBSD 12 introduced a new socket option named SO_REUSEPORT_LB

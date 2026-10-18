@@ -50,7 +50,7 @@ func runTestServer(t *testing.T) *natsserver.Server {
 
 func TestDefaultConnConfig(t *testing.T) {
 	cc := DefaultConnConfig()
-	require.Equal(t, -1, cc.MaxReconnects)
+	require.Equal(t, 60, cc.MaxReconnects)
 	require.Equal(t, 2*time.Second, cc.ReconnectWait)
 	require.NotEmpty(t, cc.Name)
 }
@@ -177,9 +177,15 @@ func TestConnect_DisconnectAndReconnect(t *testing.T) {
 	})
 
 	s.Shutdown()
-	require.Eventually(t, func() bool {
-		return nc.Status() != nats.CONNECTED
-	}, 2*time.Second, 20*time.Millisecond, "client did not observe the server going away")
+	require.Eventually(
+		t,
+		func() bool {
+			return nc.Status() != nats.CONNECTED
+		},
+		2*time.Second,
+		20*time.Millisecond,
+		"client did not observe the server going away",
+	)
 
 	opts2 := *opts
 	opts2.Port = port
@@ -190,7 +196,13 @@ func TestConnect_DisconnectAndReconnect(t *testing.T) {
 	require.True(t, s2.ReadyForConnections(4*time.Second))
 	t.Cleanup(s2.Shutdown)
 
-	require.Eventually(t, func() bool {
-		return nc.Status() == nats.CONNECTED
-	}, 5*time.Second, 50*time.Millisecond, "client did not reconnect once the server came back")
+	require.Eventually(
+		t,
+		func() bool {
+			return nc.Status() == nats.CONNECTED
+		},
+		5*time.Second,
+		50*time.Millisecond,
+		"client did not reconnect once the server came back",
+	)
 }

@@ -154,7 +154,7 @@ var (
 // Trigger enqueues task and wakes up the poller to process pending tasks.
 // By default, any incoming task will enqueued into urgentAsyncTaskQueue
 // before the threshold of high-priority events is reached. When it happens,
-// any asks other than high-priority tasks will be shunted to asyncTaskQueue.
+// any tasks other than high-priority tasks will be shunted to asyncTaskQueue.
 //
 // Note that asyncTaskQueue is a queue of low-priority whose size may grow large and tasks in it may backlog.
 func (p *Poller) Trigger(priority queue.EventPriority, fn queue.Func, param any) (err error) {

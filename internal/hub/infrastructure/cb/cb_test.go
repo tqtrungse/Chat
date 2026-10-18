@@ -65,7 +65,7 @@ func TestExecute_SuccessPassesCtxThrough(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, gotCtx)
 	require.Equal(t, "value", gotCtx.Value(ctxKey{}))
-	require.Equal(t, gobreaker.StateClosed, cb.State())
+	require.Equal(t, gobreaker.StateClosed, cb.(*circuitBreaker).cb.State())
 }
 
 // This is the property the whole IsExcluded wiring exists for: an error the
@@ -84,7 +84,7 @@ func TestExecute_NonInfraErrorsAreExcludedNeverTrip(t *testing.T) {
 		})
 		require.Equal(t, errBusiness, err)
 	}
-	require.Equal(t, gobreaker.StateClosed, cb.State())
+	require.Equal(t, gobreaker.StateClosed, cb.(*circuitBreaker).cb.State())
 }
 
 func TestExecute_InfraErrorsTripAfterConsecutiveFailures(t *testing.T) {
@@ -100,7 +100,7 @@ func TestExecute_InfraErrorsTripAfterConsecutiveFailures(t *testing.T) {
 		})
 		require.Equal(t, errCacheDown, err)
 	}
-	require.Equal(t, gobreaker.StateOpen, cb.State())
+	require.Equal(t, gobreaker.StateOpen, cb.(*circuitBreaker).cb.State())
 }
 
 func TestExecute_OpenStateFailsFastWithoutCallingFn(t *testing.T) {
@@ -110,7 +110,7 @@ func TestExecute_OpenStateFailsFastWithoutCallingFn(t *testing.T) {
 		nil,
 	)
 	_ = cb.Execute(context.Background(), func(context.Context) error { return errCacheDown }) // trip it
-	require.Equal(t, gobreaker.StateOpen, cb.State())
+	require.Equal(t, gobreaker.StateOpen, cb.(*circuitBreaker).cb.State())
 
 	called := false
 	err := cb.Execute(context.Background(), func(context.Context) error {
@@ -130,13 +130,13 @@ func TestExecute_HalfOpenProbeSucceedsCloses(t *testing.T) {
 		nil,
 	)
 	_ = cb.Execute(context.Background(), func(context.Context) error { return errCacheDown })
-	require.Equal(t, gobreaker.StateOpen, cb.State())
+	require.Equal(t, gobreaker.StateOpen, cb.(*circuitBreaker).cb.State())
 
 	time.Sleep(30 * time.Millisecond) // let Timeout elapse
 
 	err := cb.Execute(context.Background(), func(context.Context) error { return nil })
 	require.NoError(t, err)
-	require.Equal(t, gobreaker.StateClosed, cb.State())
+	require.Equal(t, gobreaker.StateClosed, cb.(*circuitBreaker).cb.State())
 }
 
 func TestExecute_HalfOpenProbeFailsReopens(t *testing.T) {
@@ -150,7 +150,7 @@ func TestExecute_HalfOpenProbeFailsReopens(t *testing.T) {
 
 	err := cb.Execute(context.Background(), func(context.Context) error { return errCacheDown })
 	require.Equal(t, errCacheDown, err)
-	require.Equal(t, gobreaker.StateOpen, cb.State())
+	require.Equal(t, gobreaker.StateOpen, cb.(*circuitBreaker).cb.State())
 }
 
 // The concurrency gate is the entire point of half-open: only MaxRequests
@@ -191,7 +191,7 @@ func TestExecute_HalfOpenRejectsConcurrentProbeBeyondMaxRequests(t *testing.T) {
 	require.NoError(t, <-firstDone)
 	require.Equal(t, connection.ErrCbOpen, secondErr)
 	require.False(t, secondCalled)
-	require.Equal(t, gobreaker.StateClosed, cb.State())
+	require.Equal(t, gobreaker.StateClosed, cb.(*circuitBreaker).cb.State())
 }
 
 func TestExecute_PanicIsRecoveredAndRepanickedWithOriginalValue(t *testing.T) {
@@ -233,7 +233,7 @@ func TestExecute_PanicAlwaysCountsAsFailureEvenIfClassifierWouldExcludeIt(t *tes
 		}()
 	}
 
-	require.Equal(t, gobreaker.StateOpen, cb.State())
+	require.Equal(t, gobreaker.StateOpen, cb.(*circuitBreaker).cb.State())
 }
 
 func TestExecute_OnStateChangeReportsTransitions(t *testing.T) {

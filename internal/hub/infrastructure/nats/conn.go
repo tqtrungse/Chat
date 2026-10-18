@@ -93,7 +93,9 @@ func Connect(
 				return
 			}
 			logger.Error("NATS connection closed unexpectedly — unrecoverable", zap.Error(nc.LastError()))
-			onFatalClose() // page/alert + fail readiness probe, hoặc os.Exit(1) để orchestrator restart
+			// page/alert + fail the readiness probe, or os.Exit(1) so the orchestrator restarts the process
+			// metrics.NatsAsyncErrors.Inc() // if Prometheus/OTel is already set up
+			onFatalClose()
 		}),
 		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
 			logger.Error("NATS async error", zap.Error(err))

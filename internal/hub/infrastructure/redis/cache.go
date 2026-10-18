@@ -310,10 +310,8 @@ func (c *cache) IsInfraError(err error) bool {
 	//     "it's just cluster protocol" reasoning that excludes Moved/Ask
 	//     below applies partially to this too — worth your own call if
 	//     you want full consistency.
-	//   - Auth: a client that can't authenticate can't do anything else
-	//     either — but see IsRedisAuthError / WithOnAuthError in
-	//     redis_breaker.go for why this deserves its own alert too, not
-	//     just silent inclusion here.
+	//   - Auth: a client that can't authenticate can't do anything else either,
+	//     so it is classified as infra here.
 	//
 	// Deliberately NOT here: Moved / Ask. These are normal Redis Cluster
 	// routing protocol, not unhealthiness — a ClusterClient absorbs them
@@ -366,11 +364,9 @@ func (c *cache) IsInfraError(err error) bool {
 	// Everything else — redis.Nil, redis.TxFailedErr,
 	// IsPermissionError/NOPERM, IsExecAbortError, redis.ErrCrossSlot,
 	// redis.ErrNoScript, WRONGTYPE, syntax errors, Moved/Ask (see above),
-	// and anything unrecognized — is a per-command or business signal,
-	// not infrastructure, and shouldn't trip a breaker meant to detect
-	// "Redis is unreachable". A recovered panic bypasses this function
-	// entirely (see NewRedisBreaker in redis_breaker.go) and always
-	// counts as a failure regardless of what it would return here.
+	// and anything unrecognized — is a per-command or business signal, not
+	// infrastructure. A recovered panic bypasses this function entirely
+	// (see cb.New's IsExcluded) and always counts as a failure.
 	return false
 }
 
@@ -894,9 +890,9 @@ func (c *cache) checkSelfReaped(ctx context.Context) {
 	}
 
 	if err = c.addHub(ctx); err != nil {
-		// Best-effort; hook up c.logger here if you want visibility. Don't
-		// return early on this error — the app still needs the callback below.
-		c.logger.Warn("failed to re-register hub after a possible self-reap")
+		// Best-effort: log and continue. Don't return early on this error —
+		// the app still needs the OnSelfReaped callback below.
+		c.logger.Warn("failed to re-register hub after a possible self-reap", zap.Error(err))
 	}
 
 	c.callbacks.OnSelfReaped()
@@ -1022,7 +1018,7 @@ func (c *cache) handleEvents(ctx context.Context) {
 	}
 }
 
-// deviceBucket returns the registry bucket for deviceID.
+// bucketFor returns the registry bucket for the given device ID.
 func (c *cache) bucketFor(id uint64) uint32 {
 	return uint32(pkg.Mix64(id) % uint64(c.deviceBucketCount))
 }
