@@ -20,7 +20,7 @@ package activate_conn
 import (
 	"time"
 
-	"xxx/pkg"
+	"xxx/pkg/config"
 )
 
 type Config struct {
@@ -35,7 +35,7 @@ type Config struct {
 	MaxPreAuthConns uint32
 }
 
-func (c *Config) Load(loader pkg.ConfigLoader) {
+func (c *Config) Load(loader config.Loader) {
 	if loader == nil {
 		return
 	}

@@ -29,12 +29,12 @@ import (
 	"xxx/internal/hub/infrastructure/crypto"
 	"xxx/internal/shared/ticket"
 
-	"xxx/pkg"
+	"xxx/pkg/config"
 )
 
-func loadTicketVerifier(cfgLoader pkg.ConfigLoader) (*crypto.TicketVerifier, error) {
+func loadTicketVerifier(loader config.Loader) (*crypto.TicketVerifier, error) {
 	keys, err := ticket.ParseTicketEncryptKeys(
-		strings.Split(cfgLoader.GetString("TICKET_ENCRYPT_KEYS"), ","),
+		strings.Split(loader.GetString("TICKET_ENCRYPT_KEYS"), ","),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse ticket encryption keys: %w", err)
@@ -45,7 +45,7 @@ func loadTicketVerifier(cfgLoader pkg.ConfigLoader) (*crypto.TicketVerifier, err
 		}
 	}()
 
-	id := cfgLoader.GetUint8("TICKET_ENCRYPT_CURRENT_KEY_ID")
+	id := loader.GetUint8("TICKET_ENCRYPT_CURRENT_KEY_ID")
 	if id == 0 {
 		return nil, errors.New("invalid TICKET_ENCRYPT_CURRENT_KEY_ID")
 	}
@@ -56,13 +56,13 @@ func loadTicketVerifier(cfgLoader pkg.ConfigLoader) (*crypto.TicketVerifier, err
 	}
 
 	publicKeys, err := parseTicketSigningPublicKeys(
-		strings.Split(cfgLoader.GetString("TICKET_SIGNING_PUBLIC_KEYS"), ","),
+		strings.Split(loader.GetString("TICKET_SIGNING_PUBLIC_KEYS"), ","),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse ticket signing public keys: %w", err)
 	}
 
-	clockSkew, err := time.ParseDuration(strings.TrimSpace(cfgLoader.GetString("TICKET_CLOCK_SKEW")))
+	clockSkew, err := time.ParseDuration(strings.TrimSpace(loader.GetString("TICKET_CLOCK_SKEW")))
 	if err != nil {
 		return nil, fmt.Errorf("invalid TICKET_CLOCK_SKEW: %w", err)
 	}

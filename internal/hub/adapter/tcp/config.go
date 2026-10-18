@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"xxx/pkg"
+	"xxx/pkg/config"
 )
 
 type Config struct {
@@ -60,7 +60,7 @@ type Config struct {
 	WriteBufferCap int
 }
 
-func (c *Config) Load(loader pkg.ConfigLoader) {
+func (c *Config) Load(loader config.Loader) {
 	if loader == nil {
 		return
 	}

@@ -27,10 +27,10 @@ import (
 	"xxx/internal/iam/infrastructure/crypto"
 	"xxx/internal/shared/ticket"
 
-	"xxx/pkg"
+	"xxx/pkg/config"
 )
 
-func loadTicketSigner(loader pkg.ConfigLoader) (*crypto.TicketSigner, error) {
+func loadTicketSigner(loader config.Loader) (*crypto.TicketSigner, error) {
 	keys, err := ticket.ParseTicketEncryptKeys(
 		strings.Split(loader.GetString("TICKET_ENCRYPT_KEYS"), ","),
 	)

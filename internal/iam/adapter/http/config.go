@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"xxx/pkg"
+	"xxx/pkg/config"
 )
 
 type Config struct {
@@ -36,7 +36,7 @@ type Config struct {
 	MaxHeaderBytes    int
 }
 
-func (c *Config) Load(loader pkg.ConfigLoader) {
+func (c *Config) Load(loader config.Loader) {
 	if loader == nil {
 		return
 	}

@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"xxx/pkg"
+	"xxx/pkg/config"
 )
 
 type Config struct {
@@ -32,7 +32,7 @@ type Config struct {
 	Pool         PoolConfig
 }
 
-func (c *Config) Load(loader pkg.ConfigLoader) {
+func (c *Config) Load(loader config.Loader) {
 	if loader == nil {
 		return
 	}
@@ -40,7 +40,7 @@ func (c *Config) Load(loader pkg.ConfigLoader) {
 	c.Passwd = strings.TrimSpace(loader.GetString("SQL_DATABASE_PASSWORD"))
 	c.DBName = strings.TrimSpace(loader.GetString("SQL_DATABASE_NAME"))
 	c.PrimaryAddr = strings.TrimSpace(loader.GetString("SQL_DATABASE_PRIMARY_ADDRESS"))
-	c.ReplicaAddrs = pkg.SplitList(loader.GetString("SQL_DATABASE_REPLICA_ADDRESSES"))
+	c.ReplicaAddrs = config.SplitList(loader.GetString("SQL_DATABASE_REPLICA_ADDRESSES"))
 	c.Pool.Load(loader)
 }
 
@@ -77,7 +77,7 @@ type PoolConfig struct {
 	ConnMaxIdleTime time.Duration
 }
 
-func (c *PoolConfig) Load(loader pkg.ConfigLoader) {
+func (c *PoolConfig) Load(loader config.Loader) {
 	if loader == nil {
 		return
 	}

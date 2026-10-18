@@ -16,7 +16,7 @@
 
 package worker
 
-import "xxx/pkg"
+import "xxx/pkg/config"
 
 type Config struct {
 	// NumWorkers sets the maximum workers in pool.
@@ -46,7 +46,7 @@ type Config struct {
 	GlobalBatchSize int
 }
 
-func (c *Config) Load(loader pkg.ConfigLoader) {
+func (c *Config) Load(loader config.Loader) {
 	if loader == nil {
 		return
 	}

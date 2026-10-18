@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"xxx/pkg"
+	"xxx/pkg/config"
 )
 
 type Config struct {
@@ -103,7 +103,7 @@ type Config struct {
 	VerifyExpiredNotifications bool
 }
 
-func (c *Config) Load(loader pkg.ConfigLoader) {
+func (c *Config) Load(loader config.Loader) {
 	if loader == nil {
 		return
 	}

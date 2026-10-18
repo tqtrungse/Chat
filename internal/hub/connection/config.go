@@ -19,7 +19,7 @@ package connection
 import (
 	"time"
 
-	"xxx/pkg"
+	"xxx/pkg/config"
 )
 
 // Config composes the config for every component in this package. Each
@@ -76,7 +76,7 @@ type PresenceSyncConfig struct {
 	BackoffJitterCap time.Duration
 }
 
-func (c *Config) Load(loader pkg.ConfigLoader) {
+func (c *Config) Load(loader config.Loader) {
 	if loader == nil {
 		return
 	}

@@ -26,7 +26,8 @@ import (
 	"xxx/internal/iam/application/exchange_key"
 	"xxx/internal/iam/infrastructure/crypto"
 	"xxx/internal/iam/infrastructure/mysql"
-	"xxx/pkg"
+
+	"xxx/pkg/config"
 	"xxx/pkg/database/sql"
 	"xxx/pkg/log"
 
@@ -43,21 +44,21 @@ func Run(ctx context.Context) (retErr error) {
 		}
 	}()
 
-	cfgLoader, err := pkg.LoadConfig("iam")
+	loader, err := config.Load("iam")
 	if err != nil {
 		return fmt.Errorf("failed to load IAM config: %w", err)
 	}
 
 	cfgHttp := iamhttp.Config{}
-	cfgHttp.Load(cfgLoader)
+	cfgHttp.Load(loader)
 	if err = validateHTTPConfig(cfgHttp); err != nil {
 		return err
 	}
 
 	var cfgDb sql.Config
-	cfgDb.Load(cfgLoader)
+	cfgDb.Load(loader)
 
-	ticketSigner, err := loadTicketSigner(cfgLoader)
+	ticketSigner, err := loadTicketSigner(loader)
 	if err != nil {
 		return err
 	}

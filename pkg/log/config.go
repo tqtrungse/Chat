@@ -19,7 +19,7 @@ package log
 import (
 	"time"
 
-	"xxx/pkg"
+	"xxx/pkg/config"
 )
 
 type FileConfig struct {
@@ -65,7 +65,7 @@ type FileConfig struct {
 	FlushInterval time.Duration
 }
 
-func (f *FileConfig) Load(loader pkg.ConfigLoader) {
+func (f *FileConfig) Load(loader config.Loader) {
 	if loader == nil {
 		return
 	}

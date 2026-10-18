@@ -19,7 +19,7 @@ package scylla
 import (
 	"time"
 
-	"xxx/pkg"
+	"xxx/pkg/config"
 
 	"github.com/gocql/gocql"
 )
@@ -118,11 +118,11 @@ type Config struct {
 	Compression bool
 }
 
-func (c *Config) Load(loader pkg.ConfigLoader) {
+func (c *Config) Load(loader config.Loader) {
 	if loader == nil {
 		return
 	}
-	c.Hosts = pkg.SplitList(loader.GetString("SCYLLA_DATABASE_HOSTS")) // If empty, open() will return ErrNilHosts
+	c.Hosts = config.SplitList(loader.GetString("SCYLLA_DATABASE_HOSTS")) // If empty, open() will return ErrNilHosts
 	c.User = loader.GetString("SCYLLA_DATABASE_USER")
 	c.Passwd = loader.GetString("SCYLLA_DATABASE_PASSWORD")
 	c.Keyspace = loader.GetString("SCYLLA_DATABASE_KEYSPACE")

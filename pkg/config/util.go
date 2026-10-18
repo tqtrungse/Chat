@@ -5,16 +5,17 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *       http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ * express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
 
-package pkg
+package config
 
 import (
 	"errors"
@@ -27,7 +28,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-type ConfigLoader interface {
+type Loader interface {
 	GetString(key string) string
 
 	GetInt(key string) int
@@ -44,14 +45,14 @@ type ConfigLoader interface {
 	GetDuration(key string) time.Duration
 }
 
-func LoadConfig(serviceName string) (ConfigLoader, error) {
-	path, err := findConfigPath(serviceName)
+func Load(serviceName string) (Loader, error) {
+	path, err := findPath(serviceName)
 	if err != nil {
 		return nil, err
 	}
 
 	fileName := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	return defaultConfigLoader(filepath.Dir(path), fileName)
+	return defaultLoader(filepath.Dir(path), fileName)
 }
 
 func SplitList(s string) []string {
@@ -64,7 +65,7 @@ func SplitList(s string) []string {
 	return out
 }
 
-func defaultConfigLoader(folderPath, fileName string) (ConfigLoader, error) {
+func defaultLoader(folderPath, fileName string) (Loader, error) {
 	v := viper.New()
 	v.AutomaticEnv()
 	if len(folderPath) == 0 || len(fileName) == 0 {
@@ -84,7 +85,7 @@ func defaultConfigLoader(folderPath, fileName string) (ConfigLoader, error) {
 	return v, nil
 }
 
-func findConfigPath(serviceName string) (string, error) {
+func findPath(serviceName string) (string, error) {
 	var (
 		envConfigFile = fmt.Sprintf("%s_CONFIG_FILE", strings.ToUpper(serviceName))
 		path          = os.Getenv(envConfigFile)

@@ -33,6 +33,7 @@ import (
 	shareddevice "xxx/internal/shared/device"
 
 	"xxx/pkg"
+	"xxx/pkg/config"
 	"xxx/pkg/log"
 	workerpool "xxx/pkg/pool/worker"
 
@@ -49,7 +50,7 @@ func Run(ctx context.Context) (retErr error) {
 		}
 	}()
 
-	cfgLoader, err := pkg.LoadConfig("hub")
+	loader, err := config.Load("hub")
 	if err != nil {
 		return fmt.Errorf("failed to load hub config: %w", err)
 	}
@@ -57,9 +58,9 @@ func Run(ctx context.Context) (retErr error) {
 		return err
 	}
 
-	hubID := cfgLoader.GetUint64("HUB_ID")
+	hubID := loader.GetUint64("HUB_ID")
 	if hubID == 0 {
-		serviceID := cfgLoader.GetUint64("SERVICE_ID")
+		serviceID := loader.GetUint64("SERVICE_ID")
 		if serviceID == 0 {
 			return fmt.Errorf("service ID is required")
 		}
@@ -71,7 +72,7 @@ func Run(ctx context.Context) (retErr error) {
 	}
 
 	cfgTcp := tcp.Config{}
-	cfgTcp.Load(cfgLoader)
+	cfgTcp.Load(loader)
 	if len(cfgTcp.Addr) == 0 {
 		return errors.New("TCP_SERVER_ADDRESS is required")
 	}
@@ -80,7 +81,7 @@ func Run(ctx context.Context) (retErr error) {
 	}
 
 	cfgCache := redis.Config{}
-	cfgCache.Load(cfgLoader)
+	cfgCache.Load(loader)
 	if len(cfgCache.Addr) == 0 {
 		return errors.New("DISTRIBUTED_CACHE_ADDRESS is required")
 	}
@@ -91,12 +92,12 @@ func Run(ctx context.Context) (retErr error) {
 		cfgRouter   connection.Config
 		cfgActivate activate_conn.Config
 	)
-	cfgCb.Load(cfgLoader)
-	cfgPool.Load(cfgLoader)
-	cfgRouter.Load(cfgLoader)
-	cfgActivate.Load(cfgLoader)
+	cfgCb.Load(loader)
+	cfgPool.Load(loader)
+	cfgRouter.Load(loader)
+	cfgActivate.Load(loader)
 
-	ticketVerifier, err := loadTicketVerifier(cfgLoader)
+	ticketVerifier, err := loadTicketVerifier(loader)
 	if err != nil {
 		return err
 	}

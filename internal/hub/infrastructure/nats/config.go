@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"time"
 
-	"xxx/pkg"
+	"xxx/pkg/config"
 )
 
 type Config struct {
@@ -51,14 +51,14 @@ type Config struct {
 	InboxWorkers int
 }
 
-func (c *Config) Load(loader pkg.ConfigLoader) error {
+func (c *Config) Load(loader config.Loader) error {
 	c.HubSubjectPrefix = loader.GetString("BROKER_HUB_SUBJECT_PREFIX")
 	c.MaxHops = loader.GetUint8("BROKER_MAX_HOPS")
 	c.PublishTimeout = loader.GetDuration("BROKER_PUBLISH_TIMEOUT")
 	c.InboxWorkers = loader.GetInt("BROKER_INBOX_WORKERS")
 
 	c.DeliveryBackOff = nil // If it is empty, NewBroker will use default.
-	for _, str := range pkg.SplitList(loader.GetString("BROKER_DELIVERY_BACKOFF")) {
+	for _, str := range config.SplitList(loader.GetString("BROKER_DELIVERY_BACKOFF")) {
 		duration, err := time.ParseDuration(str)
 		if err != nil || duration <= 0 {
 			return fmt.Errorf("BROKER_DELIVERY_BACKOFF: invalid duration %q", str)
