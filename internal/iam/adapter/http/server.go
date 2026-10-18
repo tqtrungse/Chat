@@ -26,7 +26,7 @@ import (
 
 	"xxx/internal/iam/application/exchange_key"
 
-	"xxx/pkg"
+	"xxx/pkg/jwt"
 	"xxx/pkg/log"
 
 	"github.com/go-chi/chi/v5"
@@ -48,7 +48,7 @@ var (
 
 type Server struct {
 	srv          *http.Server
-	auth         *pkg.JWTAuth
+	auth         *jwt.Auth
 	logger       *log.Logger
 	keyExchanger exchange_key.Usecase
 	certFile     string
@@ -61,9 +61,9 @@ func NewServer(
 	logger *log.Logger,
 	keyExchanger exchange_key.Usecase,
 ) (*Server, error) {
-	auth, err := pkg.NewJWTAuth(
+	auth, err := jwt.NewAuth(
 		ctx,
-		pkg.JWTAuthConfig{
+		jwt.AuthConfig{
 			Issuer:   cfg.OIDCIssuer,
 			Audience: cfg.OIDCAudience,
 			JWKSURL:  cfg.OIDCJWKSURL,

@@ -24,7 +24,7 @@ import (
 	"xxx/api/iam/v1/json"
 	"xxx/internal/iam/application/exchange_key"
 
-	"xxx/pkg"
+	"xxx/pkg/jwt"
 	slicepool "xxx/pkg/pool/slice"
 
 	"github.com/mailru/easyjson"
@@ -42,7 +42,7 @@ func (s *Server) exchangeKey(w http.ResponseWriter, r *http.Request) {
 	// 4. Within 15 seconds: TCP sends ActiveConnReq{token=deviceID LE, ticket, sign=Ed25519(identityPriv, ticket)}.
 	// ======================================
 
-	claims, ok := r.Context().Value(claimsContextKey).(*pkg.JWTClaims)
+	claims, ok := r.Context().Value(claimsContextKey).(*jwt.Claims)
 	if !ok {
 		s.respondErr(w, http.StatusUnauthorized, errAuthVerify)
 		return

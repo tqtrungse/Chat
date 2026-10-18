@@ -5,16 +5,17 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *       http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ * express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
 
-package pkg
+package jwt
 
 import (
 	"context"
@@ -25,23 +26,23 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-type JWTAuthConfig struct {
+type AuthConfig struct {
 	Issuer   string
 	Audience string
 	JWKSURL  string
 }
 
-type JWTClaims struct {
+type Claims struct {
 	jwt.RegisteredClaims
 	Scope string `json:"scope"`
 }
 
-type JWTAuth struct {
+type Auth struct {
 	jwks keyfunc.Keyfunc
-	cfg  JWTAuthConfig
+	cfg  AuthConfig
 }
 
-func NewJWTAuth(ctx context.Context, cfg JWTAuthConfig) (*JWTAuth, error) {
+func NewAuth(ctx context.Context, cfg AuthConfig) (*Auth, error) {
 	if cfg.Issuer == "" {
 		return nil, errors.New("JWT issuer is required")
 	}
@@ -56,14 +57,14 @@ func NewJWTAuth(ctx context.Context, cfg JWTAuthConfig) (*JWTAuth, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
 	}
-	return &JWTAuth{
+	return &Auth{
 		jwks: jwks,
 		cfg:  cfg,
 	}, nil
 }
 
-func (v *JWTAuth) Verify(token string) (*JWTClaims, error) {
-	claims := new(JWTClaims)
+func (v *Auth) Verify(token string) (*Claims, error) {
+	claims := new(Claims)
 	tk, err := jwt.ParseWithClaims(
 		token,
 		claims,
