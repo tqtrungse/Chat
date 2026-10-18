@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 
 	pbpub "xxx/api/hub/v1/proto/gen/pub"
+
 	slicepool "xxx/pkg/pool/slice"
 
 	"google.golang.org/protobuf/proto"

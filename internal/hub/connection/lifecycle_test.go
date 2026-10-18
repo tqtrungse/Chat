@@ -131,9 +131,7 @@ func TestLifecycle_PrepareActivationOpensAndVerifiesTicket(t *testing.T) {
 	)
 	token := make([]byte, tokenSize)
 	binary.LittleEndian.PutUint64(token, verifierTicket.DeviceID.Uint64())
-
 	got, err := lifecycle.PrepareActivation(token, ticketBlob, signature)
-
 	require.NoError(t, err)
 	require.Same(t, verifierTicket, got)
 	require.Equal(t, verifierTicket.DeviceID, openedDeviceID)

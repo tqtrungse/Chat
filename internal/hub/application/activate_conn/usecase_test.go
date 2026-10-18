@@ -98,20 +98,27 @@ func newUsecaseTestEnv(t *testing.T, cfg Config) *usecaseTestEnv {
 
 	ctrl := gomock.NewController(t)
 	rootCtx, cancel := context.WithCancel(context.Background())
-	pool, closePool := workerpool.New(workerpool.Config{NumWorkers: 1}, nil)
-	logger, closeLogger := log.NewLogger(&log.FileConfig{
-		Filename:      filepath.Join(t.TempDir(), "activate-conn-test.log"),
-		BufferSize:    1024,
-		FlushInterval: time.Hour,
-	})
+	pool, closePool := workerpool.New(
+		workerpool.Config{NumWorkers: 1},
+		nil,
+	)
+	logger, closeLogger := log.NewLogger(
+		&log.FileConfig{
+			Filename:      filepath.Join(t.TempDir(), "activate-conn-test.log"),
+			BufferSize:    1024,
+			FlushInterval: time.Hour,
+		},
+	)
 
 	ticketVerifier := connectionmocks.NewMockTicketVerifier(ctrl)
 	signer := connectionmocks.NewMockSigner(ctrl)
 	cache := connectionmocks.NewMockDistributedCache(ctrl)
 	cb := connectionmocks.NewMockCircuitBreaker(ctrl)
-	cb.
-		EXPECT().
-		Execute(gomock.Any(), gomock.Any()).
+	cb.EXPECT().
+		Execute(
+			gomock.Any(),
+			gomock.Any(),
+		).
 		DoAndReturn(
 			func(ctx context.Context, fn func(context.Context) error) error {
 				return fn(ctx)
@@ -142,7 +149,13 @@ func newUsecaseTestEnv(t *testing.T, cfg Config) *usecaseTestEnv {
 	)
 
 	decoder := protocol.NewDecoder(protocolmocks.NewMockSecureChannel(ctrl))
-	uc := New(cfg, logger, protocol.NewEncoder(protocolmocks.NewMockSecureChannel(ctrl)), decoder, router).(*connActivator)
+	uc := New(
+		cfg,
+		logger,
+		protocol.NewEncoder(protocolmocks.NewMockSecureChannel(ctrl)),
+		decoder,
+		router,
+	).(*connActivator)
 	env := &usecaseTestEnv{
 		uc:             uc,
 		ticketVerifier: ticketVerifier,
@@ -211,7 +224,10 @@ func (e *usecaseTestEnv) startChallenge(t *testing.T, conn *testConn) (
 	ticket := newTestTicket()
 	e.ticketVerifier.
 		EXPECT().
-		Open(testDeviceID, gomock.Eq(req.Ticket)).
+		Open(
+			testDeviceID,
+			gomock.Eq(req.Ticket),
+		).
 		Return(ticket, nil).
 		Times(1)
 	e.signer.
@@ -230,10 +246,17 @@ func (e *usecaseTestEnv) startChallenge(t *testing.T, conn *testConn) (
 		return len(frame), nil
 	}
 
-	action := e.uc.Activate(conn, marshalFrame(t, pbpub.MsgType_REQ_ACTIVE_CONN, req))
+	action := e.uc.Activate(
+		conn,
+		marshalFrame(t, pbpub.MsgType_REQ_ACTIVE_CONN, req),
+	)
 	require.Equal(t, nio.None, action)
 	require.NotNil(t, challenge)
-	require.Equal(t, uint16(pbpub.MsgType_RESP_ACTIVE_CONN), binary.LittleEndian.Uint16(challenge[2:4]))
+	require.Equal(
+		t,
+		uint16(pbpub.MsgType_RESP_ACTIVE_CONN),
+		binary.LittleEndian.Uint16(challenge[2:4]),
+	)
 	return ticket, req, challenge
 }
 
@@ -253,10 +276,22 @@ func TestAdmit_EnforcesPreAuthLimitAndReleasesSlot(t *testing.T) {
 	require.False(t, env.uc.Admit(second))
 	require.Nil(t, second.Context())
 
-	require.Equal(t, nio.None, env.uc.Deactivate(context.Background(), first))
+	require.Equal(
+		t,
+		nio.None,
+		env.uc.Deactivate(context.Background(), first),
+	)
 	require.EqualValues(t, 0, env.uc.PreAuthConns())
-	require.True(t, env.uc.Admit(second), "deactivation must release its pre-auth slot")
-	require.Equal(t, nio.None, env.uc.Deactivate(context.Background(), second))
+	require.True(
+		t,
+		env.uc.Admit(second),
+		"deactivation must release its pre-auth slot",
+	)
+	require.Equal(
+		t,
+		nio.None,
+		env.uc.Deactivate(context.Background(), second),
+	)
 	require.EqualValues(t, 0, env.uc.PreAuthConns())
 }
 
@@ -264,7 +299,11 @@ func TestActivate_RejectsMissingStateAndMalformedRequest(t *testing.T) {
 	t.Run("missing pending state", func(t *testing.T) {
 		env := newUsecaseTestEnv(t, Config{MaxPreAuthConns: 1})
 		conn := env.mockConn(t)
-		require.Equal(t, nio.Close, env.uc.Activate(conn, []byte{0, 0, 1, 0}))
+		require.Equal(
+			t,
+			nio.Close,
+			env.uc.Activate(conn, []byte{0, 0, 1, 0}),
+		)
 	})
 
 	t.Run("malformed protobuf", func(t *testing.T) {
@@ -272,7 +311,11 @@ func TestActivate_RejectsMissingStateAndMalformedRequest(t *testing.T) {
 		conn := env.mockConn(t)
 		require.True(t, env.uc.Admit(conn))
 		packet := []byte{0, 0, byte(pbpub.MsgType_REQ_ACTIVE_CONN), 0, 0xFF}
-		require.Equal(t, nio.Close, env.uc.Activate(conn, packet))
+		require.Equal(
+			t,
+			nio.Close,
+			env.uc.Activate(conn, packet),
+		)
 		require.EqualValues(t, 0, env.uc.PreAuthConns())
 	})
 
@@ -280,8 +323,16 @@ func TestActivate_RejectsMissingStateAndMalformedRequest(t *testing.T) {
 		env := newUsecaseTestEnv(t, Config{MaxPreAuthConns: 1})
 		conn := env.mockConn(t)
 		require.True(t, env.uc.Admit(conn))
-		packet := marshalFrame(t, pbpub.MsgType_REQ_ACTIVE_CONN, &pbpub.ActiveConnReq{Token: []byte{1}})
-		require.Equal(t, nio.Close, env.uc.Activate(conn, packet))
+		packet := marshalFrame(
+			t,
+			pbpub.MsgType_REQ_ACTIVE_CONN,
+			&pbpub.ActiveConnReq{Token: []byte{1}},
+		)
+		require.Equal(
+			t,
+			nio.Close,
+			env.uc.Activate(conn, packet),
+		)
 		require.EqualValues(t, 0, env.uc.PreAuthConns())
 	})
 }
@@ -301,8 +352,15 @@ func TestActivate_ValidRequestIssuesFreshChallenge(t *testing.T) {
 	resp := new(pbpub.ActiveConnResp)
 	require.NoError(t, proto.Unmarshal(challenge[6:], resp))
 	require.Len(t, resp.Nonce, 32)
-	require.Equal(t, stageChallenged, conn.Context().(*pendingActivation).stage)
-	require.True(t, time.Now().Before(conn.Context().(*pendingActivation).deadline))
+	require.Equal(
+		t,
+		stageChallenged,
+		conn.Context().(*pendingActivation).stage,
+	)
+	require.True(
+		t,
+		time.Now().Before(conn.Context().(*pendingActivation).deadline),
+	)
 	require.NotEqual(t, [32]byte{}, ticket.ActivationKey)
 	require.EqualValues(t, 1, env.uc.PreAuthConns())
 }
@@ -318,7 +376,11 @@ func TestActivate_RejectsSecondActivationOnSameConnection(t *testing.T) {
 	conn := env.mockConn(t)
 	ticket, _, _ := env.startChallenge(t, conn)
 
-	require.Equal(t, nio.Close, env.uc.Activate(conn, []byte{0, 0, 1, 0}))
+	require.Equal(
+		t,
+		nio.Close,
+		env.uc.Activate(conn, []byte{0, 0, 1, 0}),
+	)
 	require.EqualValues(t, 0, env.uc.PreAuthConns())
 	require.Equal(t, [32]byte{}, ticket.ActivationKey)
 }
@@ -334,11 +396,19 @@ func TestProve_RejectsInvalidProofAndExpiredChallenge(t *testing.T) {
 		)
 		conn := env.mockConn(t)
 		ticket, _, _ := env.startChallenge(t, conn)
-		packet := marshalFrame(t, pbpub.MsgType_REQ_ACTIVE_CONN_PROOF, &pbpub.ActiveConnProofReq{
-			Proof: bytes.Repeat([]byte{0xFF}, 32),
-		})
+		packet := marshalFrame(
+			t,
+			pbpub.MsgType_REQ_ACTIVE_CONN_PROOF,
+			&pbpub.ActiveConnProofReq{
+				Proof: bytes.Repeat([]byte{0xFF}, 32),
+			},
+		)
 
-		require.Equal(t, nio.Close, env.uc.Prove(context.Background(), conn, packet))
+		require.Equal(
+			t,
+			nio.Close,
+			env.uc.Prove(context.Background(), conn, packet),
+		)
 		require.EqualValues(t, 0, env.uc.PreAuthConns())
 		require.Equal(t, [32]byte{}, ticket.ActivationKey)
 	})
@@ -355,11 +425,19 @@ func TestProve_RejectsInvalidProofAndExpiredChallenge(t *testing.T) {
 		ticket, _, _ := env.startChallenge(t, conn)
 		pending := conn.Context().(*pendingActivation)
 		pending.deadline = time.Now().Add(-time.Second)
-		packet := marshalFrame(t, pbpub.MsgType_REQ_ACTIVE_CONN_PROOF, &pbpub.ActiveConnProofReq{
-			Proof: bytes.Repeat([]byte{0xFF}, 32),
-		})
+		packet := marshalFrame(
+			t,
+			pbpub.MsgType_REQ_ACTIVE_CONN_PROOF,
+			&pbpub.ActiveConnProofReq{
+				Proof: bytes.Repeat([]byte{0xFF}, 32),
+			},
+		)
 
-		require.Equal(t, nio.Close, env.uc.Prove(context.Background(), conn, packet))
+		require.Equal(
+			t,
+			nio.Close,
+			env.uc.Prove(context.Background(), conn, packet),
+		)
 		require.EqualValues(t, 0, env.uc.PreAuthConns())
 		require.Equal(t, [32]byte{}, ticket.ActivationKey)
 	})
@@ -378,28 +456,48 @@ func TestProve_ActivatesSessionAndSendsAuthenticatedAck(t *testing.T) {
 
 	resp := new(pbpub.ActiveConnResp)
 	require.NoError(t, proto.Unmarshal(challenge[6:], resp))
+
 	var nonce [32]byte
 	copy(nonce[:], resp.Nonce)
-	transcript := protocol.ActivationTranscript(activeReq.Token, activeReq.Ticket, activeReq.Sign)
-	proof := protocol.ActivationProof(&ticket.ActivationKey, transcript, nonce)
+	transcript := protocol.ActivationTranscript(
+		activeReq.Token,
+		activeReq.Ticket,
+		activeReq.Sign,
+	)
+	proof := protocol.ActivationProof(
+		&ticket.ActivationKey,
+		transcript,
+		nonce,
+	)
 	connKeys, err := protocol.DeriveConnKeys(&ticket.Keys, nonce)
 	require.NoError(t, err)
 	defer connKeys.Clear()
 
 	env.ticketVerifier.
 		EXPECT().
-		CheckExpiry(gomock.Any(), gomock.Any()).
+		CheckExpiry(
+			gomock.Any(),
+			gomock.Any(),
+		).
 		Return(nil).
 		Times(1)
+
 	env.cache.
 		EXPECT().
-		BatchAddDevices(gomock.Any(), gomock.Any()).
+		BatchAddDevices(
+			gomock.Any(),
+			gomock.Any(),
+		).
 		Return(nil, nil).
 		Times(1)
+
 	deleteStarted := make(chan struct{})
 	env.cache.
 		EXPECT().
-		BatchDelDevices(gomock.Any(), gomock.Any()).
+		BatchDelDevices(
+			gomock.Any(),
+			gomock.Any(),
+		).
 		DoAndReturn(
 			func(context.Context, []shareddevice.ID) error {
 				close(deleteStarted)
@@ -407,6 +505,7 @@ func TestProve_ActivatesSessionAndSendsAuthenticatedAck(t *testing.T) {
 			},
 		).
 		Times(1)
+
 	ackWritten := make(chan []byte, 1)
 	conn.asyncWriteFn = func(frame []byte, callback nio.AsyncCallback) error {
 		copyOfFrame := bytes.Clone(frame)
@@ -415,8 +514,16 @@ func TestProve_ActivatesSessionAndSendsAuthenticatedAck(t *testing.T) {
 		return writeErr
 	}
 
-	packet := marshalFrame(t, pbpub.MsgType_REQ_ACTIVE_CONN_PROOF, &pbpub.ActiveConnProofReq{Proof: proof[:]})
-	require.Equal(t, nio.None, env.uc.Prove(context.Background(), conn, packet))
+	packet := marshalFrame(
+		t,
+		pbpub.MsgType_REQ_ACTIVE_CONN_PROOF,
+		&pbpub.ActiveConnProofReq{Proof: proof[:]},
+	)
+	require.Equal(
+		t,
+		nio.None,
+		env.uc.Prove(context.Background(), conn, packet),
+	)
 	require.EqualValues(t, 0, env.uc.PreAuthConns())
 	require.IsType(t, (*connection.Session)(nil), conn.Context())
 
@@ -426,8 +533,13 @@ func TestProve_ActivatesSessionAndSendsAuthenticatedAck(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for the activation ACK")
 	}
+
 	require.Len(t, ack, 38)
-	require.Equal(t, uint16(pbpub.MsgType_RESP_ACTIVE_CONN_PROOF), binary.LittleEndian.Uint16(ack[2:4]))
+	require.Equal(
+		t,
+		uint16(pbpub.MsgType_RESP_ACTIVE_CONN_PROOF),
+		binary.LittleEndian.Uint16(ack[2:4]),
+	)
 	require.Zero(t, binary.LittleEndian.Uint16(ack[4:6]))
 
 	mac := hmac.New(sha256.New, connKeys.SendMac[:])
@@ -435,9 +547,18 @@ func TestProve_ActivatesSessionAndSendsAuthenticatedAck(t *testing.T) {
 	binary.LittleEndian.PutUint64(seq[:], 0)
 	_, _ = mac.Write(seq[:])
 	_, _ = mac.Write(ack[:len(ack)-32])
-	require.True(t, hmac.Equal(mac.Sum(nil), ack[len(ack)-32:]), "ACK must use the derived server-to-client MAC key and sequence zero")
+	require.True(
+		t,
+		hmac.Equal(mac.Sum(nil), ack[len(ack)-32:]),
+		"ACK must use the derived server-to-client MAC key and sequence zero",
+	)
 
-	require.Equal(t, nio.None, env.uc.Deactivate(context.Background(), conn))
+	require.Equal(
+		t,
+		nio.None,
+		env.uc.Deactivate(context.Background(), conn),
+	)
+
 	select {
 	case <-deleteStarted:
 	case <-time.After(3 * time.Second):
@@ -460,16 +581,27 @@ func TestActivate_TicketOpenFailureClosesAndReleasesPendingState(t *testing.T) {
 			MaxPreAuthConns: 1,
 		},
 	)
+
 	conn := env.mockConn(t)
 	require.True(t, env.uc.Admit(conn))
+
 	req := newActiveRequest()
 	env.ticketVerifier.
 		EXPECT().
-		Open(testDeviceID, gomock.Eq(req.Ticket)).
-		Return(nil, errors.New("invalid ticket")).
+		Open(
+			testDeviceID,
+			gomock.Eq(req.Ticket),
+		).
+		Return(
+			nil,
+			errors.New("invalid ticket"),
+		).
 		Times(1)
 
-	action := env.uc.Activate(conn, marshalFrame(t, pbpub.MsgType_REQ_ACTIVE_CONN, req))
+	action := env.uc.Activate(
+		conn,
+		marshalFrame(t, pbpub.MsgType_REQ_ACTIVE_CONN, req),
+	)
 	require.Equal(t, nio.Close, action)
 	require.EqualValues(t, 0, env.uc.PreAuthConns())
 }
@@ -477,8 +609,16 @@ func TestActivate_TicketOpenFailureClosesAndReleasesPendingState(t *testing.T) {
 func TestProve_WithoutChallengeCloses(t *testing.T) {
 	env := newUsecaseTestEnv(t, Config{MaxPreAuthConns: 1})
 	conn := env.mockConn(t)
-	packet := marshalFrame(t, pbpub.MsgType_REQ_ACTIVE_CONN_PROOF, &pbpub.ActiveConnProofReq{
-		Proof: bytes.Repeat([]byte{0x01}, 32),
-	})
-	require.Equal(t, nio.Close, env.uc.Prove(context.Background(), conn, packet))
+	packet := marshalFrame(
+		t,
+		pbpub.MsgType_REQ_ACTIVE_CONN_PROOF,
+		&pbpub.ActiveConnProofReq{
+			Proof: bytes.Repeat([]byte{0x01}, 32),
+		},
+	)
+	require.Equal(
+		t,
+		nio.Close,
+		env.uc.Prove(context.Background(), conn, packet),
+	)
 }

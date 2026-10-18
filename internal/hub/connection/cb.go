@@ -16,9 +16,7 @@
 
 package connection
 
-import (
-	"context"
-)
+import "context"
 
 // CbState is a type that represents a state of CircuitBreaker.
 type CbState int

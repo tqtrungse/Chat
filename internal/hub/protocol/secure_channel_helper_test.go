@@ -36,32 +36,58 @@ func newSecureChannelHelperTest(t *testing.T) *mocks.MockSecureChannel {
 	const authTagSize = 16 // AES-GCM authentication tag size.
 
 	ch := mocks.NewMockSecureChannel(gomock.NewController(t))
-	ch.EXPECT().Size(gomock.Any()).AnyTimes().DoAndReturn(func(plainSize int) int {
-		return plainSize + authTagSize
-	})
-	ch.EXPECT().IsValid(gomock.Any()).AnyTimes().DoAndReturn(func(cipherSize int) bool {
-		return cipherSize > authTagSize
-	})
-	ch.EXPECT().Seal(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(
-		func(key *[32]byte, nonce *[12]byte, plain, aad []byte) ([]byte, error) {
-			aead, err := testAEAD(key)
-			if err != nil {
-				return nil, err
-			}
-			// SecureChannel.Seal promises to reuse the plaintext backing array.
-			return aead.Seal(plain[:0], nonce[:], plain, aad), nil
-		},
-	)
-	ch.EXPECT().Open(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(
-		func(key *[32]byte, nonce *[12]byte, ciphertext, aad []byte) ([]byte, error) {
-			aead, err := testAEAD(key)
-			if err != nil {
-				return nil, err
-			}
-			// Match the production channel's in-place decryption behavior too.
-			return aead.Open(ciphertext[:0], nonce[:], ciphertext, aad)
-		},
-	)
+	ch.EXPECT().
+		Size(gomock.Any()).
+		AnyTimes().
+		DoAndReturn(
+			func(plainSize int) int {
+				return plainSize + authTagSize
+			},
+		)
+	ch.EXPECT().
+		IsValid(gomock.Any()).
+		AnyTimes().
+		DoAndReturn(
+			func(cipherSize int) bool {
+				return cipherSize > authTagSize
+			},
+		)
+	ch.EXPECT().
+		Seal(
+			gomock.Any(),
+			gomock.Any(),
+			gomock.Any(),
+			gomock.Any(),
+		).
+		AnyTimes().
+		DoAndReturn(
+			func(key *[32]byte, nonce *[12]byte, plain, aad []byte) ([]byte, error) {
+				aead, err := testAEAD(key)
+				if err != nil {
+					return nil, err
+				}
+				// SecureChannel.Seal promises to reuse the plaintext backing array.
+				return aead.Seal(plain[:0], nonce[:], plain, aad), nil
+			},
+		)
+	ch.EXPECT().
+		Open(
+			gomock.Any(),
+			gomock.Any(),
+			gomock.Any(),
+			gomock.Any(),
+		).
+		AnyTimes().
+		DoAndReturn(
+			func(key *[32]byte, nonce *[12]byte, ciphertext, aad []byte) ([]byte, error) {
+				aead, err := testAEAD(key)
+				if err != nil {
+					return nil, err
+				}
+				// Match the production channel's in-place decryption behavior too.
+				return aead.Open(ciphertext[:0], nonce[:], ciphertext, aad)
+			},
+		)
 	return ch
 }
 

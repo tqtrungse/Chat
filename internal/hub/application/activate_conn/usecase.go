@@ -120,7 +120,11 @@ func (ca *connActivator) Activate(conn nio.Conn, packet []byte) nio.Action {
 	}
 
 	var req pbpub.ActiveConnReq
-	if err := ca.decoder.DecodeActivationPacket(packet[4:], &req); err != nil {
+	err := ca.decoder.DecodeActivationPacket(
+		packet[4:],
+		&req,
+	)
+	if err != nil {
 		ca.logger.Error("failed to decode active request, force close", zap.Error(err))
 		return ca.reject(pending)
 	}
@@ -133,21 +137,31 @@ func (ca *connActivator) Activate(conn nio.Conn, packet []byte) nio.Action {
 		slicepool.Put(req.Ticket)
 	}()
 
-	if err := req.Validate(); err != nil {
+	if err = req.Validate(); err != nil {
 		ca.logger.Error("failed to validate activate request, force close", zap.Error(err))
 		return ca.reject(pending)
 	}
 
 	// The only place the ticket is opened and the signatures are verified.
-	ticket, err := ca.router.PrepareActivation(req.Token, req.Ticket, req.Sign)
+	ticket, err := ca.router.PrepareActivation(
+		req.Token,
+		req.Ticket,
+		req.Sign,
+	)
 	if err != nil {
 		ca.logger.Error("failed to prepare activation, force close", zap.Error(err))
 		return ca.reject(pending)
 	}
+
 	pending.ticket = ticket // owned by pending from here; zeroed by pending.clear()
-	pending.transcript = protocol.ActivationTranscript(req.Token, req.Ticket, req.Sign)
+	pending.transcript = protocol.ActivationTranscript(
+		req.Token,
+		req.Ticket,
+		req.Sign,
+	)
 	pending.deadline = time.Now().Add(activationChallengeTTL)
-	if _, err = rand.Read(pending.nonce[:]); err != nil {
+	_, err = rand.Read(pending.nonce[:])
+	if err != nil {
 		ca.logger.Error("failed to generate activation challenge, force close", zap.Error(err))
 		return ca.reject(pending)
 	}
@@ -180,7 +194,8 @@ func (ca *connActivator) Prove(ctx context.Context, conn nio.Conn, packet []byte
 	}
 
 	var req pbpub.ActiveConnProofReq
-	if err := ca.decoder.DecodeActivationProofPack(packet[4:], &req); err != nil {
+	err := ca.decoder.DecodeActivationProofPack(packet[4:], &req)
+	if err != nil {
 		ca.logger.Error("failed to decode activation proof, force close", zap.Error(err))
 		return ca.reject(pending)
 	}
@@ -188,12 +203,18 @@ func (ca *connActivator) Prove(ctx context.Context, conn nio.Conn, packet []byte
 		clear(req.Proof)
 		slicepool.Put(req.Proof)
 	}()
-	if err := req.Validate(); err != nil {
+
+	err = req.Validate()
+	if err != nil {
 		ca.logger.Error("invalid activation proof, force close", zap.Error(err))
 		return ca.reject(pending)
 	}
 
-	want := protocol.ActivationProof(&pending.ticket.ActivationKey, pending.transcript, pending.nonce)
+	want := protocol.ActivationProof(
+		&pending.ticket.ActivationKey,
+		pending.transcript,
+		pending.nonce,
+	)
 	if !hmac.Equal(want[:], req.Proof) {
 		return ca.reject(pending)
 	}
@@ -202,7 +223,10 @@ func (ca *connActivator) Prove(ctx context.Context, conn nio.Conn, packet []byte
 		return ca.reject(pending)
 	}
 
-	connKeys, err := protocol.DeriveConnKeys(&pending.ticket.Keys, pending.nonce)
+	connKeys, err := protocol.DeriveConnKeys(
+		&pending.ticket.Keys,
+		pending.nonce,
+	)
 	if err != nil {
 		ca.logger.Error("failed to derive connection keys, force close", zap.Error(err))
 		return ca.reject(pending)
