@@ -68,7 +68,8 @@ import (
 	"math"
 	"sync/atomic"
 
-	"xxx/pkg"
+	"xxx/pkg/bit"
+	"xxx/pkg/generic"
 )
 
 type Bounded[V any] struct {
@@ -86,7 +87,7 @@ func NewBounded[V any](capacity int) (*Bounded[V], error) {
 		return nil, fmt.Errorf("capacity can not over %d", math.MaxUint16)
 	}
 
-	rawCapacity := uint32(pkg.NextPowerOfTwo(capacity))
+	rawCapacity := uint32(bit.NextPowerOfTwo(capacity))
 	return &Bounded[V]{
 		ch:       make(chan V, rawCapacity),
 		done:     make(chan struct{}),
@@ -127,7 +128,7 @@ func (b *Bounded[V]) TryPop() (value V, ok bool) {
 	case v, chOk := <-b.ch:
 		return v, chOk
 	default:
-		return pkg.ZeroValue[V](), false
+		return generic.ZeroValue[V](), false
 	}
 }
 
@@ -140,7 +141,7 @@ func (b *Bounded[V]) Pop() (value V, closed bool) {
 	case v := <-b.ch:
 		return v, false
 	case <-b.done:
-		return pkg.ZeroValue[V](), true
+		return generic.ZeroValue[V](), true
 	}
 }
 

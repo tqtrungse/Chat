@@ -29,7 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"xxx/pkg"
+	"xxx/pkg/bs"
 	"xxx/pkg/buffer"
 	errorx "xxx/pkg/nio/error"
 	nio "xxx/pkg/nio/io"
@@ -402,16 +402,16 @@ func (c *conn) release() {
 	c.ctx.Store(nil)
 	c.buffer = nil
 	if addr, ok := c.localAddr.(*net.TCPAddr); ok && c.loop.listeners.Len() == 0 && len(addr.Zone) > 0 {
-		slicepool.Put(pkg.StringToBytes(addr.Zone))
+		slicepool.Put(bs.StringToBytes(addr.Zone))
 	}
 	if addr, ok := c.remoteAddr.(*net.TCPAddr); ok && len(addr.Zone) > 0 {
-		slicepool.Put(pkg.StringToBytes(addr.Zone))
+		slicepool.Put(bs.StringToBytes(addr.Zone))
 	}
 	if addr, ok := c.localAddr.(*net.UDPAddr); ok && c.loop.listeners.Len() == 0 && len(addr.Zone) > 0 {
-		slicepool.Put(pkg.StringToBytes(addr.Zone))
+		slicepool.Put(bs.StringToBytes(addr.Zone))
 	}
 	if addr, ok := c.remoteAddr.(*net.UDPAddr); ok && len(addr.Zone) > 0 {
-		slicepool.Put(pkg.StringToBytes(addr.Zone))
+		slicepool.Put(bs.StringToBytes(addr.Zone))
 	}
 	c.localAddr = nil
 	c.remoteAddr = nil

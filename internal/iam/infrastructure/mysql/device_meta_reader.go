@@ -20,7 +20,7 @@ import (
 	"context"
 	"errors"
 
-	"xxx/internal/iam/application/exchange_key"
+	"xxx/internal/iam/application/keyexchange"
 	"xxx/internal/iam/infrastructure/mysql/model"
 	shareddevice "xxx/internal/shared/device"
 
@@ -31,14 +31,14 @@ import (
 
 type deviceMetaReader struct{}
 
-func NewDeviceMetaReader() exchange_key.DeviceMetaReader {
+func NewDeviceMetaReader() keyexchange.DeviceMetaReader {
 	return new(deviceMetaReader)
 }
 
 func (d *deviceMetaReader) FindDeviceMeta(
 	dbCtx context.Context,
 	deviceID shareddevice.ID,
-) (*exchange_key.DeviceMeta, error) {
+) (*keyexchange.DeviceMeta, error) {
 	val, err := sql.ExtractDB(dbCtx)
 	if err != nil {
 		return nil, err
@@ -60,7 +60,7 @@ func (d *deviceMetaReader) FindDeviceMeta(
 		}
 		return nil, err
 	}
-	return &exchange_key.DeviceMeta{
+	return &keyexchange.DeviceMeta{
 		ExternalID:  device.ExternalID,
 		State:       device.State,
 		IdentityPub: device.IdentityPub,

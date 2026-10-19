@@ -24,7 +24,7 @@ import (
 	"strings"
 	"testing"
 
-	"xxx/internal/iam/application/exchange_key"
+	"xxx/internal/iam/application/keyexchange"
 	"xxx/internal/iam/domain/device"
 	shareddevice "xxx/internal/shared/device"
 
@@ -49,7 +49,7 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 	type testcase struct {
 		prepare  func(f *fields)
 		args     shareddevice.ID
-		expected *exchange_key.DeviceMeta
+		expected *keyexchange.DeviceMeta
 		wantErr  bool
 	}
 
@@ -84,7 +84,7 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 					)
 			},
 			args: shareddevice.ID(1),
-			expected: &exchange_key.DeviceMeta{
+			expected: &keyexchange.DeviceMeta{
 				ExternalID:  "abc-123",
 				State:       device.StateActive,
 				IdentityPub: []byte("123456789"),
@@ -156,7 +156,7 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 
 			var (
 				err    error
-				resp   *exchange_key.DeviceMeta
+				resp   *keyexchange.DeviceMeta
 				reader = NewDeviceMetaReader()
 			)
 

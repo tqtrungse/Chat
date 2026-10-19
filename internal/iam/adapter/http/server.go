@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"xxx/internal/iam/application/exchange_key"
+	"xxx/internal/iam/application/keyexchange"
 
 	"xxx/pkg/jwt"
 	"xxx/pkg/log"
@@ -50,7 +50,7 @@ type Server struct {
 	srv          *http.Server
 	auth         *jwt.Auth
 	logger       *log.Logger
-	keyExchanger exchange_key.Usecase
+	keyExchanger keyexchange.Usecase
 	certFile     string
 	keyFile      string
 }
@@ -59,7 +59,7 @@ func NewServer(
 	ctx context.Context,
 	cfg Config,
 	logger *log.Logger,
-	keyExchanger exchange_key.Usecase,
+	keyExchanger keyexchange.Usecase,
 ) (*Server, error) {
 	auth, err := jwt.NewAuth(
 		ctx,

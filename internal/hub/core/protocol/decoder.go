@@ -1,0 +1,158 @@
+/*
+ * Copyright 2026 tqtrungse@gmail.com. All rights reserved.
+ * Use of this pub code is governed by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
+package protocol
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/binary"
+
+	pbpub "xxx/api/hub/v1/proto/gen/pub"
+
+	slicepool "xxx/pkg/pool/slice"
+
+	"google.golang.org/protobuf/proto"
+)
+
+type Decoder struct {
+	secureChannel SecureChannel
+	pbUnmarshal   proto.UnmarshalOptions
+}
+
+func NewDecoder(secureChannel SecureChannel) *Decoder {
+	return &Decoder{
+		secureChannel: secureChannel,
+		pbUnmarshal:   proto.UnmarshalOptions{DiscardUnknown: true},
+	}
+}
+
+func (d *Decoder) DecodeActivationPacket(
+	plain []byte,
+	outReq *pbpub.ActiveConnReq,
+) error {
+	return d.pbUnmarshal.Unmarshal(plain, outReq)
+}
+
+func (d *Decoder) DecodeActivationProofPack(
+	plain []byte,
+	outReq *pbpub.ActiveConnProofReq,
+) error {
+	return d.pbUnmarshal.Unmarshal(plain, outReq)
+}
+
+func (d *Decoder) Decode(
+	hmacKey *[32]byte,
+	seq uint64,
+	packet []byte,
+) (proto.Message, []byte, pbpub.Code, error) {
+	// -------------------------------------------------------------------
+	// | Pkg Size |  Msg Type |   Pb Size  |  Pb  |  Expand  |    HMAC   |
+	// -------------------------------------------------------------------
+	// |  2 bytes |  2 bytes  |   2 bytes  | xxx  |    xxx   |  32 bytes |
+	// -------------------------------------------------------------------
+	if !hasValidFrame(packet, 36) {
+		return nil, nil, pbpub.Code_ERR_PKG_INVALID_SIZE, ErrPkgSizeInvalid
+	}
+
+	size := len(packet) - 32
+	sb := seqBytes(seq)
+	mac := hmac.New(sha256.New, hmacKey[:])
+	mac.Write(sb[:])
+	mac.Write(packet[:size])
+
+	if ok := hmac.Equal(mac.Sum(nil), packet[size:]); !ok {
+		return nil, nil, pbpub.Code_ERR_PKG_MODIFIED, ErrPkgModified
+	}
+
+	var (
+		msgType = binary.LittleEndian.Uint16(packet[2:4])
+		pbSize  = binary.LittleEndian.Uint16(packet[4:6])
+		msg     proto.Message
+	)
+
+	if int(pbSize) > size-6 {
+		return nil, nil, pbpub.Code_ERR_PB_INVALID_SIZE, ErrPkgSizeInvalid
+	}
+
+	switch pbpub.MsgType(msgType) {
+	case pbpub.MsgType_REQ_DIRECT_FORWARD_MSG:
+		msg = new(pbpub.DirectForwardMsgReq)
+
+	case pbpub.MsgType_REQ_BROKER_FORWARD_MSG:
+		msg = new(pbpub.BrokerForwardMsgReq)
+
+	default:
+		return nil, nil, pbpub.Code_ERR_MSG_INVALID_TYPE, ErrMsgTypeInvalid
+	}
+
+	pbEnd := 6 + int(pbSize)
+	if err := d.pbUnmarshal.Unmarshal(packet[6:pbEnd], msg); err != nil {
+		return nil, nil, pbpub.Code_ERR_DESERIALIZE, err
+	}
+	return msg, packet[pbEnd:size], pbpub.Code_SUCCESS, nil
+}
+
+func (d *Decoder) DecodeS(
+	secretKey *[32]byte,
+	seq uint64,
+	packet []byte,
+) (proto.Message, []byte, pbpub.Code, error) {
+	// -------------------------------------------------------------------
+	// | Pkg Size | Msg Type |   Nonce   | Cipher Size | Cipher | Expand |
+	// -------------------------------------------------------------------
+	// | 2 bytes  | 2 bytes  |  12 bytes |   2 bytes   |   Pb   |   xxx  |
+	// -------------------------------------------------------------------
+	if !hasValidFrame(packet, 16) {
+		return nil, nil, pbpub.Code_ERR_PKG_INVALID_SIZE, ErrPkgSizeInvalid
+	}
+
+	var (
+		msgType = binary.LittleEndian.Uint16(packet[2:4])
+		msg     proto.Message
+	)
+
+	switch pbpub.MsgType(msgType) {
+	case pbpub.MsgType_REQ_SEND_MSG:
+		msg = new(pbpub.SendMsgReq)
+
+	default:
+		return nil, nil, pbpub.Code_ERR_MSG_INVALID_TYPE, ErrMsgTypeInvalid
+	}
+
+	cipherSize := binary.LittleEndian.Uint16(packet[16:18])
+	if !d.secureChannel.IsValid(int(cipherSize)) ||
+		int(cipherSize) > len(packet)-18 {
+		return nil, nil, pbpub.Code_ERR_CIPHER_INVALID_SIZE, ErrMsgCipherInvalid
+	}
+
+	cipherEnd := 18 + int(cipherSize)
+	aad := securePacketAAD(
+		binary.LittleEndian.Uint16(packet[:2]),
+		msgType,
+		cipherSize,
+		seq,
+		packet[cipherEnd:],
+	)
+	plain, err := d.secureChannel.Open(
+		secretKey,
+		(*[12]byte)(packet[4:16]),
+		packet[18:cipherEnd],
+		aad,
+	)
+	clear(aad)
+	slicepool.Put(aad)
+
+	if err != nil {
+		return nil, nil, pbpub.Code_ERR_DECRYPT, err
+	}
+	defer clear(plain)
+
+	if err = d.pbUnmarshal.Unmarshal(plain, msg); err != nil {
+		return nil, nil, pbpub.Code_ERR_DESERIALIZE, err
+	}
+	return msg, packet[cipherEnd:], pbpub.Code_SUCCESS, nil
+}

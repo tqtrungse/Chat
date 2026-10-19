@@ -25,36 +25,36 @@ ROOT_DIR="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR"
 
 mockgen \
-  -source=internal/hub/connection/broker.go \
-  -destination=internal/hub/connection/mocks/broker_mock.go \
+  -source=internal/hub/application/activateconn/ports.go \
+  -destination=internal/hub/application/activateconn/mocks/ports_mock.go \
   -package=mocks
 
 mockgen \
-  -source=internal/hub/connection/cache.go \
-  -destination=internal/hub/connection/mocks/cache_mock.go \
+  -source=internal/hub/application/offlinedelivery/ports.go \
+  -destination=internal/hub/application/offlinedelivery/mocks/ports_mock.go \
   -package=mocks
 
 mockgen \
-  -source=internal/hub/connection/cb.go \
-  -destination=internal/hub/connection/mocks/cb_mock.go \
+  -source=internal/hub/application/sendmsg/ports.go \
+  -destination=internal/hub/application/sendmsg/mocks/ports_mock.go \
   -package=mocks
 
 mockgen \
-  -source=internal/hub/connection/msg_reader.go \
-  -destination=internal/hub/connection/mocks/msg_reader_mock.go \
+  -source=internal/hub/core/activation/ports.go \
+  -destination=internal/hub/core/activation/mocks/ports_mock.go \
   -package=mocks
 
 mockgen \
-  -source=internal/hub/connection/signer.go \
-  -destination=internal/hub/connection/mocks/signer_mock.go \
+  -source=internal/hub/core/connection/presence.go \
+  -destination=internal/hub/core/connection/mocks/presence_mock.go \
   -package=mocks
 
 mockgen \
-  -source=internal/hub/connection/ticket_verifier.go \
-  -destination=internal/hub/connection/mocks/ticket_verifier_mock.go \
+  -source=internal/hub/core/presence/distributed_cache.go \
+  -destination=internal/hub/core/presence/mocks/distributed_cache_mock.go \
   -package=mocks
 
 mockgen \
-  -source=internal/hub/protocol/secure_channel.go \
-  -destination=internal/hub/protocol/mocks/secure_channel_mock.go \
+  -source=internal/hub/core/protocol/ports.go \
+  -destination=internal/hub/core/protocol/mocks/ports_mock.go \
   -package=mocks

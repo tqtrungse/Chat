@@ -24,7 +24,7 @@ import (
 	"time"
 
 	pbpriv "xxx/api/hub/v1/proto/gen/priv"
-	"xxx/internal/hub/connection"
+	"xxx/internal/hub/application/sendmsg"
 
 	"xxx/pkg/bs"
 	"xxx/pkg/log"
@@ -80,7 +80,7 @@ func NewBroker(
 	onMessage func(*pbpriv.Message) (bool, uint64, error),
 	//persists a message for a device that can't be delivered live right now
 	pushToOffline func(context.Context, uint64, []byte) error,
-) (connection.Broker, error) {
+) (sendmsg.Broker, error) {
 	// In `handleInboxMessage`, we mutate the struct by incrementing the hops.
 	// If hops is over 127, `MarshalOptions.UseCachedSize` will not apply and
 	// `proto.MarshalAppend` will either panic or write corrupted data.

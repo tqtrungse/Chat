@@ -26,9 +26,9 @@ import (
 	"time"
 
 	"xxx/api/hub/v1/proto/gen/pub"
-	"xxx/internal/hub/application/activate_conn"
-	"xxx/internal/hub/application/send_message"
-	"xxx/internal/hub/connection"
+	"xxx/internal/hub/application/activateconn"
+	"xxx/internal/hub/application/sendmsg"
+	"xxx/internal/hub/core/connection"
 
 	"xxx/pkg/log"
 	"xxx/pkg/nio"
@@ -48,8 +48,8 @@ type Server struct {
 	ready     chan struct{}
 	cfg       Config
 	logger    *log.Logger
-	activator activate_conn.Usecase
-	sender    send_message.Usecase
+	activator activateconn.Usecase
+	sender    sendmsg.Usecase
 	cleanup   func()
 }
 
@@ -57,8 +57,8 @@ func NewServer(
 	ctx context.Context,
 	cfg Config,
 	logger *log.Logger,
-	connActivator activate_conn.Usecase,
-	msgSender send_message.Usecase,
+	connActivator activateconn.Usecase,
+	msgSender sendmsg.Usecase,
 	cleanup func(),
 ) *Server {
 	if cfg.TCPKeepAlive <= 0 {

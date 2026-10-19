@@ -22,7 +22,7 @@ import (
 	"net/http"
 
 	"xxx/api/iam/v1/json"
-	"xxx/internal/iam/application/exchange_key"
+	"xxx/internal/iam/application/keyexchange"
 
 	"xxx/pkg/jwt"
 	slicepool "xxx/pkg/pool/slice"
@@ -67,15 +67,15 @@ func (s *Server) exchangeKey(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Error("failed to exchange key", zap.Error(err))
 
-	if errors.Is(err, exchange_key.ErrDeviceNotFound) {
+	if errors.Is(err, keyexchange.ErrDeviceNotFound) {
 		s.respondErr(w, http.StatusNotFound, err)
 		return
 	}
-	if errors.Is(err, exchange_key.ErrDeviceUnactive) {
+	if errors.Is(err, keyexchange.ErrDeviceUnactive) {
 		s.respondErr(w, http.StatusForbidden, err)
 		return
 	}
-	if errors.Is(err, exchange_key.ErrRequestInvalid) {
+	if errors.Is(err, keyexchange.ErrRequestInvalid) {
 		s.respondErr(w, http.StatusBadRequest, err)
 		return
 	}

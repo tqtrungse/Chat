@@ -25,16 +25,16 @@ ROOT_DIR="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR"
 
 mockgen \
-  -source=internal/iam/application/exchange_key/device_meta_reader.go \
-  -destination=internal/iam/application/exchange_key/mocks/device_meta_reader_mock.go \
+  -source=internal/iam/application/keyexchange/device_meta_reader.go \
+  -destination=internal/iam/application/keyexchange/mocks/device_meta_reader_mock.go \
   -package=mocks
 
 mockgen \
-  -source=internal/iam/application/exchange_key/key_deriver.go \
-  -destination=internal/iam/application/exchange_key/mocks/key_deriver_mock.go \
+  -source=internal/iam/application/keyexchange/key_deriver.go \
+  -destination=internal/iam/application/keyexchange/mocks/key_deriver_mock.go \
   -package=mocks
 
 mockgen \
-  -source=internal/iam/application/exchange_key/ticket_issuer.go \
-  -destination=internal/iam/application/exchange_key/mocks/ticket_issuer_mock.go \
+  -source=internal/iam/application/keyexchange/ticket_issuer.go \
+  -destination=internal/iam/application/keyexchange/mocks/ticket_issuer_mock.go \
   -package=mocks

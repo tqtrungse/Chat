@@ -20,7 +20,7 @@ import (
 	"context"
 	"sync"
 
-	"xxx/internal/hub/connection"
+	"xxx/internal/hub/application/offlinedelivery"
 	"xxx/internal/hub/domain/channel"
 	"xxx/internal/hub/domain/message"
 	"xxx/internal/hub/infrastructure/scylla/model"
@@ -55,7 +55,7 @@ type msgReader struct {
 func NewMsgReader(
 	scylla *scylla.Scylla,
 	pageSize uint32,
-) connection.MsgReader {
+) offlinedelivery.MsgReader {
 	if pageSize == 0 || pageSize > maxPageLimit {
 		pageSize = maxPageLimit
 	}

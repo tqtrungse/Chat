@@ -24,7 +24,7 @@ import (
 	"fmt"
 	"io"
 
-	"xxx/internal/iam/application/exchange_key"
+	"xxx/internal/iam/application/keyexchange"
 
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/hkdf"
@@ -34,14 +34,14 @@ var zero [32]byte
 
 type hkdfDeriver struct{}
 
-func NewHkdfDeriver() exchange_key.KeyDeriver {
+func NewHkdfDeriver() keyexchange.KeyDeriver {
 	return new(hkdfDeriver)
 }
 
 func (hd *hkdfDeriver) DeriveKeys(
 	peerPub *[32]byte,
 	info []byte,
-) (derived exchange_key.DerivedKeys, pubKey [32]byte, err error) {
+) (derived keyexchange.DerivedKeys, pubKey [32]byte, err error) {
 	//Don't need to check error because crypto/rand will panic if it error.
 	var privateKey [32]byte
 	_, _ = rand.Read(privateKey[:])
@@ -55,13 +55,13 @@ func (hd *hkdfDeriver) DeriveKeys(
 
 	rawSecret, err := curve25519.X25519(privateKey[:], peerPub[:])
 	if err != nil {
-		err = fmt.Errorf("%w: %v", exchange_key.ErrRequestInvalid, err)
+		err = fmt.Errorf("%w: %v", keyexchange.ErrRequestInvalid, err)
 		return
 	}
 	defer clear(rawSecret)
 
 	if subtle.ConstantTimeCompare(rawSecret, zero[:]) == 1 {
-		err = exchange_key.ErrRequestInvalid
+		err = keyexchange.ErrRequestInvalid
 		return
 	}
 
@@ -89,7 +89,7 @@ func (hd *hkdfDeriver) DeriveKeys(
 			hkdf.Expand(sha256.New, prk, withLabel(info, out.label)),
 			out.dst,
 		); err != nil {
-			derived = exchange_key.DerivedKeys{}
+			derived = keyexchange.DerivedKeys{}
 			return
 		}
 	}

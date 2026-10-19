@@ -20,7 +20,7 @@ import (
 	"crypto/aes"
 	crypto "crypto/cipher"
 
-	"xxx/internal/hub/protocol"
+	"xxx/internal/hub/core/protocol"
 )
 
 const authTagSize = 16

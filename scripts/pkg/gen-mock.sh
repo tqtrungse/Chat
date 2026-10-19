@@ -25,6 +25,11 @@ ROOT_DIR="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR"
 
 mockgen \
+  -source=pkg/breaker/port.go \
+  -destination=pkg/breaker/mocks/port_mock.go \
+  -package=mocks
+
+mockgen \
   -source=pkg/database/sql/db.go \
   -destination=pkg/database/sql/mocks/db_mock.go \
   -package=mocks

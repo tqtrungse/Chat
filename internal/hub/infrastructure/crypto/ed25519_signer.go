@@ -20,7 +20,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 
-	"xxx/internal/hub/connection"
+	"xxx/internal/hub/core/activation"
 )
 
 var (
@@ -30,7 +30,7 @@ var (
 
 type ed25519Signer struct{}
 
-func NewEd25519Signer() connection.Signer {
+func NewEd25519Signer() activation.Signer {
 	return new(ed25519Signer)
 }
 

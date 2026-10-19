@@ -17,7 +17,7 @@
 package sonyflake
 
 import (
-	"xxx/internal/hub/application/send_message"
+	"xxx/internal/hub/application/sendmsg"
 
 	"github.com/sony/sonyflake/v2"
 )
@@ -26,7 +26,7 @@ type idGen struct {
 	sf *sonyflake.Sonyflake
 }
 
-func NewIDGen(hubID uint64) (send_message.GenID, error) {
+func NewIDGen(hubID uint64) (sendmsg.GenID, error) {
 	sf, err := sonyflake.New(
 		sonyflake.Settings{
 			MachineID: func() (int, error) { return int(hubID), nil },

@@ -23,7 +23,7 @@ import (
 	"io"
 	"testing"
 
-	"xxx/internal/iam/application/exchange_key"
+	"xxx/internal/iam/application/keyexchange"
 	sharedsession "xxx/internal/shared/session"
 
 	"github.com/stretchr/testify/require"
@@ -79,10 +79,10 @@ func deriveExpected(t *testing.T, rawSecret, salt, baseInfo []byte, label string
 // deriveExpectedKeys derives the full session.Keys set the way the server
 // side is expected to hold it. Labels are directional: "c2s" (client to
 // server) is what the server receives, "s2c" is what it sends.
-func deriveExpectedKeys(t *testing.T, rawSecret, salt, info []byte) exchange_key.DerivedKeys {
+func deriveExpectedKeys(t *testing.T, rawSecret, salt, info []byte) keyexchange.DerivedKeys {
 	t.Helper()
 
-	return exchange_key.DerivedKeys{
+	return keyexchange.DerivedKeys{
 		Session: sharedsession.Keys{
 			RecvEnc: deriveExpected(t, rawSecret, salt, info, "c2s/enc"),
 			SendEnc: deriveExpected(t, rawSecret, salt, info, "s2c/enc"),
@@ -98,7 +98,7 @@ type namedKey struct {
 	key  [32]byte
 }
 
-func namedKeys(k exchange_key.DerivedKeys) []namedKey {
+func namedKeys(k keyexchange.DerivedKeys) []namedKey {
 	return []namedKey{
 		{"RecvEnc", k.Session.RecvEnc},
 		{"SendEnc", k.Session.SendEnc},
@@ -110,7 +110,7 @@ func namedKeys(k exchange_key.DerivedKeys) []namedKey {
 
 // requireAllDistinct asserts that no two of the four derived keys are equal
 // (the per-direction / per-purpose labels must actually separate them).
-func requireAllDistinct(t *testing.T, k exchange_key.DerivedKeys) {
+func requireAllDistinct(t *testing.T, k keyexchange.DerivedKeys) {
 	t.Helper()
 
 	nk := namedKeys(k)
@@ -123,7 +123,7 @@ func requireAllDistinct(t *testing.T, k exchange_key.DerivedKeys) {
 
 // requireEachDiffers asserts that every key in a differs from its
 // counterpart (same field) in b.
-func requireEachDiffers(t *testing.T, a, b exchange_key.DerivedKeys) {
+func requireEachDiffers(t *testing.T, a, b keyexchange.DerivedKeys) {
 	t.Helper()
 
 	na, nb := namedKeys(a), namedKeys(b)
@@ -242,8 +242,8 @@ func TestHkdfDeriver_DeriveKeys_RejectsLowOrderPeerKey(t *testing.T) {
 	var lowOrderPub [32]byte // all-zero
 
 	keys, _, err := deriver.DeriveKeys(&lowOrderPub, []byte("info"))
-	require.ErrorIs(t, err, exchange_key.ErrRequestInvalid)
-	require.Equal(t, exchange_key.DerivedKeys{}, keys)
+	require.ErrorIs(t, err, keyexchange.ErrRequestInvalid)
+	require.Equal(t, keyexchange.DerivedKeys{}, keys)
 }
 
 // TestHkdfDeriver_DeriveKeys_SecretIsBoundToIntendedPeer replaces what was
@@ -274,7 +274,7 @@ func TestHkdfDeriver_DeriveKeys_SecretIsBoundToIntendedPeer(t *testing.T) {
 	require.NoError(t, err)
 
 	salt := transcriptSalt(peerAPub, ephemeralPub)
-	deriveAs := func(priv [32]byte) exchange_key.DerivedKeys {
+	deriveAs := func(priv [32]byte) keyexchange.DerivedKeys {
 		raw, err := curve25519.X25519(priv[:], ephemeralPub[:])
 		require.NoError(t, err)
 		return deriveExpectedKeys(t, raw, salt, info)

@@ -24,14 +24,16 @@ import (
 	"time"
 
 	"xxx/internal/hub/adapter/tcp"
-	"xxx/internal/hub/application/activate_conn"
-	"xxx/internal/hub/connection"
-	"xxx/internal/hub/infrastructure/cb"
+	"xxx/internal/hub/application/activateconn"
+	"xxx/internal/hub/core/activation"
+	"xxx/internal/hub/core/connection"
+	"xxx/internal/hub/core/presence"
+	"xxx/internal/hub/core/protocol"
 	"xxx/internal/hub/infrastructure/crypto"
 	"xxx/internal/hub/infrastructure/redis"
-	"xxx/internal/hub/protocol"
 	shareddevice "xxx/internal/shared/device"
 
+	"xxx/pkg/breaker"
 	"xxx/pkg/config"
 	"xxx/pkg/k8s"
 	"xxx/pkg/log"
@@ -87,14 +89,16 @@ func Run(ctx context.Context) (retErr error) {
 	}
 
 	var (
-		cfgCb       cb.Config
+		cfgCb       breaker.Config
 		cfgPool     workerpool.Config
-		cfgRouter   connection.Config
-		cfgActivate activate_conn.Config
+		cfgManager  connection.Config
+		cfgSyncer   presence.Config
+		cfgActivate activateconn.Config
 	)
 	cfgCb.Load(loader)
 	cfgPool.Load(loader)
-	cfgRouter.Load(loader)
+	cfgManager.Load(loader)
+	cfgSyncer.Load(loader)
 	cfgActivate.Load(loader)
 
 	ticketVerifier, err := loadTicketVerifier(loader)
@@ -154,30 +158,38 @@ func Run(ctx context.Context) (retErr error) {
 	channel := crypto.NewAesGcmChannel()
 	encoder := protocol.NewEncoder(channel)
 	decoder := protocol.NewDecoder(channel)
-	breaker := cb.New(
-		cfgCb,
-		dCache.IsInfraError,
-		nil,
-	)
-	router := connection.NewRouter(
+	syncer := presence.NewSyncer(
 		runCtx,
-		cfgRouter,
-		crypto.NewEd25519Signer(),
-		ticketVerifier,
+		cfgSyncer,
 		dCache,
-		breaker,
+		breaker.New(
+			cfgCb,
+			dCache.IsInfraError,
+			nil,
+		),
 		logger,
 		pool,
+	)
+	manager := connection.NewManager(
+		cfgManager,
+		syncer,
+		logger,
 		encoder,
 	)
-	defer router.Close()
+	defer manager.Close()
 
-	activator := activate_conn.New(
+	activationSvc := activation.NewService(
+		crypto.NewEd25519Signer(),
+		ticketVerifier,
+	)
+
+	activator := activateconn.New(
 		cfgActivate,
 		logger,
 		encoder,
 		decoder,
-		router,
+		manager,
+		activationSvc,
 	)
 	server := tcp.NewServer(
 		runCtx,
@@ -185,7 +197,7 @@ func Run(ctx context.Context) (retErr error) {
 		logger,
 		activator,
 		nil,
-		router.Close,
+		manager.Close,
 	)
 	return runTCPServer(
 		runCtx,

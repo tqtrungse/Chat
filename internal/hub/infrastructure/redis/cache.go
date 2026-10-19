@@ -29,7 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"xxx/internal/hub/connection"
+	"xxx/internal/hub/core/presence"
 	"xxx/internal/hub/domain/message"
 	shareddevice "xxx/internal/shared/device"
 
@@ -139,7 +139,7 @@ func NewCache(
 	logger *log.Logger,
 	pool *workerpool.Pool,
 ) (
-	c connection.DistributedCache,
+	c presence.DistributedCache,
 	startFn func(rootCtx context.Context) error,
 	closeFn func() error,
 	setCbFn func(callbacks Callbacks) bool,
@@ -354,8 +354,7 @@ func (c *cache) IsInfraError(err error) bool {
 	// failures, dial timeouts, or the connection dying mid-read/write.
 	// net.Error covers *net.OpError and *net.DNSError, which is how
 	// go-redis surfaces essentially all dial/read/write failures.
-	var netErr net.Error
-	if errors.As(err, &netErr) {
+	if _, ok := errors.AsType[net.Error](err); ok {
 		return true
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {

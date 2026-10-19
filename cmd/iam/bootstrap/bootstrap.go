@@ -23,7 +23,7 @@ import (
 	"net/http"
 
 	iamhttp "xxx/internal/iam/adapter/http"
-	"xxx/internal/iam/application/exchange_key"
+	"xxx/internal/iam/application/keyexchange"
 	"xxx/internal/iam/infrastructure/crypto"
 	"xxx/internal/iam/infrastructure/mysql"
 
@@ -77,7 +77,7 @@ func Run(ctx context.Context) (retErr error) {
 		_ = logger.Sync()
 	}()
 
-	keyExchanger := exchange_key.New(
+	keyExchanger := keyexchange.New(
 		db,
 		crypto.NewHkdfDeriver(),
 		mysql.NewDeviceMetaReader(),
