@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	SignedVersion      byte = 2
+	SignedVersion      byte = 1
 	SignedHeaderSize        = 2
 	SignedUnsignedSize      = SignedHeaderSize + size
 	SignedSize              = SignedUnsignedSize + ed25519.SignatureSize

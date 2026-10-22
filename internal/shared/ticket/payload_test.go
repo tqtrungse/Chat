@@ -123,7 +123,7 @@ func TestTicketPayload_RoundTripExtremes(t *testing.T) {
 }
 
 func TestSignedTicketEnvelope_ProtocolConstantsAndSigningMessage(t *testing.T) {
-	require.Equal(t, byte(2), SignedVersion)
+	require.Equal(t, byte(1), SignedVersion)
 	require.Equal(t, 2, SignedHeaderSize)
 	require.Equal(t, 239, SignedUnsignedSize)
 	require.Equal(t, 303, SignedSize)

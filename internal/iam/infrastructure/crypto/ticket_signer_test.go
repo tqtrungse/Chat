@@ -87,7 +87,7 @@ func TestTicketSigner_SealWireFormatSignatureAndAESPayload(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, snapshot, *in, "Seal must not mutate the input ticket")
 	require.Len(t, wire, 303)
-	require.Equal(t, byte(2), wire[0], "envelope version")
+	require.Equal(t, byte(1), wire[0], "envelope version")
 	require.Equal(t, byte(7), wire[1], "signing key ID")
 	require.Equal(t, byte(3), wire[2], "AES key ID")
 

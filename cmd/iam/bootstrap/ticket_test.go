@@ -79,7 +79,7 @@ func TestLoadTicketSigner_SignsAndEncryptsTicket(t *testing.T) {
 	wire, err := signer.Seal(in)
 	require.NoError(t, err)
 	require.Len(t, wire, 303)
-	require.Equal(t, byte(2), wire[0])
+	require.Equal(t, byte(1), wire[0])
 	require.Equal(t, byte(7), wire[1])
 	require.Equal(t, byte(3), wire[2])
 
