@@ -19,6 +19,7 @@ package keyexchange
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"strconv"
 	"time"
 
@@ -28,11 +29,17 @@ import (
 	sharedticket "xxx/internal/shared/ticket"
 
 	"xxx/pkg/database/sql"
+
+	"filippo.io/edwards25519"
 )
 
 const ticketTTL = 15 * time.Second
 
-var keyDerivationInfo = []byte("xxx/iam/exchange-key/v1")
+var (
+	keyDerivationInfo = []byte("xxx/iam/exchange-key/v1")
+
+	ErrIdentityPubInvalid = errors.New("identity public key is invalid")
+)
 
 type Usecase interface {
 	Exchange(ctx context.Context, subject string, req json.ExchangeKeyReq) (*json.ExchangeKeyResp, error)
@@ -87,9 +94,11 @@ func (ke *keyExchanger) Exchange(
 	if meta == nil || meta.ExternalID != subject {
 		return nil, ErrDeviceNotFound
 	}
-
 	if meta.State != device.StateActive {
 		return nil, ErrDeviceUnactive
+	}
+	if err = ke.checkIdentityPub(meta.IdentityPub); err != nil {
+		return nil, err
 	}
 
 	info := make([]byte, 0, len(keyDerivationInfo)+8)
@@ -133,4 +142,17 @@ func (ke *keyExchanger) Exchange(
 		return nil, err
 	}
 	return resp, nil
+}
+
+func (ke *keyExchanger) checkIdentityPub(pub []byte) error {
+	p := edwards25519.NewIdentityPoint()
+	p, err := p.SetBytes(pub)
+	if err != nil {
+		return ErrIdentityPubInvalid
+	}
+
+	if p.Equal(edwards25519.NewIdentityPoint()) != 0 {
+		return ErrIdentityPubInvalid
+	}
+	return nil
 }

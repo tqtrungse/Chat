@@ -36,6 +36,7 @@ import (
 	"xxx/pkg/database/sql"
 	dbmocks "xxx/pkg/database/sql/mocks"
 
+	"filippo.io/edwards25519"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )
@@ -77,11 +78,18 @@ func expectDeviceLookup(
 ) {
 	t.Helper()
 
-	deps.db.EXPECT().WithDB(gomock.Any(), sql.TxSourcePrimary, gomock.Any()).DoAndReturn(
-		func(ctx context.Context, _ sql.TxSource, fn func(context.Context) error) error {
-			return fn(ctx)
-		},
-	)
+	deps.db.
+		EXPECT().
+		WithDB(
+			gomock.Any(),
+			sql.TxSourcePrimary,
+			gomock.Any(),
+		).
+		DoAndReturn(
+			func(ctx context.Context, _ sql.TxSource, fn func(context.Context) error) error {
+				return fn(ctx)
+			},
+		)
 	deps.reader.EXPECT().FindDeviceMeta(gomock.Any(), deviceID).Return(meta, findErr)
 }
 
@@ -97,10 +105,7 @@ func validExchangeRequest() json.ExchangeKeyReq {
 }
 
 func activeDeviceMeta(subject string) *keyexchange.DeviceMeta {
-	identityPub := make([]byte, 32)
-	for i := range identityPub {
-		identityPub[i] = byte(0xA0 + i)
-	}
+	identityPub := edwards25519.NewGeneratorPoint().Bytes()
 	return &keyexchange.DeviceMeta{
 		ExternalID:  subject,
 		State:       device.StateActive,
@@ -159,17 +164,33 @@ func TestExchange_Success(t *testing.T) {
 	expectedInfo := make([]byte, 0, len(derivationDomain)+8)
 	expectedInfo = append(expectedInfo, derivationDomain...)
 	expectedInfo = binary.LittleEndian.AppendUint64(expectedInfo, deviceID)
-	deps.deriver.EXPECT().DeriveKeys(&clientPub, expectedInfo).Return(expectedDerived, serverPub, nil)
-	deps.issuer.EXPECT().Seal(gomock.Any()).DoAndReturn(func(ticket *sharedticket.Ticket) ([]byte, error) {
-		sealed = ticket
-		require.Equal(t, req.DeviceID, ticket.DeviceID)
-		require.GreaterOrEqual(t, ticket.ExpiresAt, startedAt.Add(15*time.Second).Add(-time.Second).Unix())
-		require.LessOrEqual(t, ticket.ExpiresAt, time.Now().Add(15*time.Second).Unix())
-		requireKeysEqual(t, expectedDerived.Session, ticket.Keys)
-		require.Equal(t, expectedDerived.Activation, ticket.ActivationKey)
-		require.Equal(t, meta.IdentityPub, ticket.IdentityPub[:])
-		return bytes.Clone(sealedTicket), nil
-	})
+	deps.deriver.
+		EXPECT().
+		DeriveKeys(
+			&clientPub,
+			expectedInfo,
+		).
+		Return(
+			expectedDerived,
+			serverPub,
+			nil,
+		)
+
+	deps.issuer.
+		EXPECT().
+		Seal(gomock.Any()).
+		DoAndReturn(
+			func(ticket *sharedticket.Ticket) ([]byte, error) {
+				sealed = ticket
+				require.Equal(t, shareddevice.ID(deviceID), ticket.DeviceID)
+				require.GreaterOrEqual(t, ticket.ExpiresAt, startedAt.Add(15*time.Second).Add(-time.Second).Unix())
+				require.LessOrEqual(t, ticket.ExpiresAt, time.Now().Add(15*time.Second).Unix())
+				requireKeysEqual(t, expectedDerived.Session, ticket.Keys)
+				require.Equal(t, expectedDerived.Activation, ticket.ActivationKey)
+				require.Equal(t, meta.IdentityPub, ticket.IdentityPub[:])
+				return bytes.Clone(sealedTicket), nil
+			},
+		)
 
 	resp, err := deps.uc.Exchange(ctx, subject, req)
 
@@ -199,7 +220,11 @@ func TestExchange_RejectsInvalidRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			deps := newUsecaseTestDeps(t)
-			resp, err := deps.uc.Exchange(context.Background(), tt.subject, tt.req)
+			resp, err := deps.uc.Exchange(
+				context.Background(),
+				tt.subject,
+				tt.req,
+			)
 			require.ErrorIs(t, err, keyexchange.ErrRequestInvalid)
 			require.Nil(t, resp)
 		})
@@ -223,7 +248,11 @@ func TestExchange_RejectsMissingOrForeignDevice(t *testing.T) {
 			deviceID, _ := strconv.ParseUint(req.DeviceID, 10, 64)
 			expectDeviceLookup(t, deps, shareddevice.ID(deviceID), tt.meta, nil)
 
-			resp, err := deps.uc.Exchange(context.Background(), subject, req)
+			resp, err := deps.uc.Exchange(
+				context.Background(),
+				subject,
+				req,
+			)
 
 			require.ErrorIs(t, err, keyexchange.ErrDeviceNotFound)
 			require.Nil(t, resp)
@@ -239,10 +268,57 @@ func TestExchange_RejectsInactiveDevice(t *testing.T) {
 	deviceID, _ := strconv.ParseUint(req.DeviceID, 10, 64)
 	expectDeviceLookup(t, deps, shareddevice.ID(deviceID), meta, nil)
 
-	resp, err := deps.uc.Exchange(context.Background(), "user-123", req)
+	resp, err := deps.uc.Exchange(
+		context.Background(),
+		"user-123",
+		req,
+	)
 
 	require.ErrorIs(t, err, keyexchange.ErrDeviceUnactive)
 	require.Nil(t, resp)
+}
+
+func TestExchange_RejectsInvalidIdentityPublicKey(t *testing.T) {
+	identityPoint := edwards25519.NewIdentityPoint().Bytes()
+	invalidPoint := make([]byte, 32)
+	for i := range 256 {
+		clear(invalidPoint)
+		invalidPoint[0] = byte(i)
+		if _, err := edwards25519.NewIdentityPoint().SetBytes(invalidPoint); err != nil {
+			break
+		}
+	}
+	_, invalidPointErr := edwards25519.NewIdentityPoint().SetBytes(invalidPoint)
+	require.Error(t, invalidPointErr)
+	tests := []struct {
+		name string
+		pub  []byte
+	}{
+		{name: "missing key"},
+		{name: "short encoding", pub: make([]byte, 31)},
+		{name: "invalid point encoding", pub: invalidPoint},
+		{name: "identity point", pub: identityPoint},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := newUsecaseTestDeps(t)
+			req := validExchangeRequest()
+			deviceID, _ := strconv.ParseUint(req.DeviceID, 10, 64)
+			meta := activeDeviceMeta("user-123")
+			meta.IdentityPub = tt.pub
+			expectDeviceLookup(t, deps, shareddevice.ID(deviceID), meta, nil)
+
+			resp, err := deps.uc.Exchange(
+				context.Background(),
+				"user-123",
+				req,
+			)
+
+			require.ErrorIs(t, err, keyexchange.ErrIdentityPubInvalid)
+			require.Nil(t, resp)
+		})
+	}
 }
 
 func TestExchange_PropagatesDatabaseAndReaderErrors(t *testing.T) {
@@ -253,7 +329,13 @@ func TestExchange_PropagatesDatabaseAndReaderErrors(t *testing.T) {
 		{
 			name: "database error",
 			setup: func(_ *testing.T, deps usecaseTestDeps, wantErr error) {
-				deps.db.EXPECT().WithDB(gomock.Any(), sql.TxSourcePrimary, gomock.Any()).Return(wantErr)
+				deps.db.
+					EXPECT().
+					WithDB(
+						gomock.Any(),
+						sql.TxSourcePrimary,
+						gomock.Any(),
+					).Return(wantErr)
 			},
 		},
 		{
@@ -270,7 +352,11 @@ func TestExchange_PropagatesDatabaseAndReaderErrors(t *testing.T) {
 			wantErr := errors.New("dependency failed")
 			tt.setup(t, deps, wantErr)
 
-			resp, err := deps.uc.Exchange(context.Background(), "user-123", validExchangeRequest())
+			resp, err := deps.uc.Exchange(
+				context.Background(),
+				"user-123",
+				validExchangeRequest(),
+			)
 
 			require.ErrorIs(t, err, wantErr)
 			require.Nil(t, resp)
@@ -284,9 +370,23 @@ func TestExchange_PropagatesKeyDerivationError(t *testing.T) {
 	deviceID, _ := strconv.ParseUint(req.DeviceID, 10, 64)
 	expectDeviceLookup(t, deps, shareddevice.ID(deviceID), activeDeviceMeta("user-123"), nil)
 	wantErr := errors.New("key derivation failed")
-	deps.deriver.EXPECT().DeriveKeys(gomock.Any(), gomock.Any()).Return(keyexchange.DerivedKeys{}, [32]byte{}, wantErr)
+	deps.deriver.
+		EXPECT().
+		DeriveKeys(
+			gomock.Any(),
+			gomock.Any(),
+		).
+		Return(
+			keyexchange.DerivedKeys{},
+			[32]byte{},
+			wantErr,
+		)
 
-	resp, err := deps.uc.Exchange(context.Background(), "user-123", req)
+	resp, err := deps.uc.Exchange(
+		context.Background(),
+		"user-123",
+		req,
+	)
 
 	require.ErrorIs(t, err, wantErr)
 	require.Nil(t, resp)
@@ -297,16 +397,41 @@ func TestExchange_PropagatesTicketSealErrorAndClearsKeys(t *testing.T) {
 	req := validExchangeRequest()
 	expectedDerived := derivedKeysForTest()
 	deviceID, _ := strconv.ParseUint(req.DeviceID, 10, 64)
-	expectDeviceLookup(t, deps, shareddevice.ID(deviceID), activeDeviceMeta("user-123"), nil)
-	deps.deriver.EXPECT().DeriveKeys(gomock.Any(), gomock.Any()).Return(expectedDerived, [32]byte{}, nil)
+	expectDeviceLookup(
+		t,
+		deps,
+		shareddevice.ID(deviceID),
+		activeDeviceMeta("user-123"),
+		nil,
+	)
+	deps.deriver.
+		EXPECT().
+		DeriveKeys(
+			gomock.Any(),
+			gomock.Any(),
+		).
+		Return(
+			expectedDerived,
+			[32]byte{},
+			nil,
+		)
 	wantErr := errors.New("ticket seal failed")
 	var sealed *sharedticket.Ticket
-	deps.issuer.EXPECT().Seal(gomock.Any()).DoAndReturn(func(ticket *sharedticket.Ticket) ([]byte, error) {
-		sealed = ticket
-		return nil, wantErr
-	})
+	deps.issuer.
+		EXPECT().
+		Seal(gomock.Any()).
+		DoAndReturn(
+			func(ticket *sharedticket.Ticket) ([]byte, error) {
+				sealed = ticket
+				return nil, wantErr
+			},
+		)
 
-	resp, err := deps.uc.Exchange(context.Background(), "user-123", req)
+	resp, err := deps.uc.Exchange(
+		context.Background(),
+		"user-123",
+		req,
+	)
 
 	require.ErrorIs(t, err, wantErr)
 	require.Nil(t, resp)
