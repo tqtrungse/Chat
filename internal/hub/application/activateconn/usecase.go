@@ -1,298 +1,460 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package activateconn
 
 import (
+	"bytes"
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
+	"encoding/binary"
+	"errors"
 	"sync/atomic"
 	"time"
 
-	pbpub "xxx/api/hub/v1/proto/gen/pub"
-	"xxx/internal/hub/core/activation"
+	pbpub "xxx/api/hub/v2/proto/gen/pub"
+	"xxx/internal/hub/core/auth"
 	"xxx/internal/hub/core/connection"
 	"xxx/internal/hub/core/protocol"
-	shareddevice "xxx/internal/shared/device"
+	"xxx/internal/hub/core/rejection"
+	"xxx/internal/hub/core/transport"
+	"xxx/internal/shared/hubendpoint"
+	"xxx/internal/shared/ticket"
 
 	"xxx/pkg/log"
 	"xxx/pkg/nio"
 	slicepool "xxx/pkg/pool/slice"
-
-	"go.uber.org/zap"
+	"xxx/pkg/reject"
 )
 
 const (
-	activationChallengeTTL = 5 * time.Second // challenge issued -> proof received
-	defaultPreAuthTimeout  = 10 * time.Second
+	activationChallengeTTL = 5 * time.Second
+	// [version: 1][hub_key_id: 4 byte][client public key: 32 byte][authentication tag: 16 byte]
+	handshakeBodySize = 53
+
+	stageConnected   = uint8(0)
+	stageAwaitAuth   = uint8(1)
+	stageVerifying   = uint8(2)
+	stageRegistering = uint8(3)
+	stageAny         = uint8(255)
 )
 
-const (
-	stageConnected  uint8 = iota // accepted, nothing valid received yet
-	stageChallenged              // challenge sent, waiting for proof
-)
-
-type Usecase interface {
-	// Admit is called from OnOpen. false means: close the connection.
-	Admit(conn nio.Conn) bool
-	Activate(conn nio.Conn, packet []byte) nio.Action
-	Prove(ctx context.Context, conn nio.Conn, packet []byte) nio.Action
-	Deactivate(ctx context.Context, conn nio.Conn) nio.Action
-	Tick() (time.Duration, nio.Action)
-}
-
-type connActivator struct {
-	logger         *log.Logger
-	encoder        *protocol.Encoder
-	decoder        *protocol.Decoder
-	manager        ConnManager
-	activationSvc  ActivationService
-	preAuthTimeout time.Duration
-	maxPreAuth     int64
-	preAuth        atomic.Int64
+type ConnActivator struct {
+	logger           *log.Logger
+	rejections       *reject.Stats[rejection.Reason]
+	decoder          *protocol.Decoder
+	manager          ConnManager
+	activationSvc    ActivationService
+	verifier         AuthorizationExecutor
+	factory          transport.Factory
+	preAuthTimeout   time.Duration
+	handshakeTimeout time.Duration
+	maxPreAuth       int64
+	preAuth          atomic.Int64
+	maxFrame         int
 }
 
 func New(
 	cfg Config,
 	logger *log.Logger,
-	encoder *protocol.Encoder,
+	rejections *reject.Stats[rejection.Reason],
 	decoder *protocol.Decoder,
 	manager ConnManager,
-	activationSvc ActivationService,
-) Usecase {
-	ca := &connActivator{
-		logger:         logger,
-		encoder:        encoder,
-		decoder:        decoder,
-		manager:        manager,
-		activationSvc:  activationSvc,
-		preAuthTimeout: cfg.PreAuthTimeout,
-		maxPreAuth:     int64(cfg.MaxPreAuthConns),
+	svc ActivationService,
+	factory transport.Factory,
+	verifier AuthorizationExecutor,
+) *ConnActivator {
+	return &ConnActivator{
+		logger:           logger,
+		rejections:       rejections,
+		decoder:          decoder,
+		manager:          manager,
+		activationSvc:    svc,
+		verifier:         verifier,
+		factory:          factory,
+		preAuthTimeout:   cfg.PreAuthTimeout,
+		handshakeTimeout: cfg.HandshakeTimeout,
+		maxPreAuth:       int64(cfg.MaxPreAuthConns),
+		maxFrame:         cfg.MaxFrameBytes,
 	}
-	if ca.preAuthTimeout <= 0 {
-		ca.preAuthTimeout = defaultPreAuthTimeout
-	}
-	if ca.maxPreAuth <= 0 {
-		ca.maxPreAuth = max(int64(manager.MaxConns()/10), 1)
-	}
-	return ca
 }
 
-// Admit reserves a pre-auth slot and arms the deadline. Don't log per rejection:
-// under attack that becomes a log storm; export PreAuthConns() as a metric instead.
-func (ca *connActivator) Admit(conn nio.Conn) bool {
-	if ca.manager.CurConns() > ca.manager.MaxConns() {
-		return false
-	}
-
+// Admit runs once per connection, on its owning event loop.
+func (ca *ConnActivator) Admit(ctx context.Context, conn nio.Conn) bool {
 	if ca.preAuth.Add(1) > ca.maxPreAuth {
 		ca.preAuth.Add(-1)
 		return false
 	}
 
-	p := &pendingActivation{
-		owner: ca,
-		stage: stageConnected,
+	now := time.Now()
+	pa := &pendingActivation{
+		owner:         ca,
+		deadline:      now.Add(ca.preAuthTimeout),
+		phaseDeadline: now.Add(ca.handshakeTimeout),
+		stage:         stageConnected,
 	}
-	p.timer = time.AfterFunc(ca.preAuthTimeout, func() { _ = conn.Close() })
-	conn.SetContext(p)
+	conn.SetContext(pa)
+	pa.timer = ca.arm(ctx, conn, pa, ca.preAuthTimeout, stageAny)
+	pa.phaseTimer = ca.arm(ctx, conn, pa, ca.handshakeTimeout, stageConnected)
 	return true
 }
 
-func (ca *connActivator) PreAuthConns() int64 { return ca.preAuth.Load() }
+func (ca *ConnActivator) PreAuthConns() int64 {
+	return ca.preAuth.Load()
+}
 
-// Activate validates the ticket and identity signature, then issues a fresh
-// challenge bound to this TCP connection. The connection is not activated yet.
-func (ca *connActivator) Activate(conn nio.Conn, packet []byte) nio.Action {
-	pending, ok := conn.Context().(*pendingActivation)
-	if !ok || pending.stage != stageConnected {
-		return ca.reject(pending) // already activated, or a second ActiveConnReq
+func (ca *ConnActivator) HandleFrame(
+	ctx context.Context,
+	conn nio.Conn,
+	frame []byte,
+) nio.Action {
+	pa, ok := conn.Context().(*pendingActivation)
+	if !ok || pa.released.Load() {
+		ca.rejections.Record(rejection.ActivationState, nil)
+		return ca.reject(pa)
 	}
 
-	var req pbpub.ActiveConnReq
-	err := ca.decoder.DecodeActivationPacket(
-		packet[4:],
-		&req,
-	)
+	if time.Now().After(pa.deadline) || time.Now().After(pa.phaseDeadline) {
+		ca.rejections.Record(expiryReason(pa.stage), nil)
+		return ca.reject(pa)
+	}
+
+	switch pa.stage {
+	case stageConnected:
+		return ca.Handshake(ctx, pa, conn, frame)
+	case stageAwaitAuth:
+		return ca.Authenticate(ctx, pa, conn, frame)
+	default:
+		ca.rejections.Record(rejection.ActivationState, nil)
+		return ca.reject(pa)
+	}
+}
+
+// Handshake
+//
+// Body  = [version: 1][hub_key_id: 4 byte][ephemeral public key: 32 byte][authentication tag: 16 byte]
+//
+// Frame = [length: 2][Body]
+func (ca *ConnActivator) Handshake(
+	ctx context.Context,
+	pa *pendingActivation,
+	conn nio.Conn,
+	frame []byte,
+) nio.Action {
+	if pa.stage != stageConnected {
+		ca.rejections.Record(rejection.ActivationState, nil)
+		return ca.reject(pa)
+	}
+
+	body, err := protocol.FrameBody(frame, ca.maxFrame)
+	if err != nil || len(body) != handshakeBodySize || body[0] != hubendpoint.WireVersion {
+		ca.rejections.Record(rejection.HandshakeInvalid, err)
+		return ca.reject(pa)
+	}
+
+	responder, err := ca.factory.NewResponder(binary.LittleEndian.Uint32(body[1:5]))
 	if err != nil {
-		ca.logger.Error("failed to decode active request, force close", zap.Error(err))
-		return ca.reject(pending)
+		ca.rejections.Record(rejection.HandshakeKey, err)
+		return ca.reject(pa)
 	}
+	defer responder.Close()
+
+	err = responder.ReadClientHello(body[5:])
+	if err != nil {
+		ca.rejections.Record(rejection.HandshakeInvalid, err)
+		return ca.reject(pa)
+	}
+
+	pa.identity = responder.Identity()
+	pa.challenge = slicepool.Get(auth.ChallengeSize)
+
+	_, err = rand.Read(pa.challenge)
+	if err != nil {
+		return ca.reject(pa)
+	}
+
+	hello, ch, binding, err := responder.WriteServerHello(pa.challenge)
+	if err != nil {
+		return ca.reject(pa)
+	}
+
 	defer func() {
-		clear(req.Token)
-		clear(req.Sign)
-		clear(req.Ticket)
-		slicepool.Put(req.Token)
-		slicepool.Put(req.Sign)
-		slicepool.Put(req.Ticket)
+		clear(hello[:cap(hello)])
+		slicepool.Put(hello)
+	}()
+	pa.channel = ch
+	pa.binding = binding
+
+	if time.Now().After(pa.deadline) || time.Now().After(pa.phaseDeadline) {
+		ca.rejections.Record(rejection.HandshakeExpired, nil)
+		return ca.reject(pa)
+	}
+
+	out, err := protocol.EncodeFrame(hello, ca.maxFrame)
+	if err != nil {
+		return ca.reject(pa)
+	}
+
+	defer func() {
+		clear(out[:cap(out)])
+		slicepool.Put(out)
 	}()
 
-	if err = req.Validate(); err != nil {
-		ca.logger.Error("failed to validate activate request, force close", zap.Error(err))
-		return ca.reject(pending)
+	n, err := conn.Write(out)
+	if err != nil || n != len(out) {
+		return ca.reject(pa)
 	}
 
-	// The only place the ticket is opened and the signatures are verified.
-	ticket, err := ca.activationSvc.Prepare(
-		req.Token,
-		req.Ticket,
-		req.Sign,
-	)
-	if err != nil {
-		ca.logger.Error("failed to prepare activation, force close", zap.Error(err))
-		return ca.reject(pending)
-	}
+	pa.stage = stageAwaitAuth
+	pa.phaseDeadline = time.Now().Add(activationChallengeTTL)
+	pa.phaseTimer.Stop()
+	pa.phaseTimer = ca.arm(ctx, conn, pa, activationChallengeTTL, stageAwaitAuth)
 
-	pending.ticket = ticket // owned by pending from here; zeroed by pending.clear()
-	pending.transcript = activation.Transcript(
-		req.Token,
-		req.Ticket,
-		req.Sign,
-	)
-	pending.deadline = time.Now().Add(activationChallengeTTL)
-	_, err = rand.Read(pending.nonce[:])
-	if err != nil {
-		ca.logger.Error("failed to generate activation challenge, force close", zap.Error(err))
-		return ca.reject(pending)
-	}
-	pending.stage = stageChallenged
-
-	frame, err := ca.encoder.EncodeHandshake(
-		pbpub.MsgType_RESP_ACTIVE_CONN,
-		&pbpub.ActiveConnResp{Nonce: pending.nonce[:]},
-	)
-	if err == nil {
-		defer func() {
-			clear(frame)
-			slicepool.Put(frame)
-		}()
-		_, err = conn.Write(frame)
-	}
-	if err != nil {
-		ca.logger.Error("failed to send activation challenge, force close", zap.Error(err))
-		return ca.reject(pending)
-	}
 	return nio.None
 }
 
-// Prove verifies possession of the ECDH-derived activation key. The nonce is
-// accepted only for the pending state on the connection that issued it.
-func (ca *connActivator) Prove(ctx context.Context, conn nio.Conn, packet []byte) nio.Action {
-	pending, ok := conn.Context().(*pendingActivation)
-	if !ok || pending.stage != stageChallenged || time.Now().After(pending.deadline) {
-		return ca.reject(pending)
+// Authenticate
+//
+// Frame = [length: 2][Body]
+func (ca *ConnActivator) Authenticate(
+	ctx context.Context,
+	pa *pendingActivation,
+	conn nio.Conn,
+	frame []byte,
+) nio.Action {
+	if pa.stage != stageAwaitAuth {
+		ca.rejections.Record(rejection.ActivationState, nil)
+		return ca.reject(pa)
 	}
 
-	if err := ca.activationSvc.CheckExpiry(pending.ticket, time.Now()); err != nil {
-		ca.logger.Error("ticket expired before activation, force close", zap.Error(err))
-		return ca.reject(pending)
-	}
-
-	var req pbpub.ActiveConnProofReq
-	err := ca.decoder.DecodeActivationProofPack(packet[4:], &req)
+	plain, err := pa.channel.DecryptRecord(frame)
 	if err != nil {
-		ca.logger.Error("failed to decode activation proof, force close", zap.Error(err))
-		return ca.reject(pending)
+		ca.rejections.Record(rejection.ProofDecode, err)
+		return ca.reject(pa)
 	}
+
 	defer func() {
-		clear(req.Proof)
-		slicepool.Put(req.Proof)
+		clear(plain[:cap(plain)])
+		slicepool.Put(plain)
 	}()
+
+	payload, err := ca.decoder.DecodePayload(plain)
+	if err != nil || payload.Kind != pbpub.MsgKind_REQ_AUTHENTICATE || len(payload.Expand) != 0 {
+		ca.rejections.Record(rejection.ActivateDecode, err)
+		return ca.reject(pa)
+	}
+
+	req, ok := payload.Message.(*pbpub.AuthenticateReq)
+	if !ok {
+		ca.rejections.Record(rejection.ActivateValidate, nil)
+		return ca.reject(pa)
+	}
 
 	err = req.Validate()
 	if err != nil {
-		ca.logger.Error("invalid activation proof, force close", zap.Error(err))
-		return ca.reject(pending)
+		ca.rejections.Record(rejection.ActivateValidate, err)
+		return ca.reject(pa)
 	}
 
-	want := activation.Proof(
-		&pending.ticket.ActivationKey,
-		pending.transcript,
-		pending.nonce,
+	// Neither decoded bytes nor pending activation buffers may escape to a
+	// worker: the loop can clear/reuse them as soon as this callback returns.
+	var (
+		raw           = req.Ticket
+		signature     = req.Signature
+		binding       = bytes.Clone(pa.binding)
+		challenge     = bytes.Clone(pa.challenge)
+		identity      = pa.identity
+		deadline      = pa.deadline
+		phaseDeadline = pa.phaseDeadline
+		loop          = conn.EventLoop()
 	)
-	if !hmac.Equal(want[:], req.Proof) {
-		return ca.reject(pending)
-	}
-	// Stop() == false: the pre-auth timer already fired and the conn is closing.
-	if !pending.timer.Stop() {
-		return ca.reject(pending)
+
+	pa.stage = stageVerifying
+	cleanup := func() {
+		clear(raw[:cap(raw)])
+		clear(signature[:cap(signature)])
+		clear(binding[:cap(binding)])
+		clear(challenge[:cap(challenge)])
 	}
 
-	connKeys, err := activation.DeriveConnKeys(
-		&pending.ticket.Keys,
-		pending.nonce,
-	)
+	err = ca.verifier.Submit(func() {
+		defer cleanup()
+
+		// Skip work for connections closed or expired while waiting in the pool.
+		if pa.released.Load() {
+			return
+		}
+
+		var (
+			claims    *ticket.Info
+			verifyErr error
+		)
+
+		if ctx.Err() != nil ||
+			time.Now().After(deadline) ||
+			time.Now().After(phaseDeadline) {
+			verifyErr = context.DeadlineExceeded
+		} else {
+			claims, verifyErr = ca.activationSvc.VerifyAuthorization(
+				raw,
+				signature,
+				binding,
+				challenge,
+				identity,
+			)
+		}
+
+		executeErr := loop.Execute(ctx, func(context.Context) error {
+			// All connection state and channel ownership stay on the owning loop.
+			if pa.released.Load() || conn.Context() != pa || pa.stage != stageVerifying {
+				return nil
+			}
+
+			// Do not count shutdown cancellation as a client rejection.
+			if verifyErr != nil || claims == nil || ctx.Err() != nil ||
+				time.Now().After(pa.deadline) ||
+				time.Now().After(pa.phaseDeadline) {
+				if ctx.Err() == nil {
+					reason := rejection.ActivateTicket
+					if errors.Is(verifyErr, context.DeadlineExceeded) ||
+						time.Now().After(pa.deadline) ||
+						time.Now().After(pa.phaseDeadline) {
+						reason = rejection.ProofExpired
+					} else if errors.Is(verifyErr, auth.ErrDeviceProofInvalid) {
+						reason = rejection.ProofInvalid
+					}
+					ca.rejections.Record(reason, verifyErr)
+				}
+				pa.clear()
+				ca.manager.ForceClose(conn)
+				return nil
+			}
+			// Completion may have waited in the loop queue after verification.
+			// Reject an expired ticket before replacing any existing connection.
+			err = ca.activationSvc.CheckExpiry(claims, time.Now())
+			if err != nil {
+				ca.rejections.Record(rejection.ProofExpired, err)
+				pa.clear()
+				ca.manager.ForceClose(conn)
+				return nil
+			}
+			ca.register(ctx, pa, conn, claims)
+			return nil
+		})
+		if executeErr != nil {
+			// Close is safe from outside the loop; Deactivate owns pending cleanup.
+			_ = conn.Close()
+		}
+	})
 	if err != nil {
-		ca.logger.Error("failed to derive connection keys, force close", zap.Error(err))
-		return ca.reject(pending)
-	}
-	defer connKeys.Clear()
-
-	// ActivateConn copies the session keys by value and replaces the conn context
-	// with the session, so pending can be wiped right after.
-	err = ca.manager.ActivateConn(
-		ctx,
-		pending.ticket.DeviceID,
-		&connKeys,
-		conn,
-		ca.onAck(conn),
-	)
-	pending.clear()
-
-	if err != nil {
-		ca.logger.Error("failed to activate connection, force close", zap.Error(err))
-		return nio.Close
+		cleanup()
+		return ca.reject(pa)
 	}
 	return nio.None
 }
 
-func (ca *connActivator) Deactivate(ctx context.Context, conn nio.Conn) nio.Action {
-	if pending, ok := conn.Context().(*pendingActivation); ok {
-		pending.clear()
-		conn.SetContext(nil)
+// register resumes authorization on the owning connection event loop.
+func (ca *ConnActivator) register(
+	ctx context.Context,
+	pa *pendingActivation,
+	conn nio.Conn,
+	info *ticket.Info,
+) {
+	pa.stage = stageRegistering
+	pa.phaseTimer.Stop()
+	ch := pa.channel
+	pa.channel = nil // Manager consumes ownership, including on error.
+
+	err := ca.manager.ActivateConn(
+		ctx,
+		info.DeviceID,
+		ch,
+		conn,
+		pa.clear,
+		func(regErr error) {
+			if pa.released.Load() {
+				return
+			}
+
+			// Registration can outlive the verified ticket; recheck before ACK.
+			if regErr != nil ||
+				time.Now().After(pa.deadline) ||
+				ca.activationSvc.CheckExpiry(info, time.Now()) != nil {
+				pa.clear()
+				ca.manager.ForceClose(conn)
+				return
+			}
+
+			caErr := ca.manager.CompleteActivation(
+				conn,
+				connection.SendData{
+					MsgKind: pbpub.MsgKind_RESP_AUTHENTICATE,
+					Msg:     &pbpub.AuthenticateResp{Code: pbpub.Code_SUCCESS},
+				},
+			)
+			if caErr != nil {
+				pa.clear()
+				ca.manager.ForceClose(conn)
+			}
+		},
+	)
+	if err != nil {
+		pa.clear()
+		ca.manager.ForceClose(conn)
+	}
+}
+
+func (ca *ConnActivator) Deactivate(ctx context.Context, conn nio.Conn) nio.Action {
+	pa, ok := conn.Context().(*pendingActivation)
+	if ok {
+		pa.clear()
 	}
 	ca.manager.RemoveConn(ctx, conn)
+	conn.SetContext(nil)
 	return nio.None
 }
 
-func (ca *connActivator) Tick() (time.Duration, nio.Action) {
+func (ca *ConnActivator) Tick() (time.Duration, nio.Action) {
 	return ca.manager.Tick(), nio.None
 }
 
-func (ca *connActivator) onAck(conn nio.Conn) func(id shareddevice.ID) {
-	return func(_ shareddevice.ID) {
-		err := ca.manager.AsyncSendConn(
-			false,
-			conn,
-			connection.SendData{
-				MsgType: pbpub.MsgType_RESP_ACTIVE_CONN_PROOF,
-				Msg:     &pbpub.ActiveConnProofResp{Code: pbpub.Code_SUCCESS},
-			},
-		)
+// Timer goroutines enqueue closure checks. They never touch channel state.
+func (ca *ConnActivator) arm(
+	ctx context.Context,
+	conn nio.Conn,
+	pa *pendingActivation,
+	duration time.Duration,
+	stage uint8,
+) *time.Timer {
+	return time.AfterFunc(duration, func() {
+		err := conn.EventLoop().Execute(ctx, func(context.Context) error {
+			if !pa.released.Load() &&
+				(stage == stageAny ||
+					pa.stage == stage ||
+					(stage == stageAwaitAuth && pa.stage == stageVerifying)) {
+				if ctx.Err() == nil {
+					ca.rejections.Record(expiryReason(pa.stage), nil)
+				}
+				ca.manager.ForceClose(conn)
+			}
+			return nil
+		})
 		if err != nil {
-			ca.logger.Error("failed to respond, force close", zap.Error(err))
-			ca.manager.ForceClose(conn)
+			_ = conn.Close()
 		}
-	}
+	})
 }
 
-// reject wipes the pending state (nil-safe) and closes. The context stays set so
-// OnClose -> Deactivate finds it; clear() is idempotent.
-func (ca *connActivator) reject(p *pendingActivation) nio.Action {
-	p.clear()
+func (ca *ConnActivator) reject(pa *pendingActivation) nio.Action {
+	pa.clear()
 	return nio.Close
+}
+
+func expiryReason(stage uint8) rejection.Reason {
+	if stage == stageConnected {
+		return rejection.HandshakeExpired
+	}
+	return rejection.ProofExpired
 }

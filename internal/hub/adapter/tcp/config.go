@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package tcp
@@ -23,7 +12,38 @@ import (
 	"xxx/pkg/config"
 )
 
+const (
+	defaultTcpKeepAlive     = 30 * time.Second
+	defaultReadBufferCap    = 4 * 1024
+	defaultWriteBufferCap   = 4 * 1024
+	defaultMaxFrameBytes    = 4096
+	defaultMaxFramesPerTick = 64
+	defaultMaxBytesPerTick  = 256 * 1024
+)
+
 type Config struct {
+	// MaxFrameBytes limits each frame body, excluding the 2-byte length prefix.
+	// Bootstrap also applies this limit to the handshake and transport factory.
+	//
+	// Default: 4096 bytes.
+	//
+	// Bootstrap accepts: 512..65535.
+	MaxFrameBytes int
+
+	// MaxFramesPerTick limits complete frames processed per OnTraffic callback,
+	// not per timer tick. On reaching either processing budget, the connection
+	// schedules a Wake to resume buffered data after yielding the event loop.
+	//
+	// Default: 64.
+	MaxFramesPerTick int
+
+	// MaxBytesPerTick is the processing budget per OnTraffic callback, including
+	// frame length prefixes. A complete frame is always processed, so the last
+	// frame may exceed this budget before the callback yields.
+	//
+	// Default: 256 KiB.
+	MaxBytesPerTick int
+
 	Addr string
 
 	// TCPKeepAlive enables the TCP keep-alive mechanism (SO_KEEPALIVE) and set its value
@@ -61,13 +81,33 @@ type Config struct {
 }
 
 func (c *Config) Load(loader config.Loader) {
-	if loader == nil {
-		return
+	if loader != nil {
+		c.MaxFrameBytes = loader.GetInt("TCP_SERVER_MAX_FRAME_BYTES")
+		c.MaxFramesPerTick = loader.GetInt("TCP_SERVER_MAX_FRAMES_PER_TICK")
+		c.MaxBytesPerTick = loader.GetInt("TCP_SERVER_MAX_BYTES_PER_TICK")
+		c.Addr = strings.TrimSpace(loader.GetString("TCP_SERVER_ADDRESS"))
+		c.TCPKeepAlive = loader.GetDuration("TCP_SERVER_KEEP_ALIVE")
+		c.TCPKeepInterval = loader.GetDuration("TCP_SERVER_KEEP_INTERVAL")
+		c.TCPKeepCount = loader.GetInt("TCP_SERVER_KEEP_COUNT")
+		c.ReadBufferCap = loader.GetInt("TCP_SERVER_READ_BUFFER")
+		c.WriteBufferCap = loader.GetInt("TCP_SERVER_WRITE_BUFFER")
 	}
-	c.Addr = strings.TrimSpace(loader.GetString("TCP_SERVER_ADDRESS"))
-	c.TCPKeepAlive = loader.GetDuration("TCP_SERVER_KEEP_ALIVE")
-	c.TCPKeepInterval = loader.GetDuration("TCP_SERVER_KEEP_INTERVAL")
-	c.TCPKeepCount = loader.GetInt("TCP_SERVER_KEEP_COUNT")
-	c.ReadBufferCap = loader.GetInt("TCP_SERVER_READ_BUFFER")
-	c.WriteBufferCap = loader.GetInt("TCP_SERVER_WRITE_BUFFER")
+	if c.TCPKeepAlive <= 0 {
+		c.TCPKeepAlive = defaultTcpKeepAlive
+	}
+	if c.ReadBufferCap <= 0 {
+		c.ReadBufferCap = defaultReadBufferCap
+	}
+	if c.WriteBufferCap <= 0 {
+		c.WriteBufferCap = defaultWriteBufferCap
+	}
+	if c.MaxFrameBytes <= 0 {
+		c.MaxFrameBytes = defaultMaxFrameBytes
+	}
+	if c.MaxFramesPerTick <= 0 {
+		c.MaxFramesPerTick = defaultMaxFramesPerTick
+	}
+	if c.MaxBytesPerTick <= 0 {
+		c.MaxBytesPerTick = defaultMaxBytesPerTick
+	}
 }

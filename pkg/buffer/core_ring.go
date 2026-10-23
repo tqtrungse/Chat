@@ -1,18 +1,7 @@
 /*
  * Copyright (c) 2019 The Gnet Authors. All rights reserved.
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package buffer
@@ -352,8 +341,9 @@ func (rb *coreRing) Write(p []byte) (n int, err error) {
 // WriteByte writes one byte into buffer.
 func (rb *coreRing) WriteByte(c byte) error {
 	if rb.Available() < 1 {
-		rb.grow(1)
+		rb.grow(rb.Buffered() + 1)
 	}
+
 	rb.buf[rb.w] = c
 	rb.w++
 
@@ -473,34 +463,37 @@ func (rb *coreRing) peekAll() (head []byte, tail []byte) {
 }
 
 func (rb *coreRing) grow(newCap int) {
-	if n := rb.size; n == 0 {
+	rbSize := rb.size
+	if rbSize == 0 {
 		if newCap <= RingDefaultBufferSize {
 			newCap = RingDefaultBufferSize
 		} else {
 			newCap = int(bit.NextPowerOfTwo(newCap))
 		}
 	} else {
-		doubleCap := n + n
+		doubleCap := rbSize + rbSize
 		if newCap <= doubleCap {
-			if n < bufferGrowThreshold {
+			if rbSize < bufferGrowThreshold {
 				newCap = doubleCap
 			} else {
 				// Check 0 < n to detect overflow and prevent an infinite loop.
-				for 0 < n && n < newCap {
-					n += n / 4
+				for 0 < rbSize && rbSize < newCap {
+					rbSize += rbSize / 4
 				}
 				// The n calculation doesn't overflow, set n to newCap.
-				if n > 0 {
-					newCap = n
+				if rbSize > 0 {
+					newCap = rbSize
 				}
 			}
 		}
 	}
+
 	newBuf := slicepool.Get(newCap)
 	oldLen := rb.Buffered()
 	_, _ = rb.Read(newBuf)
 	clear(rb.buf[:cap(rb.buf)])
 	slicepool.Put(rb.buf)
+
 	rb.buf = newBuf
 	rb.r = 0
 	rb.w = oldLen

@@ -1,18 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package activateconn
@@ -22,32 +10,40 @@ import (
 	"time"
 
 	"xxx/internal/hub/core/connection"
-	shareddevice "xxx/internal/shared/device"
-	sharedsession "xxx/internal/shared/session"
-	sharedticket "xxx/internal/shared/ticket"
+	"xxx/internal/hub/core/transport"
+	"xxx/internal/shared/device"
+	"xxx/internal/shared/ticket"
 
 	"xxx/pkg/nio"
 )
 
-// ConnManager is the subset of connection.Manager the activation flow needs.
 type ConnManager interface {
 	CurConns() uint32
 	MaxConns() uint32
 	Tick() time.Duration
+	// ActivateConn takes ownership of the channel and cleanup callback, even on
+	// failure. Cleanup runs on the connection event loop on activation or close.
 	ActivateConn(
 		ctx context.Context,
-		id shareddevice.ID,
-		keys *sharedsession.Keys,
+		id device.ID,
+		ch transport.Channel,
 		conn nio.Conn,
-		callback func(id shareddevice.ID),
+		cleanup func(),
+		callback func(error),
 	) error
-	AsyncSendConn(secure bool, conn nio.Conn, data connection.SendData) error
+	CompleteActivation(conn nio.Conn, data connection.SendData) error
 	RemoveConn(ctx context.Context, conn nio.Conn)
 	ForceClose(conn nio.Conn)
 }
 
-// ActivationService is the subset of activation.Service the activation flow needs.
+// ActivationService must support concurrent verification with independent inputs.
 type ActivationService interface {
-	Prepare(token, ticket, sign []byte) (*sharedticket.Ticket, error)
-	CheckExpiry(ticket *sharedticket.Ticket, now time.Time) error
+	VerifyAuthorization(raw, signature, binding, challenge []byte, hub transport.Identity) (*ticket.Info, error)
+	CheckExpiry(meta *ticket.Info, now time.Time) error
+}
+
+// AuthorizationExecutor submits CPU work without blocking the owning event loop.
+// It must bound queued and running jobs and reject overload or shutdown.
+type AuthorizationExecutor interface {
+	Submit(job func()) error
 }

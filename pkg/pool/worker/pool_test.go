@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package worker
@@ -32,10 +21,12 @@ import (
 )
 
 func TestPool_SubmitExecutesTask(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 2,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -52,10 +43,12 @@ func TestPool_SubmitExecutesTask(t *testing.T) {
 }
 
 func TestPool_SubmitMultipleTasksAllExecuteExactlyOnce(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 4,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -76,10 +69,12 @@ func TestPool_SubmitMultipleTasksAllExecuteExactlyOnce(t *testing.T) {
 }
 
 func TestPool_SpawnLocalChildExecutes(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 2,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -98,10 +93,12 @@ func TestPool_SpawnLocalChildExecutes(t *testing.T) {
 }
 
 func TestPool_SpawnLocalDeepChain(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 2,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -129,10 +126,12 @@ func TestPool_SpawnLocalDeepChain(t *testing.T) {
 }
 
 func TestPool_CloseWaitsForSpawnedDescendants(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 4,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
+		cfg,
 		nil,
 	)
 
@@ -154,10 +153,12 @@ func TestPool_CloseWaitsForSpawnedDescendants(t *testing.T) {
 }
 
 func TestPool_PanicInTaskDoesNotStopThePool(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 2,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -184,10 +185,12 @@ func TestPool_PanicHandlerReceivesDetails(t *testing.T) {
 	var gotStackLen int
 	handlerCalled := make(chan struct{})
 
+	cfg := Config{
+		NumWorkers: 2,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
+		cfg,
 		func(workerID int, recovered any, stack []byte) {
 			gotWorker = workerID
 			gotRecovered = recovered
@@ -218,10 +221,12 @@ func TestPool_DefaultPanicHandlerLogsWithoutCrashing(t *testing.T) {
 	log.SetOutput(&buf)
 	defer log.SetOutput(orig)
 
+	cfg := Config{
+		NumWorkers: 1,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 1,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -242,10 +247,12 @@ func TestPool_DefaultPanicHandlerLogsWithoutCrashing(t *testing.T) {
 }
 
 func TestPool_SubmitAfterCloseReturnsErrPoolClosed(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 2,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
+		cfg,
 		nil,
 	)
 	closePool()
@@ -255,10 +262,12 @@ func TestPool_SubmitAfterCloseReturnsErrPoolClosed(t *testing.T) {
 }
 
 func TestPool_CloseIsIdempotentAndAllCallersReturn(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 2,
+	}
+	cfg.Load(nil)
 	_, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
+		cfg,
 		nil,
 	)
 	closePool()
@@ -267,10 +276,12 @@ func TestPool_CloseIsIdempotentAndAllCallersReturn(t *testing.T) {
 }
 
 func TestPool_CloseWithNoWorkReturnsPromptly(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 4,
+	}
+	cfg.Load(nil)
 	_, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
+		cfg,
 		nil,
 	)
 	done := make(chan struct{})
@@ -286,10 +297,12 @@ func TestPool_CloseWithNoWorkReturnsPromptly(t *testing.T) {
 }
 
 func TestPool_WaitWithNoWorkReturnsImmediately(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 4,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -307,10 +320,12 @@ func TestPool_WaitWithNoWorkReturnsImmediately(t *testing.T) {
 }
 
 func TestPool_WaitBlocksUntilTaskActuallyFinishes(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 2,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -346,10 +361,12 @@ func TestPool_WaitBlocksUntilTaskActuallyFinishes(t *testing.T) {
 }
 
 func TestPool_NumWorkersMatchesRequested(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 7,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 7,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -358,12 +375,14 @@ func TestPool_NumWorkersMatchesRequested(t *testing.T) {
 	assert.Equal(t, 7, got)
 }
 
-func TestPool_NewNonPositiveDefaultsToGOMAXPROCS(t *testing.T) {
+func TestPool_LoadNonPositiveWorkersDefaultsToGOMAXPROCS(t *testing.T) {
 	for _, n := range []int{0, -1, -100} {
+		cfg := Config{
+			NumWorkers: n,
+		}
+		cfg.Load(nil)
 		p, closePool := New(
-			Config{
-				NumWorkers: n,
-			},
+			cfg,
 			nil,
 		)
 		got := p.NumWorkers()
@@ -373,10 +392,12 @@ func TestPool_NewNonPositiveDefaultsToGOMAXPROCS(t *testing.T) {
 }
 
 func TestPool_ConcurrentSubmitFromManyGoroutines(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 4,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -407,10 +428,12 @@ func TestPool_ConcurrentSubmitFromManyGoroutines(t *testing.T) {
 }
 
 func TestPool_Concurrent_SpawnLocalFromManyTasks(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 4,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -447,10 +470,12 @@ func TestPool_Concurrent_SpawnLocalFromManyTasks(t *testing.T) {
 func TestPool_Concurrent_SubmitAndClose(t *testing.T) {
 	const rounds = 300
 	for round := range rounds {
+		cfg := Config{
+			NumWorkers: 4,
+		}
+		cfg.Load(nil)
 		p, closePool := New(
-			Config{
-				NumWorkers: 4,
-			},
+			cfg,
 			nil,
 		)
 
@@ -483,10 +508,12 @@ func TestPool_Concurrent_SubmitAndClose(t *testing.T) {
 }
 
 func TestPool_Concurrent_CloseCallersAllReturn(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 3,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 3,
-		},
+		cfg,
 		nil,
 	)
 
@@ -515,10 +542,12 @@ func TestPool_Concurrent_CloseCallersAllReturn(t *testing.T) {
 }
 
 func TestPool_Concurrent_WaitCallersAllSeeCompletion(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 4,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -555,10 +584,12 @@ func TestPool_Concurrent_WaitCallersAllSeeCompletion(t *testing.T) {
 }
 
 func TestPool_Concurrent_StealDistributesWorkAcrossWorkers(t *testing.T) {
+	cfg := Config{
+		NumWorkers: 4,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -587,10 +618,12 @@ func TestPool_Concurrent_StealDistributesWorkAcrossWorkers(t *testing.T) {
 func TestPool_Concurrent_NoGoroutineLeakAfterClose(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 
+	cfg := Config{
+		NumWorkers: 6,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 6,
-		},
+		cfg,
 		nil,
 	)
 
@@ -620,10 +653,12 @@ func TestPool_Stress_HighVolumeSubmit(t *testing.T) {
 		t.Skip("skipping stress test in -short mode")
 	}
 
+	cfg := Config{
+		NumWorkers: 8,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 8,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -645,10 +680,12 @@ func TestPool_Stress_ManyProducersHighVolume(t *testing.T) {
 		t.Skip("skipping stress test in -short mode")
 	}
 
+	cfg := Config{
+		NumWorkers: 8,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 8,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -689,10 +726,12 @@ func TestPool_Stress_RandomSpawnDepth(t *testing.T) {
 		t.Skip("skipping stress test in -short mode")
 	}
 
+	cfg := Config{
+		NumWorkers: 8,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 8,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -743,10 +782,12 @@ func TestPool_Stress_SmallPoolForcesOverflowAndSteal(t *testing.T) {
 	}
 
 	// deliberately small: local queues will overflow constantly
+	cfg := Config{
+		NumWorkers: 2,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -775,10 +816,12 @@ func TestPool_Stress_PanicsInterleavedWithNormalTasks(t *testing.T) {
 	log.SetOutput(&buf)
 	defer log.SetOutput(orig)
 
+	cfg := Config{
+		NumWorkers: 6,
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: 6,
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -820,10 +863,12 @@ func TestPool_Stress_RepeatedPoolLifecycle(t *testing.T) {
 	const rounds = 200
 	const perRound = 300
 	for range rounds {
+		cfg := Config{
+			NumWorkers: 4,
+		}
+		cfg.Load(nil)
 		p, closePool := New(
-			Config{
-				NumWorkers: 4,
-			},
+			cfg,
 			nil,
 		)
 
@@ -857,10 +902,12 @@ func TestPool_Stress_RepeatedPoolLifecycle(t *testing.T) {
 // ----------
 
 func BenchmarkSubmitSequential(b *testing.B) {
+	cfg := Config{
+		NumWorkers: runtime.GOMAXPROCS(0),
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: runtime.GOMAXPROCS(0),
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()
@@ -876,10 +923,12 @@ func BenchmarkSubmitSequential(b *testing.B) {
 }
 
 func BenchmarkSubmitParallel(b *testing.B) {
+	cfg := Config{
+		NumWorkers: runtime.GOMAXPROCS(0),
+	}
+	cfg.Load(nil)
 	p, closePool := New(
-		Config{
-			NumWorkers: runtime.GOMAXPROCS(0),
-		},
+		cfg,
 		nil,
 	)
 	defer closePool()

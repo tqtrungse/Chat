@@ -1,18 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package activation
@@ -20,15 +8,21 @@ package activation
 import (
 	"time"
 
-	sharedevice "xxx/internal/shared/device"
-	sharedticket "xxx/internal/shared/ticket"
+	"xxx/internal/hub/core/transport"
+	"xxx/internal/shared/ticket"
 )
 
 type TicketVerifier interface {
-	Open(deviceID sharedevice.ID, ticket []byte) (*sharedticket.Ticket, error)
-	CheckExpiry(ticket *sharedticket.Ticket, now time.Time) error
+	// Verify authenticates IAM's signature and validates claims, expiry and device
+	// identity against a trusted, previously validated local Hub identity.
+	// Implementations must support concurrent calls with independently owned inputs.
+	Verify(wire []byte, expected transport.Identity) (*ticket.Info, error)
+
+	// CheckExpiry validates the ticket time window at the supplied time.
+	CheckExpiry(info *ticket.Info, now time.Time) error
 }
 
 type Signer interface {
-	Verify(identityPub, payload, sign []byte) error
+	// Verify checks the device signature over the supplied proof transcript.
+	Verify(identityPub, payload, signature []byte) error
 }

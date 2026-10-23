@@ -1,18 +1,7 @@
 /*
  * Copyright (c) 2019 The Gnet Authors. All rights reserved.
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package buffer
@@ -20,6 +9,7 @@ package buffer
 import (
 	"bytes"
 	crand "crypto/rand"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -235,6 +225,120 @@ func TestElastic_WriteTo_DrainsRingThenList(t *testing.T) {
 	want := append(append([]byte{}, ringPart...), listPart...)
 	require.True(t, bytes.Equal(out.Bytes(), want))
 	require.True(t, e.IsEmpty())
+}
+
+func TestElastic_WriteTo_DrainsListAfterRingIsConsumed(t *testing.T) {
+	for _, method := range []string{"Discard", "Read"} {
+		t.Run(method, func(t *testing.T) {
+			e, err := New(1024)
+			require.NoError(t, err)
+			t.Cleanup(e.Release)
+
+			ringPart := bytes.Repeat([]byte{'A'}, 1024)
+			listPart := []byte("hello")
+			_, err = e.Write(ringPart)
+			require.NoError(t, err)
+
+			_, err = e.Write(listPart)
+			require.NoError(t, err)
+
+			var consumed int
+			if method == "Discard" {
+				consumed, err = e.Discard(len(ringPart))
+			} else {
+				out := make([]byte, len(ringPart))
+				consumed, err = e.Read(out)
+				require.Equal(t, ringPart, out)
+			}
+			require.NoError(t, err)
+			require.Equal(t, len(ringPart), consumed)
+			require.True(t, e.ring.IsEmpty())
+			require.Equal(t, len(listPart), e.Buffered())
+
+			var out bytes.Buffer
+			n, err := e.WriteTo(&out)
+			require.NoError(t, err)
+			require.Equal(t, int64(len(listPart)), n)
+			require.Equal(t, listPart, out.Bytes())
+			require.True(t, e.IsEmpty())
+		})
+	}
+}
+
+func TestElastic_WriteTo_Empty(t *testing.T) {
+	e, err := New(1024)
+	require.NoError(t, err)
+	t.Cleanup(e.Release)
+
+	var out bytes.Buffer
+	n, err := e.WriteTo(&out)
+	require.NoError(t, err)
+	require.Zero(t, n)
+	require.Zero(t, out.Len())
+}
+
+type elasticWriterFunc func([]byte) (int, error)
+
+func (f elasticWriterFunc) Write(p []byte) (int, error) { return f(p) }
+
+func TestElastic_WriteTo_RetriesAfterPartialError(t *testing.T) {
+	for _, segment := range []string{"ring", "list"} {
+		t.Run(segment, func(t *testing.T) {
+			e, err := New(1024)
+			require.NoError(t, err)
+			t.Cleanup(e.Release)
+
+			ringPart := bytes.Repeat([]byte{'A'}, 1024)
+			listPart := []byte("hello")
+			_, err = e.Write(ringPart)
+			require.NoError(t, err)
+
+			_, err = e.Write(listPart)
+			require.NoError(t, err)
+
+			var (
+				out      bytes.Buffer
+				want     = append(append([]byte(nil), ringPart...), listPart...)
+				failAt   = 1
+				accepted = 2
+				calls    = 0
+			)
+
+			if segment == "list" {
+				failAt = 2
+				accepted += len(ringPart)
+			}
+
+			w := elasticWriterFunc(func(p []byte) (int, error) {
+				calls++
+				if calls == failAt {
+					n, err := out.Write(p[:min(2, len(p))])
+					if err != nil {
+						return n, err
+					}
+					return n, errBoom
+				}
+				return out.Write(p)
+			})
+
+			n, err := e.WriteTo(w)
+			require.ErrorIs(t, err, errBoom)
+			require.Equal(t, failAt, calls)
+			require.Equal(t, int64(accepted), n)
+			require.Equal(t, want[:accepted], out.Bytes())
+			require.Equal(t, len(want)-accepted, e.Buffered())
+
+			m, err := e.WriteTo(&out)
+			require.NoError(t, err)
+			require.Equal(t, int64(len(want)), n+m)
+			require.Equal(t, want, out.Bytes())
+			require.True(t, e.IsEmpty())
+
+			m, err = e.WriteTo(io.Discard)
+			require.NoError(t, err)
+			require.Zero(t, m)
+		})
+	}
 }
 
 // ---------------

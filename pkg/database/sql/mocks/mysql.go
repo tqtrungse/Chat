@@ -43,7 +43,7 @@ func NewMysql(t *testing.T) (database.DB, sqlmock.Sqlmock) {
 	}, mock
 }
 
-func (m *mysql) Open(_ context.Context, cfg database.Config) error {
+func (m *mysql) Open(_ context.Context, cfg database.Config) (func() error, error) {
 	gormDB, err := gorm.Open(
 		gormmysql.New(gormmysql.Config{
 			Conn:                      m.sqlDB,
@@ -54,12 +54,12 @@ func (m *mysql) Open(_ context.Context, cfg database.Config) error {
 		},
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	sqlDB, err := gormDB.DB()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	sqlDB.SetMaxIdleConns(cfg.Pool.MaxIdleConns)
 	sqlDB.SetMaxOpenConns(cfg.Pool.MaxOpenConns)
@@ -67,7 +67,7 @@ func (m *mysql) Open(_ context.Context, cfg database.Config) error {
 	sqlDB.SetConnMaxLifetime(cfg.Pool.ConnMaxLifetime)
 
 	m.db = gormDB
-	return nil
+	return m.Close, nil
 }
 
 func (m *mysql) Close() error {

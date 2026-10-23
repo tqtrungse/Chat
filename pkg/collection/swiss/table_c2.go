@@ -1,21 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
- * Parts of the erase/resize logic are adapted from hashbrown
- * (https://github.com/rust-lang/hashbrown), Copyright (c) 2016 Amanieu
- * d'Antras, used under the MIT license. See THIRD_PARTY_NOTICES.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package swiss
@@ -27,7 +12,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"xxx/pkg/backoff"
 	"xxx/pkg/cpu"
 	"xxx/pkg/generic"
 	"xxx/pkg/hash"
@@ -183,7 +167,7 @@ func (t *TableC2[K, V]) Set(key K, val V) (preVal V, existence bool) {
 		// If multiple threads join minus growthLeft and only one thread is resized,
 		// the other threads may not receive resizeWait immediately, leading to continuous retry.
 		// Add sleep to get resizeWait.
-		bkc := backoff.Cpu{}
+		contention := cpu.Backoff{}
 		for {
 			chPtr := t.resizeWait.Load()
 			if chPtr == nil {
@@ -191,7 +175,7 @@ func (t *TableC2[K, V]) Set(key K, val V) (preVal V, existence bool) {
 				if t.storage.Load() != storage {
 					break
 				}
-				bkc.Snooze()
+				contention.Snooze()
 				continue
 			}
 			<-*chPtr
@@ -281,7 +265,7 @@ func (t *TableC2[K, V]) Insert(key K, val V) (existence bool) {
 		// If multiple threads join minus growthLeft and only one thread is resized,
 		// the other threads may not receive resizeWait immediately, leading to continuous retry.
 		// Add sleep to get resizeWait.
-		bkc := backoff.Cpu{}
+		contention := cpu.Backoff{}
 		for {
 			chPtr := t.resizeWait.Load()
 			if chPtr == nil {
@@ -289,7 +273,7 @@ func (t *TableC2[K, V]) Insert(key K, val V) (existence bool) {
 				if t.storage.Load() != storage {
 					break
 				}
-				bkc.Snooze()
+				contention.Snooze()
 				continue
 			}
 			<-*chPtr

@@ -1,25 +1,15 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package connection
 
 import (
+	"sync"
 	"sync/atomic"
 
-	shareddevice "xxx/internal/shared/device"
+	"xxx/internal/shared/device"
 
 	"xxx/pkg/bit"
 	"xxx/pkg/collection/swiss"
@@ -32,8 +22,6 @@ const (
 	nShards = 8
 	mask    = nShards - 1
 	closed  = uint32(1) << 31
-
-	defaultMaxConns = 128000
 )
 
 // connectionRegistry owns the sharded device-to-connection map and its
@@ -43,22 +31,24 @@ type connectionRegistry struct {
 	meta atomic.Uint32
 	_    [cpu.CacheLineSize - 4]byte
 
-	conns    [nShards]*swiss.TableC2[shareddevice.ID, nio.Conn]
-	maxConns uint32
+	lifecycle sync.RWMutex
+	shardMtx  [nShards]sync.Mutex
+	conns     [nShards]*swiss.TableC2[device.ID, nio.Conn]
+	maxConns  uint32
 }
 
+// newConnectionRegistry allocates a sharded device map with the given connection capacity.
 func newConnectionRegistry(maxConns uint32) *connectionRegistry {
-	if maxConns == 0 {
-		maxConns = defaultMaxConns
-	}
-
-	r := &connectionRegistry{maxConns: maxConns}
 	nItemsPerShard := int(maxConns / nShards)
 	if maxConns%uint32(nShards) != 0 {
 		nItemsPerShard++
 	}
+
+	r := &connectionRegistry{
+		maxConns: maxConns,
+	}
 	for i := range nShards {
-		r.conns[i] = swiss.NewTableC2WithCap[shareddevice.ID, nio.Conn](
+		r.conns[i] = swiss.NewTableC2WithCap[device.ID, nio.Conn](
 			nItemsPerShard,
 			hash.Int64,
 		)
@@ -69,30 +59,39 @@ func newConnectionRegistry(maxConns uint32) *connectionRegistry {
 // Replace installs conn as the current connection for deviceID and returns
 // the prior connection, if any. The provided session becomes conn's context.
 func (r *connectionRegistry) Replace(
-	deviceID shareddevice.ID,
+	deviceID device.ID,
 	conn nio.Conn,
 	session *Session,
 ) (nio.Conn, error) {
-	if err := r.reserveSlot(); err != nil {
-		return nil, err
+	r.lifecycle.RLock()
+	defer r.lifecycle.RUnlock()
+
+	bucket := r.bucketFor(deviceID)
+	r.shardMtx[bucket].Lock()
+	defer r.shardMtx[bucket].Unlock()
+
+	if r.meta.Load()&closed != 0 {
+		return nil, ErrManagerClosed
+	}
+
+	old, exists := r.conns[bucket].Lookup(deviceID)
+	if !exists {
+		if err := r.reserveSlot(); err != nil {
+			return nil, err
+		}
 	}
 
 	conn.SetContext(session)
-	old, exists := r.conns[r.bucketFor(deviceID)].Set(deviceID, conn)
-	if !exists {
+	r.conns[bucket].Set(deviceID, conn)
+	if !exists || old == conn {
 		return nil, nil
 	}
 
-	if old == conn {
-		// Re-activation on the same connection consumes no additional slot.
-		r.releaseSlot()
-		return nil, nil
+	oldSession, ok := old.Context().(*Session)
+	if ok {
+		oldSession.close()
 	}
 
-	if oldSession, ok := old.Context().(*Session); ok && oldSession.close() {
-		// The old slot is inherited by this new connection.
-		r.releaseSlot()
-	}
 	return old, nil
 }
 
@@ -101,37 +100,52 @@ func (r *connectionRegistry) Replace(
 // no-op here.
 func (r *connectionRegistry) Remove(conn nio.Conn) (*Session, bool) {
 	session, ok := conn.Context().(*Session)
-	if !ok || !session.close() {
+	if !ok {
 		return nil, false
 	}
 
-	if current, exists := r.Lookup(session.deviceID); exists && current == conn {
-		r.conns[r.bucketFor(session.deviceID)].Delete(session.deviceID)
+	bucket := r.bucketFor(session.deviceID)
+	r.shardMtx[bucket].Lock()
+	defer r.shardMtx[bucket].Unlock()
+
+	if !session.close() {
+		return nil, false
+	}
+
+	current, exists := r.conns[bucket].Lookup(session.deviceID)
+	if exists && current == conn {
+		r.conns[bucket].Delete(session.deviceID)
 	}
 	r.releaseSlot()
+
 	return session, true
 }
 
-func (r *connectionRegistry) Lookup(deviceID shareddevice.ID) (nio.Conn, bool) {
+// Lookup returns the currently registered connection for the device, if any.
+// TableC2 synchronizes reads and resizing internally; shardMtx only serializes
+// multi-step registry mutations and is not required for this single lookup.
+func (r *connectionRegistry) Lookup(deviceID device.ID) (nio.Conn, bool) {
 	return r.conns[r.bucketFor(deviceID)].Lookup(deviceID)
 }
 
+// MaxConns returns the configured registry capacity.
 func (r *connectionRegistry) MaxConns() uint32 {
 	return r.maxConns
 }
 
+// CurConns returns the actual tracked connection count, including while closed.
 func (r *connectionRegistry) CurConns() uint32 {
-	current := r.meta.Load() &^ closed
-	if current >= r.maxConns {
-		return r.maxConns + 1
-	}
-	return current
+	return r.meta.Load() &^ closed
 }
 
+// Close marks the registry closed under the lifecycle lock so no new replacement can enter.
 func (r *connectionRegistry) Close() {
+	r.lifecycle.Lock()
+	defer r.lifecycle.Unlock()
 	r.meta.Or(closed)
 }
 
+// reserveSlot atomically claims capacity, rejecting admission when full or closed.
 func (r *connectionRegistry) reserveSlot() error {
 	for {
 		current := r.meta.Load()
@@ -147,10 +161,12 @@ func (r *connectionRegistry) reserveSlot() error {
 	}
 }
 
+// releaseSlot returns one previously reserved connection slot.
 func (r *connectionRegistry) releaseSlot() {
 	r.meta.Add(^uint32(0))
 }
 
-func (r *connectionRegistry) bucketFor(deviceID shareddevice.ID) int {
+// bucketFor hashes the device ID to its registry shard and transition lock.
+func (r *connectionRegistry) bucketFor(deviceID device.ID) int {
 	return int(bit.Mix64(deviceID.Uint64())) & mask
 }

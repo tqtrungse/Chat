@@ -1,429 +1,306 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package connection
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"testing"
 	"time"
 
-	pbpub "xxx/api/hub/v1/proto/gen/pub"
-	connmocks "xxx/internal/hub/core/connection/mocks"
+	pbpub "xxx/api/hub/v2/proto/gen/pub"
 	"xxx/internal/hub/core/protocol"
-	protocolmocks "xxx/internal/hub/core/protocol/mocks"
-	shareddevice "xxx/internal/shared/device"
-	sharedsession "xxx/internal/shared/session"
-
-	"xxx/pkg/nio"
+	"xxx/internal/shared/device"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
-	"google.golang.org/protobuf/proto"
 )
 
-func testKeys() sharedsession.Keys {
-	var k sharedsession.Keys
-	for i := range k.RecvEnc {
-		k.RecvEnc[i] = byte(i + 1)
-		k.SendEnc[i] = byte(i + 2)
-		k.RecvMac[i] = byte(i + 3)
-		k.SendMac[i] = byte(i + 4)
-	}
-	return k
+type testPresence struct {
+	add    func(any, error)
+	addErr error
+	dels   []device.ID
 }
 
-func newManagerForTest(t *testing.T, cfg Config) (*Manager, *connmocks.MockPresencePublisher) {
-	t.Helper()
+func (p *testPresence) Add(_ context.Context, _ device.ID, _ int64, cb func(any, error)) error {
+	p.add = cb
+	return p.addErr
+}
+
+func (p *testPresence) Del(_ context.Context, id device.ID, _ int64, cb func(error)) error {
+	p.dels = append(p.dels, id)
+	cb(nil)
+	return nil
+}
+
+func TestManagerRegistrationACKOrderRemovalAndCapacity(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	presence := connmocks.NewMockPresencePublisher(ctrl)
-	encoder := protocol.NewEncoder(protocolmocks.NewMockSecureChannel(ctrl))
-	return NewManager(cfg, presence, newTestLogger(t), encoder), presence
-}
+	t.Cleanup(ctrl.Finish)
 
-func TestManager_ForceCloseClosesConnection(t *testing.T) {
-	conn, state := newTestConn()
-	m, _ := newManagerForTest(
-		t,
-		Config{
-			MaxConns:       2,
-			TickerDuration: 5 * time.Second,
-		},
+	cfg := Config{
+		MaxConns:       2,
+		TickerDuration: 2 * time.Second,
+	}
+	cfg.Load(nil)
+
+	presence := new(testPresence)
+	manager := NewManager(
+		cfg,
+		presence,
+		newTestLogger(t),
+		protocol.NewEncoder(),
 	)
-	m.ForceClose(conn)
-	require.EqualValues(t, 1, state.closeCount.Load())
-}
+	defer manager.Close()
 
-func TestManager_ActivateConnRegistersAndPublishesPresence(t *testing.T) {
-	m, p := newManagerForTest(
-		t,
-		Config{
-			MaxConns:       2,
-			TickerDuration: 5 * time.Second,
-		},
-	)
-	conn, _ := newTestConn()
-	const id = shareddevice.ID(42)
-	keys := testKeys()
-
-	before := time.Now().Unix()
-	var gotTS int64
-	p.EXPECT().
-		Add(
-			gomock.Any(),
-			id,
-			gomock.Any(),
-			gomock.Any(),
-		).
-		DoAndReturn(func(_ context.Context, _ shareddevice.ID, ts int64, onResult func(any, error)) error {
-			gotTS = ts
-			onResult(nil, nil)
-			return nil
-		}).
-		Times(1)
-
-	var activated []shareddevice.ID
-	err := m.ActivateConn(
-		context.Background(),
-		id,
-		&keys,
-		conn,
-		func(got shareddevice.ID) {
-			activated = append(activated, got)
-		},
-	)
-	require.NoError(t, err)
-	require.EqualValues(t, uint32(1), m.registry.CurConns())
-
-	active, exists := m.registry.Lookup(id)
-	require.True(t, exists)
-	require.Same(t, conn, active)
-	require.Equal(t, keys, conn.Context().(*Session).keys)
-	require.Equal(t, 5*time.Second, m.Tick())
-	require.Equal(t, []shareddevice.ID{id}, activated)
-	require.GreaterOrEqual(t, gotTS, before)
-	require.LessOrEqual(t, gotTS, time.Now().Unix())
-}
-
-func TestManager_ActivateConnClosesConnectionWhenPresenceAddFails(t *testing.T) {
-	t.Run("async result error", func(t *testing.T) {
-		m, p := newManagerForTest(
-			t,
-			Config{
-				MaxConns:       1,
-				TickerDuration: time.Second,
-			},
-		)
-		conn, state := newTestConn()
-		keys := testKeys()
-		addErr := errors.New("cache unavailable")
-
-		p.EXPECT().
-			Add(
-				gomock.Any(),
-				shareddevice.ID(5),
-				gomock.Any(),
-				gomock.Any(),
-			).
-			DoAndReturn(func(_ context.Context, _ shareddevice.ID, _ int64, onResult func(any, error)) error {
-				onResult(nil, addErr)
-				return nil
-			}).
-			Times(1)
-
-		callbackCalled := false
-		require.NoError(
-			t,
-			m.ActivateConn(
-				context.Background(),
-				5,
-				&keys,
-				conn,
-				func(shareddevice.ID) { callbackCalled = true },
-			),
-		)
-		require.EqualValues(t, 1, state.closeCount.Load())
-		require.False(t, callbackCalled)
-	})
-
-	t.Run("submit error", func(t *testing.T) {
-		m, p := newManagerForTest(
-			t,
-			Config{
-				MaxConns:       1,
-				TickerDuration: time.Second,
-			},
-		)
-		conn, state := newTestConn()
-		keys := testKeys()
-
-		p.EXPECT().
-			Add(
-				gomock.Any(),
-				shareddevice.ID(6),
-				gomock.Any(),
-				gomock.Any(),
-			).
-			Return(errors.New("pool closed")).
-			Times(1)
-
-		callbackCalled := false
-		require.Error(
-			t,
-			m.ActivateConn(
-				context.Background(),
-				6,
-				&keys,
-				conn,
-				func(shareddevice.ID) { callbackCalled = true },
-			),
-		)
-		require.EqualValues(t, int32(1), state.closeCount.Load())
-		require.False(t, callbackCalled)
-	})
-}
-
-func TestManager_ActivateConnReplacesAndClosesOldConnection(t *testing.T) {
-	m, p := newManagerForTest(
-		t,
-		Config{MaxConns: 3},
-	)
-	oldConn, oldState := newTestConn()
-	newConn, _ := newTestConn()
-	const id = shareddevice.ID(77)
-	keys := testKeys()
-
-	noop := func(shareddevice.ID) {}
-	p.EXPECT().
-		Add(
-			gomock.Any(),
-			id,
-			gomock.Any(),
-			gomock.Any(),
-		).
-		DoAndReturn(func(_ context.Context, _ shareddevice.ID, _ int64, onResult func(any, error)) error {
-			onResult(nil, nil)
-			return nil
-		}).
-		Times(2)
-
-	require.NoError(t, m.ActivateConn(context.Background(), id, &keys, oldConn, noop))
-	require.NoError(t, m.ActivateConn(context.Background(), id, &keys, newConn, noop))
-	require.EqualValues(t, 1, oldState.closeCount.Load())
-	require.True(t, oldConn.Context().(*Session).isClosed())
-	require.Same(t, newConn, mustLookupConnection(t, m.registry, id))
-	require.Equal(t, defaultTickerDuration, m.Tick())
-}
-
-func TestManager_RemoveConnOnlyPublishesForRegisteredConnection(t *testing.T) {
-	m, p := newManagerForTest(
-		t,
-		Config{
-			MaxConns:       2,
-			TickerDuration: time.Second,
-		},
-	)
-	conn, _ := newTestConn()
-	other, _ := newTestConn()
-	const id = shareddevice.ID(61)
-	_, err := m.registry.Replace(
-		id,
-		conn,
-		newSession(
-			sharedsession.Keys{},
-			id,
-			time.Now().Unix(),
-		),
-	)
-	require.NoError(t, err)
-
-	// Delete correctly once for all 3 RemoveConn calls: `other` is not registered,
-	// The second call on `conn` is idempotent.
-	p.EXPECT().
-		Del(
-			gomock.Any(),
-			id,
-			gomock.Any(),
-			gomock.Any(),
-		).
-		DoAndReturn(func(_ context.Context, _ shareddevice.ID, _ int64, onResult func(error)) error {
-			onResult(nil)
-			return nil
-		}).
-		Times(1)
-
-	m.RemoveConn(context.Background(), other)
-	require.EqualValues(t, 1, m.registry.CurConns())
-
-	m.RemoveConn(context.Background(), conn)
-	require.EqualValues(t, 0, m.registry.CurConns())
-}
-
-func TestManager_DelegatesActivationLifecycleAndCapacity(t *testing.T) {
-	m, presence := newManagerForTest(
-		t,
-		Config{
-			MaxConns:       2,
-			TickerDuration: 250 * time.Millisecond,
-		},
-	)
-	const id = shareddevice.ID(0x91)
-	keys := testKeys()
-
-	require.EqualValues(t, 2, m.MaxConns())
-	require.Zero(t, m.CurConns())
-	require.Equal(t, 250*time.Millisecond, m.Tick())
-
-	presence.EXPECT().
-		Add(
-			gomock.Any(),
-			id,
-			gomock.Any(),
-			gomock.Any(),
-		).
-		DoAndReturn(func(_ context.Context, _ shareddevice.ID, _ int64, onResult func(any, error)) error {
-			onResult(nil, nil)
-			return nil
-		}).
-		Times(1)
-
-	presence.EXPECT().
-		Del(
-			gomock.Any(),
-			id,
-			gomock.Any(),
-			gomock.Any(),
-		).
-		DoAndReturn(func(_ context.Context, _ shareddevice.ID, _ int64, onResult func(error)) error {
-			onResult(nil)
-			return nil
-		}).
-		Times(1)
-
-	conn, _ := newTestConn()
-	var activated []shareddevice.ID
+	conn, connState := newTestConn(t, ctrl)
+	connState.OnClose = func() { manager.RemoveConn(t.Context(), conn) }
+	ch, peer := testTransport(t)
+	called := false
+	releases := 0
+	cleanup := func() {
+		releases++
+		require.True(t, conn.Context().(*Session).Active())
+		require.Len(t, connState.Writes, 1, "cleanup must follow ACK and activation")
+	}
 	require.NoError(
 		t,
-		m.ActivateConn(
-			context.Background(),
-			id,
-			&keys,
+		manager.ActivateConn(
+			t.Context(),
+			42,
+			ch,
 			conn,
-			func(got shareddevice.ID) { activated = append(activated, got) },
+			cleanup,
+			func(err error) {
+				require.NoError(t, err)
+				called = true
+				require.NoError(
+					t,
+					manager.CompleteActivation(conn, SendData{
+						MsgKind: pbpub.MsgKind_RESP_AUTHENTICATE,
+						Msg:     &pbpub.AuthenticateResp{},
+					}),
+				)
+			},
 		),
 	)
-	require.EqualValues(t, 1, m.CurConns())
-	require.Equal(t, []shareddevice.ID{id}, activated)
+	require.False(t, conn.Context().(*Session).Active())
+	require.Zero(t, releases)
+	require.ErrorIs(t, manager.AsyncSendConn(t.Context(), conn, SendData{}), ErrSessionClosed)
 
-	m.RemoveConn(context.Background(), conn)
-	require.Zero(t, m.CurConns())
+	presence.add(nil, nil)
+	require.False(t, called, "callback must run on owner loop")
 
-	toClose, closeState := newTestConn()
-	m.ForceClose(toClose)
-	require.EqualValues(t, 1, closeState.closeCount.Load())
+	connState.Loop.Drain()
+	require.True(t, called)
+	require.True(t, conn.Context().(*Session).Active())
+	require.Equal(t, 1, releases)
+	require.Nil(t, conn.Context().(*Session).activationCleanup)
+	require.Len(t, connState.Writes, 1)
 
-	// Sau Close, ActivateConn bị từ chối trước khi chạm presence (không có EXPECT Add nào nữa).
-	m.Close()
-	require.ErrorIs(
-		t,
-		m.ActivateConn(
-			context.Background(),
-			id,
-			&keys,
-			toClose,
-			func(shareddevice.ID) {},
-		),
-		ErrManagerClosed,
-	)
-	require.Zero(t, m.CurConns())
-}
-
-func TestManager_AsyncSendAndAsyncSendConnSerializeFrames(t *testing.T) {
-	m, _ := newManagerForTest(
-		t,
-		Config{MaxConns: 1}, // No EXPECT presence: the call will fail
-	)
-	conn, _ := newTestConn()
-	const id = shareddevice.ID(0xA1)
-	keys := testKeys()
-
-	_, err := m.registry.Replace(
-		id,
-		conn,
-		newSession(keys, id, time.Now().Unix()),
-	)
+	plain, err := peer.Decrypt(connState.Writes[0])
 	require.NoError(t, err)
 
-	var frames [][]byte
-	conn.asyncWriteFn = func(packet []byte, callback nio.AsyncCallback) error {
-		frames = append(frames, bytes.Clone(packet))
-		return callback(conn, nil)
-	}
+	ack, err := protocol.NewDecoder().DecodePayload(plain)
+	require.NoError(t, err)
+	require.Equal(t, pbpub.MsgKind_RESP_AUTHENTICATE, ack.Kind)
+	require.NoError(t, conn.Close())
 
-	first := &pbpub.BrokerForwardMsgReq{
-		SendDeviceId: 1,
-		RecvDeviceId: 2,
-		MsgId:        3,
-		ChannelId:    4,
-	}
-	second := &pbpub.BrokerForwardMsgReq{
-		SendDeviceId: 5,
-		RecvDeviceId: 6,
-		MsgId:        7,
-		ChannelId:    8,
-	}
-	require.NoError(
-		t,
-		m.AsyncSend(
-			false,
-			id,
-			SendData{
-				MsgType: pbpub.MsgType_REQ_BROKER_FORWARD_MSG,
-				Msg:     first,
-			},
-		),
-	)
-	require.NoError(
-		t,
-		m.AsyncSendConn(
-			false,
-			conn,
-			SendData{
-				MsgType: pbpub.MsgType_REQ_BROKER_FORWARD_MSG,
-				Msg:     second,
-			},
-		),
-	)
-	require.Len(t, frames, 2)
+	connState.Loop.Drain()
+	manager.RemoveConn(t.Context(), conn)
+	require.Equal(t, []device.ID{42}, presence.dels)
+	require.Zero(t, manager.CurConns())
+	require.Equal(t, 1, releases, "closing an active connection must not repeat cleanup")
+	require.Equal(t, 2*time.Second, manager.Tick())
+}
 
-	// Decode only uses HMAC, so SecureChannel is not called.
-	decoder := protocol.NewDecoder(protocolmocks.NewMockSecureChannel(gomock.NewController(t)))
-	for seq, want := range []*pbpub.BrokerForwardMsgReq{first, second} {
-		msg, _, code, err := decoder.Decode(&keys.SendMac, uint64(seq), frames[seq])
-		require.NoError(t, err)
-		require.Equal(t, pbpub.Code_SUCCESS, code)
-		require.True(t, proto.Equal(want, msg))
+func TestManagerIgnoresDelayedCallbackAfterCloseOrReplacement(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	for _, replace := range []bool{false, true} {
+		t.Run(
+			map[bool]string{
+				false: "closed",
+				true:  "replaced",
+			}[replace],
+			func(t *testing.T) {
+				cfg := Config{MaxConns: 3}
+				cfg.Load(nil)
+				presence := new(testPresence)
+				manager := NewManager(
+					cfg,
+					presence,
+					newTestLogger(t),
+					protocol.NewEncoder(),
+				)
+
+				first, firstState := newTestConn(t, ctrl)
+				firstState.OnClose = func() { manager.RemoveConn(t.Context(), first) }
+				calls := 0
+				releases := 0
+
+				require.NoError(
+					t,
+					manager.ActivateConn(
+						t.Context(),
+						42,
+						&testChannel{},
+						first,
+						func() { releases++ },
+						func(error) { calls++ },
+					),
+				)
+
+				late := presence.add
+				if replace {
+					next, _ := newTestConn(t, ctrl)
+					require.NoError(
+						t,
+						manager.ActivateConn(
+							t.Context(),
+							42,
+							&testChannel{},
+							next,
+							nil,
+							func(error) {},
+						),
+					)
+				} else {
+					require.NoError(t, first.Close())
+				}
+
+				firstState.Loop.Drain()
+				require.Equal(
+					t,
+					1,
+					releases,
+					"OnClose must release pending state even after replacement",
+				)
+
+				late(nil, nil)
+				firstState.Loop.Drain()
+				manager.RemoveConn(t.Context(), first)
+				require.Equal(t, 1, releases)
+				require.Zero(t, calls)
+				require.Empty(t, firstState.Writes)
+
+				if replace {
+					require.Empty(t, presence.dels, "old close must not delete replacement presence")
+				} else {
+					require.Equal(t, []device.ID{42}, presence.dels)
+				}
+			})
 	}
 }
 
-func mustLookupConnection(t *testing.T, registry *connectionRegistry, id shareddevice.ID) nio.Conn {
-	t.Helper()
-	conn, ok := registry.Lookup(id)
-	require.True(t, ok)
-	return conn
+func TestManagerPresenceErrorsCloseAndReleaseSession(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	for _, async := range []bool{false, true} {
+		presence := new(testPresence)
+		if !async {
+			presence.addErr = errors.New("unavailable")
+		}
+
+		cfg := Config{}
+		cfg.Load(nil)
+		manager := NewManager(
+			cfg,
+			presence,
+			newTestLogger(t),
+			protocol.NewEncoder(),
+		)
+
+		conn, connState := newTestConn(t, ctrl)
+		connState.OnClose = func() { manager.RemoveConn(t.Context(), conn) }
+		ch := new(testChannel)
+		releases := 0
+		err := manager.ActivateConn(
+			t.Context(),
+			42,
+			ch,
+			conn, func() { releases++ },
+			func(error) {},
+		)
+
+		if async {
+			require.NoError(t, err)
+			presence.add(nil, errors.New("unavailable"))
+		} else {
+			require.Error(t, err)
+		}
+
+		connState.Loop.Drain()
+		require.True(t, connState.Closed.Load())
+		require.True(t, ch.closed)
+		require.Zero(t, manager.CurConns())
+		require.Equal(t, 1, releases)
+	}
+}
+
+func TestManagerReleasesActivationWhenRegistryRejectsConnection(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	for _, isClosed := range []bool{false, true} {
+		t.Run(
+			map[bool]string{
+				false: "capacity",
+				true:  "closed manager",
+			}[isClosed],
+			func(t *testing.T) {
+				cfg := Config{MaxConns: 1}
+				cfg.Load(nil)
+
+				manager := NewManager(
+					cfg,
+					new(testPresence),
+					newTestLogger(t),
+					protocol.NewEncoder(),
+				)
+				first, _ := newTestConn(t, ctrl)
+
+				require.NoError(
+					t,
+					manager.ActivateConn(
+						t.Context(),
+						1,
+						&testChannel{},
+						first,
+						nil,
+						func(error) {}),
+				)
+
+				defer manager.RemoveConn(t.Context(), first)
+
+				if isClosed {
+					manager.Close()
+				}
+				conn, _ := newTestConn(t, ctrl)
+				ch := new(testChannel)
+				releases := 0
+				err := manager.ActivateConn(
+					t.Context(),
+					2,
+					ch, conn,
+					func() { releases++ },
+					func(error) {
+						require.Fail(t, "rejected connection must not complete registration")
+					},
+				)
+				if isClosed {
+					require.ErrorIs(t, err, ErrManagerClosed)
+				} else {
+					require.ErrorIs(t, err, ErrConnReachMax)
+				}
+				require.Equal(t, 1, releases)
+				require.True(t, ch.closed)
+				require.Nil(t, conn.Context())
+			},
+		)
+	}
 }

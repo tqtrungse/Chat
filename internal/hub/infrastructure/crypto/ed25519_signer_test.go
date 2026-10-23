@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package crypto
@@ -25,6 +14,7 @@ import (
 
 func genEd25519KeyPair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 	t.Helper()
+
 	pub, priv, err := ed25519.GenerateKey(nil)
 	require.NoError(t, err)
 	return pub, priv
@@ -34,20 +24,16 @@ func TestEd25519Signature_Verify_Valid(t *testing.T) {
 	pub, priv := genEd25519KeyPair(t)
 	payload := []byte("hello, device")
 	sig := ed25519.Sign(priv, payload)
-
-	v := NewEd25519Signer()
-	err := v.Verify(pub, payload, sig)
-	require.NoError(t, err)
+	signer := NewEd25519Signer()
+	require.NoError(t, signer.Verify(pub, payload, sig))
 }
 
 func TestEd25519Signature_Verify_TamperedPayload(t *testing.T) {
 	pub, priv := genEd25519KeyPair(t)
 	payload := []byte("hello, device")
 	sig := ed25519.Sign(priv, payload)
-
-	v := NewEd25519Signer()
-	err := v.Verify(pub, []byte("hello, devicE"), sig)
-	require.Error(t, err)
+	signer := NewEd25519Signer()
+	require.Error(t, signer.Verify(pub, []byte("hello, devicE"), sig))
 }
 
 func TestEd25519Signature_Verify_TamperedSignature(t *testing.T) {
@@ -56,10 +42,8 @@ func TestEd25519Signature_Verify_TamperedSignature(t *testing.T) {
 	sig := ed25519.Sign(priv, payload)
 	tampered := append([]byte(nil), sig...)
 	tampered[0] ^= 0xFF
-
-	v := NewEd25519Signer()
-	err := v.Verify(pub, payload, tampered)
-	require.Error(t, err)
+	signer := NewEd25519Signer()
+	require.Error(t, signer.Verify(pub, payload, tampered))
 }
 
 func TestEd25519Signature_Verify_WrongKey(t *testing.T) {
@@ -67,40 +51,32 @@ func TestEd25519Signature_Verify_WrongKey(t *testing.T) {
 	otherPub, _ := genEd25519KeyPair(t)
 	payload := []byte("hello, device")
 	sig := ed25519.Sign(priv, payload)
-
-	v := NewEd25519Signer()
-	err := v.Verify(otherPub, payload, sig)
-	require.Error(t, err)
+	signer := NewEd25519Signer()
+	require.Error(t, signer.Verify(otherPub, payload, sig))
 }
 
 func TestEd25519Signature_Verify_EmptyPayload(t *testing.T) {
+	var payload []byte
 	pub, priv := genEd25519KeyPair(t)
-	payload := []byte{}
 	sig := ed25519.Sign(priv, payload)
-
-	v := NewEd25519Signer()
-	err := v.Verify(pub, payload, sig)
-	require.NoError(t, err)
+	signer := NewEd25519Signer()
+	require.NoError(t, signer.Verify(pub, payload, sig))
 }
 
 func TestEd25519Signature_Verify_SignatureFromDifferentPayload(t *testing.T) {
 	pub, priv := genEd25519KeyPair(t)
 	sigForA := ed25519.Sign(priv, []byte("payload-A"))
-
-	v := NewEd25519Signer()
-	err := v.Verify(pub, []byte("payload-B"), sigForA)
-	require.Error(t, err)
+	signer := NewEd25519Signer()
+	require.Error(t, signer.Verify(pub, []byte("payload-B"), sigForA))
 }
 
 // TestEd25519Signature_Verify_MalformedSignatureLengthReturnsError checks that a
 // wrong-length signature returns an error instead of panicking.
 func TestEd25519Signature_Verify_MalformedSignatureLengthReturnsError(t *testing.T) {
 	pub, _ := genEd25519KeyPair(t)
-	v := NewEd25519Signer()
-
+	signer := NewEd25519Signer()
 	shortSig := []byte("not-a-valid-signature")
-	err := v.Verify(pub, []byte("payload"), shortSig)
-	require.Error(t, err)
+	require.Error(t, signer.Verify(pub, []byte("payload"), shortSig))
 }
 
 // TestEd25519Signature_Verify_MalformedPublicKeyLength is the companion
@@ -113,7 +89,7 @@ func TestEd25519Signature_Verify_MalformedSignatureLengthReturnsError(t *testing
 // Unlike a wrong-length signature, ed25519.Verify panics on a wrong-length public key.
 // Verify guards against it with a length check and returns ErrSignerInvalidPubKey.
 func TestEd25519Signature_Verify_MalformedPublicKeyLength(t *testing.T) {
-	v := NewEd25519Signer()
+	signer := NewEd25519Signer()
 	payload := []byte("payload")
 	sig := make([]byte, ed25519.SignatureSize) // valid length; contents don't matter here
 
@@ -128,12 +104,18 @@ func TestEd25519Signature_Verify_MalformedPublicKeyLength(t *testing.T) {
 		{"far too long", 100},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			badPub := make(ed25519.PublicKey, tt.size)
-			require.NotPanics(t, func() {
-				err := v.Verify(badPub, payload, sig)
-				require.Error(t, err)
-			})
-		})
+		t.Run(
+			tt.name,
+			func(t *testing.T) {
+				badPub := make(ed25519.PublicKey, tt.size)
+				require.NotPanics(
+					t,
+					func() {
+						err := signer.Verify(badPub, payload, sig)
+						require.Error(t, err)
+					},
+				)
+			},
+		)
 	}
 }

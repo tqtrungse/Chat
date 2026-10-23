@@ -1,22 +1,20 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package worker
 
-import "xxx/pkg/config"
+import (
+	"runtime"
+
+	"xxx/pkg/config"
+)
+
+const (
+	defaultGlobalCheckInterval = 64
+	defaultGlobalBatchSize     = 32
+)
 
 type Config struct {
 	// NumWorkers sets the maximum workers in pool.
@@ -47,10 +45,18 @@ type Config struct {
 }
 
 func (c *Config) Load(loader config.Loader) {
-	if loader == nil {
-		return
+	if loader != nil {
+		c.NumWorkers = loader.GetInt("WORKER_POOL_NUMBER_WORKERS")
+		c.GlobalCheckInterval = loader.GetUint32("WORKER_GLOBAL_CHECK_INTERVAL")
+		c.GlobalBatchSize = loader.GetInt("WORKER_GLOBAL_BATCH_SIZE")
 	}
-	c.NumWorkers = loader.GetInt("WORKER_POOL_NUMBER_WORKERS")
-	c.GlobalCheckInterval = loader.GetUint32("WORKER_GLOBAL_CHECK_INTERVAL")
-	c.GlobalBatchSize = loader.GetInt("WORKER_GLOBAL_BATCH_SIZE")
+	if c.NumWorkers <= 0 {
+		c.NumWorkers = runtime.GOMAXPROCS(0)
+	}
+	if c.GlobalCheckInterval == 0 {
+		c.GlobalCheckInterval = defaultGlobalCheckInterval
+	}
+	if c.GlobalBatchSize <= 0 {
+		c.GlobalBatchSize = defaultGlobalBatchSize
+	}
 }

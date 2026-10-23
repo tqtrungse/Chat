@@ -1,162 +1,203 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
-package activation
+package activation_test
 
 import (
-	"encoding/binary"
+	"bytes"
 	"errors"
 	"testing"
 	"time"
 
+	"xxx/internal/hub/core/activation"
 	"xxx/internal/hub/core/activation/mocks"
-	shareddevice "xxx/internal/shared/device"
-	sharedticket "xxx/internal/shared/ticket"
+	"xxx/internal/hub/core/auth"
+	"xxx/internal/hub/core/transport"
+	"xxx/internal/shared/ticket"
+	"xxx/internal/shared/ticket/tickettest"
+
+	slicepool "xxx/pkg/pool/slice"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )
 
-const testDeviceID shareddevice.ID = 0x12A
+func TestVerifyAuthorization(t *testing.T) {
+	verifierErr := errors.New("ticket rejected")
+	signatureErr := errors.New("proof rejected")
 
-func testTicket(deviceID shareddevice.ID) *sharedticket.Ticket {
-	ticket := &sharedticket.Ticket{
-		DeviceID:  deviceID,
-		ExpiresAt: time.Now().Add(time.Minute).Unix(),
+	type fixture struct {
+		claims    *ticket.Info
+		raw       []byte
+		signature []byte
+		binding   []byte
+		challenge []byte
+		message   []byte
+		hub       transport.Identity
 	}
-	for i := range ticket.Keys.RecvEnc {
-		ticket.Keys.RecvEnc[i] = byte(i + 1)
-		ticket.Keys.SendEnc[i] = byte(i + 2)
-		ticket.Keys.RecvMac[i] = byte(i + 3)
-		ticket.Keys.SendMac[i] = byte(i + 4)
-		ticket.ActivationKey[i] = byte(i + 5)
-		ticket.IdentityPub[i] = byte(i + 6)
+
+	expectTicket := func(verifier *mocks.MockTicketVerifier, f *fixture) *gomock.Call {
+		return verifier.
+			EXPECT().
+			Verify(f.raw, f.hub).
+			Return(f.claims, nil)
 	}
-	return ticket
-}
 
-func newTestToken(deviceID shareddevice.ID) []byte {
-	token := make([]byte, tokenSize)
-	binary.LittleEndian.PutUint64(token, deviceID.Uint64())
-	return token
-}
+	expectProof := func(signer *mocks.MockSigner, f *fixture, err error) *gomock.Call {
+		return signer.
+			EXPECT().
+			Verify(
+				f.claims.IdentityPub[:],
+				f.message,
+				f.signature,
+			).
+			Return(err)
+	}
 
-type testEnv struct {
-	svc      *Service
-	signer   *mocks.MockSigner
-	verifier *mocks.MockTicketVerifier
-}
+	invalidProofSetup := func(verifier *mocks.MockTicketVerifier, _ *mocks.MockSigner, f *fixture) {
+		expectTicket(verifier, f)
+	}
 
-func newTestEnv(t *testing.T) *testEnv {
-	t.Helper()
+	type testCase struct {
+		name       string
+		want       error
+		mutate     func(*fixture)
+		setupMocks func(*mocks.MockTicketVerifier, *mocks.MockSigner, *fixture)
+	}
+
+	tcs := []testCase{
+		{
+			name: "valid",
+			setupMocks: func(verifier *mocks.MockTicketVerifier, signer *mocks.MockSigner, f *fixture) {
+				gomock.InOrder(
+					expectTicket(verifier, f),
+					expectProof(signer, f, nil),
+				)
+			},
+		},
+		{
+			name: "verifier error",
+			want: verifierErr,
+			setupMocks: func(verifier *mocks.MockTicketVerifier, _ *mocks.MockSigner, f *fixture) {
+				verifier.
+					EXPECT().
+					Verify(f.raw, f.hub).
+					Return(nil, verifierErr)
+			},
+		},
+		{
+			name:   "invalid binding",
+			want:   auth.ErrDeviceProofInvalid,
+			mutate: func(f *fixture) { f.binding = nil }, setupMocks: invalidProofSetup,
+		},
+		{
+			name:   "invalid challenge",
+			want:   auth.ErrDeviceProofInvalid,
+			mutate: func(f *fixture) { f.challenge = nil }, setupMocks: invalidProofSetup,
+		},
+		{
+			name: "empty ticket", want: auth.ErrDeviceProofInvalid,
+			mutate: func(f *fixture) { f.raw = nil }, setupMocks: invalidProofSetup,
+		},
+		{
+			name: "signature error",
+			want: signatureErr,
+			setupMocks: func(verifier *mocks.MockTicketVerifier, signer *mocks.MockSigner, f *fixture) {
+				gomock.InOrder(
+					expectTicket(verifier, f),
+					expectProof(signer, f, signatureErr),
+				)
+			},
+		},
+	}
+
 	ctrl := gomock.NewController(t)
-	signer := mocks.NewMockSigner(ctrl)
+	t.Cleanup(ctrl.Finish)
+
 	verifier := mocks.NewMockTicketVerifier(ctrl)
-	return &testEnv{
-		svc:      NewService(signer, verifier),
-		signer:   signer,
-		verifier: verifier,
+	signer := mocks.NewMockSigner(ctrl)
+	svc := activation.NewService(signer, verifier)
+
+	for _, tc := range tcs {
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				f := fixture{
+					claims:    tickettest.New(),
+					binding:   bytes.Repeat([]byte{1}, auth.ChannelBindingSize),
+					challenge: bytes.Repeat([]byte{2}, auth.ChallengeSize),
+				}
+				f.raw, f.signature = tickettest.Authorization()
+				f.hub = transport.Identity{
+					Audience: f.claims.Audience, KeyID: f.claims.HubKeyID,
+					PublicKey: f.claims.HubPublicKey, Version: f.claims.WireVersion,
+				}
+
+				// Use the core proof contract as the expected input to the signer port.
+				message, err := auth.SigningMessage(f.binding, f.raw, f.challenge)
+				t.Cleanup(func() {
+					clear(message[:cap(message)])
+					slicepool.Put(message)
+				})
+				require.NoError(t, err)
+				f.message = message
+
+				if tc.mutate != nil {
+					tc.mutate(&f)
+				}
+				tc.setupMocks(verifier, signer, &f)
+
+				out, err := svc.VerifyAuthorization(
+					f.raw,
+					f.signature,
+					f.binding,
+					f.challenge,
+					f.hub,
+				)
+				if tc.want != nil {
+					require.ErrorIs(t, err, tc.want)
+					if tc.name == "signature error" {
+						require.ErrorIs(t, err, auth.ErrDeviceProofInvalid)
+					}
+					require.Nil(t, out)
+					return
+				}
+				require.NoError(t, err)
+				require.Same(t, f.claims, out)
+			},
+		)
 	}
 }
 
-func TestActivation_PrepareValidatesTokenBeforeOpeningTicket(t *testing.T) {
-	env := newTestEnv(t)
-	got, err := env.svc.Prepare(
-		[]byte{1},
-		[]byte("ticket"),
-		[]byte("sign"),
-	)
+func TestCheckExpiryDelegatesToVerifier(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
 
-	require.ErrorIs(t, err, ErrInvalid)
-	require.Nil(t, got)
-}
+	verifier := mocks.NewMockTicketVerifier(ctrl)
+	signer := mocks.NewMockSigner(ctrl)
+	svc := activation.NewService(signer, verifier)
+	claims := tickettest.New()
 
-func TestActivation_PrepareOpensAndVerifiesTicket(t *testing.T) {
-	env := newTestEnv(t)
-	ticket := testTicket(testDeviceID)
-	ticketBlob := []byte("ticket envelope")
-	signature := []byte("device signature")
+	for _, want := range []error{
+		nil,
+		errors.New("expired"),
+	} {
+		name := "valid"
+		if want != nil {
+			name = "expired"
+		}
 
-	env.verifier.
-		EXPECT().
-		Open(
-			testDeviceID,
-			gomock.Eq(ticketBlob),
-		).
-		Return(ticket, nil).
-		Times(1)
+		t.Run(name, func(t *testing.T) {
+			now := time.Unix(claims.ExpiresAt, 0)
 
-	env.signer.
-		EXPECT().
-		Verify(
-			gomock.Eq(ticket.IdentityPub[:]),
-			gomock.Eq(ticketBlob), // The signed payload is the ticket blob
-			gomock.Eq(signature),
-		).
-		Return(nil).
-		Times(1)
+			verifier.
+				EXPECT().
+				CheckExpiry(claims, now).
+				Return(want)
 
-	got, err := env.svc.Prepare(
-		newTestToken(testDeviceID),
-		ticketBlob,
-		signature,
-	)
-
-	require.NoError(t, err)
-	require.Same(t, ticket, got)
-	require.NotZero(t, got.Keys, "the ticket returned to the caller must still have the original key.")
-}
-
-func TestActivation_PrepareClearsTicketWhenSignatureFails(t *testing.T) {
-	env := newTestEnv(t)
-	wantErr := errors.New("bad device signature")
-	ticket := testTicket(testDeviceID)
-	ticketBlob := []byte("ticket")
-
-	env.verifier.
-		EXPECT().
-		Open(
-			testDeviceID,
-			gomock.Eq(ticketBlob),
-		).
-		Return(ticket, nil).
-		Times(1)
-
-	env.signer.
-		EXPECT().
-		Verify(
-			gomock.Any(),
-			gomock.Eq(ticketBlob),
-			gomock.Eq([]byte("bad")),
-		).
-		Return(wantErr).
-		Times(1)
-
-	got, err := env.svc.Prepare(
-		newTestToken(testDeviceID),
-		ticketBlob,
-		[]byte("bad"),
-	)
-
-	require.ErrorIs(t, err, wantErr)
-	require.Nil(t, got)
-	require.Zero(t, ticket.Keys)
-	require.Zero(t, ticket.ActivationKey)
-	require.Zero(t, ticket.IdentityPub)
-	require.Equal(t, testDeviceID, ticket.DeviceID)
-	require.NotZero(t, ticket.ExpiresAt)
+			require.ErrorIs(t, svc.CheckExpiry(claims, now), want)
+		})
+	}
 }

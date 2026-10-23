@@ -71,7 +71,7 @@ set_config() {
 }
 
 # Add or replace one ID:base64 entry while preserving other key IDs. This keeps
-# Hub's old verification/decryption keys available during local key rotation.
+# Hub's old verification keys available during local key rotation.
 set_key_entry() {
   local key="$1" id="$2" encoded="$3" config_file="$4"
   local current entry entry_id merged="" replaced=false
@@ -112,28 +112,6 @@ set_key_entry() {
   set_config "$key" "$merged" "$config_file"
 }
 
-merge_key_entries() {
-  local key="$1" source_entries="$2" config_file="$3" entry
-
-  while [[ -n "$source_entries" ]]; do
-    entry="${source_entries%%,*}"
-    if [[ "$source_entries" == *,* ]]; then
-      source_entries="${source_entries#*,}"
-    else
-      source_entries=""
-    fi
-
-    entry="${entry#"${entry%%[![:space:]]*}"}"
-    entry="${entry%"${entry##*[![:space:]]}"}"
-    [[ -z "$entry" ]] && continue
-    if [[ "$entry" != *:* ]]; then
-      echo "Invalid $key entry: $entry" >&2
-      return 1
-    fi
-    set_key_entry "$key" "${entry%%:*}" "${entry#*:}" "$config_file"
-  done
-}
-
 derive_ticket_signing_public_key() {
   local seed="$1"
   {
@@ -141,23 +119,6 @@ derive_ticket_signing_public_key() {
     printf '%s' "$seed" | openssl base64 -d -A
   } | openssl pkey -inform DER -pubout -outform DER | tail -c 32 | openssl base64 -A
 }
-
-# Generate the shared AES ticket key only when it is empty or still the
-# example placeholder. Existing keys are preserved so IAM and Hub stay in sync.
-TICKET_ENCRYPT_KEY_ID="$(get_config TICKET_ENCRYPT_CURRENT_KEY_ID)"
-TICKET_ENCRYPT_KEY_ID="${TICKET_ENCRYPT_KEY_ID:-1}"
-TICKET_ENCRYPT_KEYS="$(get_config TICKET_ENCRYPT_KEYS)"
-
-if [[ -z "$TICKET_ENCRYPT_KEYS" || "$TICKET_ENCRYPT_KEYS" == *"<"* ]]; then
-  TICKET_ENCRYPT_KEY="$(openssl rand -base64 32)"
-  set_config TICKET_ENCRYPT_KEYS "${TICKET_ENCRYPT_KEY_ID}:${TICKET_ENCRYPT_KEY}"
-  TICKET_ENCRYPT_KEYS="${TICKET_ENCRYPT_KEY_ID}:${TICKET_ENCRYPT_KEY}"
-  echo "Generated TICKET_ENCRYPT_KEYS (key id $TICKET_ENCRYPT_KEY_ID) in $CONFIG_FILE" >&2
-fi
-
-if [[ -z "$(get_config TICKET_ENCRYPT_CURRENT_KEY_ID)" ]]; then
-  set_config TICKET_ENCRYPT_CURRENT_KEY_ID "$TICKET_ENCRYPT_KEY_ID"
-fi
 
 # IAM signs tickets with an Ed25519 seed; Hub receives only its public key.
 # Keep configured signing keys stable, and generate a keypair only for the
@@ -196,10 +157,20 @@ if [[ ! -f "$HUB_CONFIG_FILE" ]]; then
   cp -- "$ROOT_DIR/cmd/hub/.example.env" "$HUB_CONFIG_FILE"
 fi
 
-set_config TICKET_ENCRYPT_CURRENT_KEY_ID "$TICKET_ENCRYPT_KEY_ID" "$HUB_CONFIG_FILE"
-merge_key_entries TICKET_ENCRYPT_KEYS "$TICKET_ENCRYPT_KEYS" "$HUB_CONFIG_FILE"
 set_key_entry TICKET_SIGNING_PUBLIC_KEYS "$TICKET_SIGNING_KEY_ID" "$TICKET_SIGNING_PUBLIC_KEY" "$HUB_CONFIG_FILE"
-echo "Synchronized IAM ticket keys to $HUB_CONFIG_FILE" >&2
+echo "Synchronized IAM public ticket verification keys to $HUB_CONFIG_FILE" >&2
+
+# Point IAM only at the public output of the separately provisioned Hub key.
+DESCRIPTOR_FILE="$(get_config HUB_NOISE_DESCRIPTOR_FILE)"
+if [[ -z "$DESCRIPTOR_FILE" ]]; then
+  DESCRIPTOR_FILE="$ROOT_DIR/cmd/hub/.local/hub-descriptor.json"
+  set_config HUB_NOISE_DESCRIPTOR_FILE "$DESCRIPTOR_FILE"
+fi
+if [[ ! -s "$DESCRIPTOR_FILE" ]]; then
+  echo "Provision the Hub keyring and public descriptor first; missing $DESCRIPTOR_FILE" >&2
+  echo "See docs/protocol/noise-v2.md. IAM must never receive the Hub private keyring." >&2
+  exit 1
+fi
 
 if [[ ! -s "$CERT_FILE" || ! -s "$KEY_FILE" ]]; then
   mkdir -p "$CERT_DIR"

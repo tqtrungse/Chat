@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package scylla
@@ -24,7 +13,7 @@ import (
 	"xxx/internal/hub/domain/channel"
 	"xxx/internal/hub/domain/message"
 	"xxx/internal/hub/infrastructure/scylla/model"
-	sharedevice "xxx/internal/shared/device"
+	"xxx/internal/shared/device"
 
 	"xxx/pkg/database/scylla"
 
@@ -68,7 +57,7 @@ func NewMsgReader(
 func (m *msgReader) ListOfflineMsgs(
 	ctx context.Context,
 	state []byte,
-	deviceID sharedevice.ID,
+	deviceID device.ID,
 	dayBucket message.Date,
 ) ([]message.Offline, []byte, error) {
 	m.buildQueryOne.Do(m.buildQuery)
@@ -92,7 +81,7 @@ func (m *msgReader) ListOfflineMsgs(
 		}
 		msgs = append(msgs, message.Offline{
 			DeviceID:       deviceID,
-			SenderDeviceID: sharedevice.ID(om.SenderDeviceID),
+			SenderDeviceID: device.ID(om.SenderDeviceID),
 			DayBucket:      dayBucket,
 			MsgID:          message.ID(om.MsgID),
 			ChannelID:      channel.ID(om.ChannelID),

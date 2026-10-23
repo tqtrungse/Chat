@@ -1,68 +1,63 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package activation
 
 import (
-	"encoding/binary"
+	"errors"
 	"time"
 
-	sharedevice "xxx/internal/shared/device"
-	sharedticket "xxx/internal/shared/ticket"
-)
+	"xxx/internal/hub/core/auth"
+	"xxx/internal/hub/core/transport"
+	"xxx/internal/shared/ticket"
 
-const tokenSize = 8
+	slicepool "xxx/pkg/pool/slice"
+)
 
 type Service struct {
 	signer         Signer
 	ticketVerifier TicketVerifier
 }
 
-func NewService(signer Signer, ticketVerifier TicketVerifier) *Service {
+// NewService creates an authorization service using the ticket and device-proof verifiers.
+func NewService(signer Signer, verifier TicketVerifier) *Service {
 	return &Service{
-		signer:         signer,
-		ticketVerifier: ticketVerifier,
+		signer,
+		verifier,
 	}
 }
 
-// Prepare opens the sealed ticket and verifies the device
-// signature, but does not register the connection. The caller must clear the
-// returned ticket and prove possession of its activation key before
-// activating.
-func (s *Service) Prepare(token, ticket, sign []byte) (*sharedticket.Ticket, error) {
-	if len(token) != tokenSize {
-		return nil, ErrInvalid
-	}
-
-	deviceID := binary.LittleEndian.Uint64(token)
-	t, err := s.ticketVerifier.Open(sharedevice.ID(deviceID), ticket)
+// VerifyAuthorization validates the signed ticket against the local Hub identity,
+// then verifies the device signature bound to the ticket, channel, and challenge.
+func (s *Service) VerifyAuthorization(
+	raw []byte,
+	signature []byte,
+	binding []byte,
+	challenge []byte,
+	hub transport.Identity,
+) (*ticket.Info, error) {
+	meta, err := s.ticketVerifier.Verify(raw, hub)
 	if err != nil {
 		return nil, err
 	}
 
-	// The signature authenticates the device identity. Freshness is provided
-	// separately by the per-connection challenge-response.
-	if err = s.signer.Verify(t.IdentityPub[:], ticket, sign); err != nil {
-		t.Clear()
+	msg, err := auth.SigningMessage(binding, raw, challenge)
+	if err != nil {
 		return nil, err
 	}
-	return t, nil
+	defer slicepool.Put(msg)
+
+	err = s.signer.Verify(meta.IdentityPub[:], msg, signature)
+	if err != nil {
+		// Preserve the verifier error while exposing a transport-independent reason.
+		return nil, errors.Join(auth.ErrDeviceProofInvalid, err)
+	}
+	return meta, nil
 }
 
-func (s *Service) CheckExpiry(ticket *sharedticket.Ticket, now time.Time) error {
-	return s.ticketVerifier.CheckExpiry(ticket, now)
+// CheckExpiry rechecks the ticket validity window after asynchronous work.
+func (s *Service) CheckExpiry(info *ticket.Info, now time.Time) error {
+	return s.ticketVerifier.CheckExpiry(info, now)
 }

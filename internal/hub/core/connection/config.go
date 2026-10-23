@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package connection
@@ -20,6 +9,11 @@ import (
 	"time"
 
 	"xxx/pkg/config"
+)
+
+const (
+	defaultTickerDuration = time.Second
+	defaultMaxConns       = 128000
 )
 
 type Config struct {
@@ -34,10 +28,16 @@ type Config struct {
 	MaxConns uint32
 }
 
+// Load reads connection settings when a loader is provided and fills unset values with defaults.
 func (c *Config) Load(loader config.Loader) {
-	if loader == nil {
-		return
+	if loader != nil {
+		c.TickerDuration = loader.GetDuration("CONNECTION_TICKER_DURATION")
+		c.MaxConns = loader.GetUint32("CONNECTION_MAX_CONNS")
 	}
-	c.TickerDuration = loader.GetDuration("ROUTER_TICKER_DURATION")
-	c.MaxConns = loader.GetUint32("ROUTER_MAX_CONNS")
+	if c.TickerDuration <= 0 {
+		c.TickerDuration = defaultTickerDuration
+	}
+	if c.MaxConns == 0 {
+		c.MaxConns = defaultMaxConns
+	}
 }

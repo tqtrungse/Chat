@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package bootstrap
@@ -29,15 +18,19 @@ import (
 	"xxx/internal/hub/core/connection"
 	"xxx/internal/hub/core/presence"
 	"xxx/internal/hub/core/protocol"
+	"xxx/internal/hub/core/rejection"
+	"xxx/internal/hub/infrastructure/authorization"
 	"xxx/internal/hub/infrastructure/crypto"
+	"xxx/internal/hub/infrastructure/noise"
 	"xxx/internal/hub/infrastructure/redis"
-	shareddevice "xxx/internal/shared/device"
+	"xxx/internal/shared/device"
 
 	"xxx/pkg/breaker"
 	"xxx/pkg/config"
 	"xxx/pkg/k8s"
 	"xxx/pkg/log"
 	workerpool "xxx/pkg/pool/worker"
+	"xxx/pkg/reject"
 
 	"go.uber.org/zap"
 )
@@ -45,10 +38,15 @@ import (
 // Run constructs hub's dependencies, starts its TCP API, and shuts it down
 // gracefully when ctx is canceled.
 func Run(ctx context.Context) (retErr error) {
-	logger, closeLogger := log.NewLogger(nil)
+	logger, closeLogger, err := log.NewLogger(nil)
+	if err != nil {
+		return fmt.Errorf("failed to create logger: %w", err)
+	}
+
 	defer func() {
-		if err := closeLogger(); err != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("failed close logger: %w", err))
+		closeErr := closeLogger()
+		if closeErr != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("failed close logger: %w", closeErr))
 		}
 	}()
 
@@ -56,7 +54,9 @@ func Run(ctx context.Context) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("failed to load hub config: %w", err)
 	}
-	if err = ctx.Err(); err != nil {
+
+	err = ctx.Err()
+	if err != nil {
 		return err
 	}
 
@@ -89,25 +89,48 @@ func Run(ctx context.Context) (retErr error) {
 	}
 
 	var (
-		cfgCb       breaker.Config
 		cfgPool     workerpool.Config
 		cfgManager  connection.Config
 		cfgSyncer   presence.Config
 		cfgActivate activateconn.Config
+		cfgDCacheCB breaker.Config
 	)
-	cfgCb.Load(loader)
 	cfgPool.Load(loader)
 	cfgManager.Load(loader)
 	cfgSyncer.Load(loader)
 	cfgActivate.Load(loader)
+	cfgDCacheCB = loadDistCacheCircuitBreakerConfig(loader)
 
 	ticketVerifier, err := loadTicketVerifier(loader)
 	if err != nil {
 		return err
 	}
 
+	var cfgNoise noise.Config
+	err = cfgNoise.Load(loader)
+	if err != nil {
+		return err
+	}
+
+	cfgActivate, err = resolveActivationConfig(cfgActivate, cfgNoise, cfgTcp, cfgManager)
+	if err != nil {
+		return err
+	}
+
+	keyring, err := noise.LoadKeyring(cfgNoise.KeyringFile, cfgNoise.CurrentKeyID)
+	if err != nil {
+		return err
+	}
+	defer keyring.Close()
+
+	factory, err := noise.NewFactory(keyring, cfgNoise.Audience, cfgTcp.MaxFrameBytes)
+	if err != nil {
+		return err
+	}
+
 	runCtx, cancelRun := context.WithCancelCause(ctx)
 	defer cancelRun(nil)
+
 	pool, closePool := workerpool.New(
 		cfgPool,
 		func(workerID int, recovered any, stack []byte) {
@@ -121,49 +144,62 @@ func Run(ctx context.Context) (retErr error) {
 	)
 	defer closePool()
 
-	dCache, startCache, closeCache, setCallbacks := redis.NewCache(hubID, cfgCache, logger, pool)
+	dCache := redis.NewCache(hubID, cfgCache, logger, pool)
 	cacheStarted := false
 	defer func() {
 		// Drain queued cache operations while Redis is still available, then
 		// remove this hub's presence using a fresh shutdown context.
 		cancelRun(nil)
 		closePool()
+
 		if cacheStarted {
-			shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			shutdownCtx, cancel := context.WithTimeout(
+				context.WithoutCancel(ctx),
+				10*time.Second,
+			)
+
 			err2 := dCache.ReapHub(shutdownCtx)
 			cancel()
+
 			if err2 != nil {
 				retErr = errors.Join(retErr, fmt.Errorf("failed to reap hub presence: %w", err2))
 			}
 		}
-		if err2 := closeCache(); err2 != nil {
+
+		err2 := dCache.Close()
+		if err2 != nil {
 			retErr = errors.Join(retErr, fmt.Errorf("failed to close cache: %w", err2))
 		}
 	}()
-	setCallbacks(
+
+	err = dCache.SetCallbacks(
 		redis.Callbacks{
 			OnHubDeleted:    func(uint64) {},
-			OnDeviceDeleted: func(uint64, shareddevice.ID) {},
+			OnDeviceDeleted: func(uint64, device.ID) {},
 			OnSelfReaped: func() {
 				logger.Error("hub registration was lost; shutting down", zap.Uint64("hubID", hubID))
 				cancelRun(errors.New("hub cache registration was lost"))
 			},
 		},
 	)
-	if err = startCache(runCtx); err != nil {
+	if err != nil {
+		return fmt.Errorf("failed to configure cache callbacks: %w", err)
+	}
+
+	err = dCache.Start(runCtx)
+	if err != nil {
 		return fmt.Errorf("failed to start cache: %w", err)
 	}
 	cacheStarted = true
 
-	channel := crypto.NewAesGcmChannel()
-	encoder := protocol.NewEncoder(channel)
-	decoder := protocol.NewDecoder(channel)
+	encoder := protocol.NewEncoder()
+	decoder := protocol.NewDecoder()
 	syncer := presence.NewSyncer(
 		runCtx,
 		cfgSyncer,
 		dCache,
 		breaker.New(
-			cfgCb,
+			cfgDCacheCB,
 			dCache.IsInfraError,
 			nil,
 		),
@@ -183,22 +219,39 @@ func Run(ctx context.Context) (retErr error) {
 		ticketVerifier,
 	)
 
+	verifyExecutor, closeVerifier := authorization.New(
+		cfgActivate.VerifyWorkers,
+		cfgActivate.MaxVerifyJobs,
+	)
+	defer closeVerifier()
+
+	rejections := reject.New[rejection.Reason](
+		logger,
+		5*time.Second,
+		rejection.Names(),
+	)
+
 	activator := activateconn.New(
 		cfgActivate,
 		logger,
-		encoder,
+		rejections,
 		decoder,
 		manager,
 		activationSvc,
+		factory,
+		verifyExecutor,
 	)
+
 	server := tcp.NewServer(
 		runCtx,
 		cfgTcp,
 		logger,
+		rejections,
 		activator,
 		nil,
 		manager.Close,
 	)
+
 	return runTCPServer(
 		runCtx,
 		server,
@@ -247,7 +300,8 @@ func runTCPServer(
 	}
 
 	logger.Info("shutting down hub TCP server")
-	if err := server.Shutdown(); err != nil {
+	err := server.Shutdown()
+	if err != nil {
 		return fmt.Errorf("failed to shutdown hub TCP server: %w", err)
 	}
 
@@ -260,8 +314,8 @@ func runTCPServer(
 }
 
 func tcpServerError(err error) error {
-	if err == nil {
-		return nil
+	if err != nil {
+		return fmt.Errorf("failed to run hub TCP server: %w", err)
 	}
-	return fmt.Errorf("failed to run hub TCP server: %w", err)
+	return nil
 }

@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package worker
@@ -21,7 +10,6 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"xxx/pkg/backoff"
 	"xxx/pkg/cpu"
 	"xxx/pkg/generic"
 	"xxx/pkg/os"
@@ -101,13 +89,13 @@ func (s *boundedSegment[V]) tryClaimPopN(want int) (start, claimed int) {
 
 func (s *boundedSegment[V]) read(idx int) V {
 	mapIdx := cpu.CacheRemap(uint32(idx), segmentSize, s.entrySize)
-	c := &s.buf[mapIdx]
-	b := backoff.Cpu{}
-	for !c.Cycle.Load() {
-		b.Snooze()
+	ent := &s.buf[mapIdx]
+	contention := cpu.Backoff{}
+	for !ent.Cycle.Load() {
+		contention.Snooze()
 	}
-	item := c.Value
-	c.Value = generic.ZeroValue[V]()
+	item := ent.Value
+	ent.Value = generic.ZeroValue[V]()
 	return item
 }
 

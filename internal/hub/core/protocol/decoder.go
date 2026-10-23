@@ -1,158 +1,86 @@
 /*
- * Copyright 2026 tqtrungse@gmail.com. All rights reserved.
- * Use of this pub code is governed by a BSD-style
- * license that can be found in the LICENSE file.
+ * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package protocol
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
+	"bytes"
 	"encoding/binary"
 
-	pbpub "xxx/api/hub/v1/proto/gen/pub"
-
-	slicepool "xxx/pkg/pool/slice"
+	pbpub "xxx/api/hub/v2/proto/gen/pub"
 
 	"google.golang.org/protobuf/proto"
 )
 
-type Decoder struct {
-	secureChannel SecureChannel
-	pbUnmarshal   proto.UnmarshalOptions
+type Decoder struct{}
+
+type Payload struct {
+	Kind    pbpub.MsgKind
+	Message proto.Message
+	Expand  []byte
 }
 
-func NewDecoder(secureChannel SecureChannel) *Decoder {
-	return &Decoder{
-		secureChannel: secureChannel,
-		pbUnmarshal:   proto.UnmarshalOptions{DiscardUnknown: true},
-	}
+// NewDecoder creates a decoder for the Hub application payload format.
+func NewDecoder() *Decoder {
+	return &Decoder{}
 }
 
-func (d *Decoder) DecodeActivationPacket(
-	plain []byte,
-	outReq *pbpub.ActiveConnReq,
-) error {
-	return d.pbUnmarshal.Unmarshal(plain, outReq)
-}
-
-func (d *Decoder) DecodeActivationProofPack(
-	plain []byte,
-	outReq *pbpub.ActiveConnProofReq,
-) error {
-	return d.pbUnmarshal.Unmarshal(plain, outReq)
-}
-
-func (d *Decoder) Decode(
-	hmacKey *[32]byte,
-	seq uint64,
-	packet []byte,
-) (proto.Message, []byte, pbpub.Code, error) {
-	// -------------------------------------------------------------------
-	// | Pkg Size |  Msg Type |   Pb Size  |  Pb  |  Expand  |    HMAC   |
-	// -------------------------------------------------------------------
-	// |  2 bytes |  2 bytes  |   2 bytes  | xxx  |    xxx   |  32 bytes |
-	// -------------------------------------------------------------------
-	if !hasValidFrame(packet, 36) {
-		return nil, nil, pbpub.Code_ERR_PKG_INVALID_SIZE, ErrPkgSizeInvalid
-	}
-
-	size := len(packet) - 32
-	sb := seqBytes(seq)
-	mac := hmac.New(sha256.New, hmacKey[:])
-	mac.Write(sb[:])
-	mac.Write(packet[:size])
-
-	if ok := hmac.Equal(mac.Sum(nil), packet[size:]); !ok {
-		return nil, nil, pbpub.Code_ERR_PKG_MODIFIED, ErrPkgModified
+// DecodePayload validates the payload header and decodes the typed protobuf message.
+// The returned message and expand bytes are independent of the input buffer.
+//
+// [msg_kind: 2][protobuf_length: 2][protobuf: n][expand: remaining]
+func (*Decoder) DecodePayload(plain []byte) (*Payload, error) {
+	if len(plain) < payloadHeaderSize || len(plain) > maxPlainSize {
+		return nil, ErrPkgSizeInvalid
 	}
 
 	var (
-		msgType = binary.LittleEndian.Uint16(packet[2:4])
-		pbSize  = binary.LittleEndian.Uint16(packet[4:6])
-		msg     proto.Message
+		kind   = pbpub.MsgKind(binary.LittleEndian.Uint16(plain))
+		pbSize = int(binary.LittleEndian.Uint16(plain[msgKindBytes:]))
 	)
-
-	if int(pbSize) > size-6 {
-		return nil, nil, pbpub.Code_ERR_PB_INVALID_SIZE, ErrPkgSizeInvalid
+	if pbSize > len(plain)-payloadHeaderSize {
+		return nil, ErrPkgSizeInvalid
 	}
 
-	switch pbpub.MsgType(msgType) {
-	case pbpub.MsgType_REQ_DIRECT_FORWARD_MSG:
-		msg = new(pbpub.DirectForwardMsgReq)
-
-	case pbpub.MsgType_REQ_BROKER_FORWARD_MSG:
-		msg = new(pbpub.BrokerForwardMsgReq)
-
-	default:
-		return nil, nil, pbpub.Code_ERR_MSG_INVALID_TYPE, ErrMsgTypeInvalid
+	msg := messageFor(kind)
+	if msg == nil {
+		return nil, ErrMsgKindInvalid
 	}
 
-	pbEnd := 6 + int(pbSize)
-	if err := d.pbUnmarshal.Unmarshal(packet[6:pbEnd], msg); err != nil {
-		return nil, nil, pbpub.Code_ERR_DESERIALIZE, err
-	}
-	return msg, packet[pbEnd:size], pbpub.Code_SUCCESS, nil
-}
-
-func (d *Decoder) DecodeS(
-	secretKey *[32]byte,
-	seq uint64,
-	packet []byte,
-) (proto.Message, []byte, pbpub.Code, error) {
-	// -------------------------------------------------------------------
-	// | Pkg Size | Msg Type |   Nonce   | Cipher Size | Cipher | Expand |
-	// -------------------------------------------------------------------
-	// | 2 bytes  | 2 bytes  |  12 bytes |   2 bytes   |   Pb   |   xxx  |
-	// -------------------------------------------------------------------
-	if !hasValidFrame(packet, 16) {
-		return nil, nil, pbpub.Code_ERR_PKG_INVALID_SIZE, ErrPkgSizeInvalid
-	}
-
-	var (
-		msgType = binary.LittleEndian.Uint16(packet[2:4])
-		msg     proto.Message
-	)
-
-	switch pbpub.MsgType(msgType) {
-	case pbpub.MsgType_REQ_SEND_MSG:
-		msg = new(pbpub.SendMsgReq)
-
-	default:
-		return nil, nil, pbpub.Code_ERR_MSG_INVALID_TYPE, ErrMsgTypeInvalid
-	}
-
-	cipherSize := binary.LittleEndian.Uint16(packet[16:18])
-	if !d.secureChannel.IsValid(int(cipherSize)) ||
-		int(cipherSize) > len(packet)-18 {
-		return nil, nil, pbpub.Code_ERR_CIPHER_INVALID_SIZE, ErrMsgCipherInvalid
-	}
-
-	cipherEnd := 18 + int(cipherSize)
-	aad := securePacketAAD(
-		binary.LittleEndian.Uint16(packet[:2]),
-		msgType,
-		cipherSize,
-		seq,
-		packet[cipherEnd:],
-	)
-	plain, err := d.secureChannel.Open(
-		secretKey,
-		(*[12]byte)(packet[4:16]),
-		packet[18:cipherEnd],
-		aad,
-	)
-	clear(aad)
-	slicepool.Put(aad)
-
+	err := proto.Unmarshal(plain[payloadHeaderSize:payloadHeaderSize+pbSize], msg)
 	if err != nil {
-		return nil, nil, pbpub.Code_ERR_DECRYPT, err
+		return nil, err
 	}
-	defer clear(plain)
 
-	if err = d.pbUnmarshal.Unmarshal(plain, msg); err != nil {
-		return nil, nil, pbpub.Code_ERR_DESERIALIZE, err
+	return &Payload{
+		Kind:    kind,
+		Message: msg,
+		Expand:  bytes.Clone(plain[payloadHeaderSize+pbSize:]),
+	}, nil
+}
+
+// messageFor allocates the protobuf message for a supported kind, or returns nil.
+func messageFor(kind pbpub.MsgKind) proto.Message {
+	switch kind {
+	case pbpub.MsgKind_REQ_AUTHENTICATE:
+		return new(pbpub.AuthenticateReq)
+	case pbpub.MsgKind_RESP_AUTHENTICATE:
+		return new(pbpub.AuthenticateResp)
+	case pbpub.MsgKind_REQ_SEND_MSG:
+		return new(pbpub.SendMsgReq)
+	case pbpub.MsgKind_RESP_SEND_MSG:
+		return new(pbpub.SendMsgResp)
+	case pbpub.MsgKind_REQ_ACK_RECV_MSG:
+		return new(pbpub.AckRecvMsgReq)
+	case pbpub.MsgKind_RESP_ACK_RECV_MSG:
+		return new(pbpub.AckRecvMsgResp)
+	case pbpub.MsgKind_REQ_DIRECT_FORWARD_MSG:
+		return new(pbpub.DirectForwardMsgReq)
+	case pbpub.MsgKind_REQ_BROKER_FORWARD_MSG:
+		return new(pbpub.BrokerForwardMsgReq)
+	default:
+		return nil
 	}
-	return msg, packet[cipherEnd:], pbpub.Code_SUCCESS, nil
 }

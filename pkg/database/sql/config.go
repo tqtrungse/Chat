@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package sql
@@ -23,21 +12,50 @@ import (
 	"xxx/pkg/config"
 )
 
+const (
+	defaultDialTimeout  = 3 * time.Second
+	defaultReadTimeout  = 10 * time.Second
+	defaultWriteTimeout = 5 * time.Second
+)
+
 type Config struct {
 	User         string
 	Passwd       string
 	DBName       string
 	PrimaryAddr  string
 	ReplicaAddrs []string
+	// DialTimeout limits connection establishment. Load defaults to 3s when
+	// the key is absent; an explicitly configured 0 disables the timeout.
+	DialTimeout time.Duration
+	// ReadTimeout limits network reads. Load defaults to 10s when the key is
+	// absent; an explicitly configured 0 disables the timeout.
+	ReadTimeout time.Duration
+	// WriteTimeout limits network writes. Load defaults to 5s when the key is
+	// absent; an explicitly configured 0 disables the timeout.
+	WriteTimeout time.Duration
 	Pool         PoolConfig
 }
 
 func (c *Config) Load(loader config.Loader) {
+	c.DialTimeout = defaultDialTimeout
+	c.ReadTimeout = defaultReadTimeout
+	c.WriteTimeout = defaultWriteTimeout
+
 	if loader == nil {
 		return
 	}
+	if loader.IsSet("SQL_DATABASE_DIAL_TIMEOUT") {
+		c.DialTimeout = loader.GetDuration("SQL_DATABASE_DIAL_TIMEOUT")
+	}
+	if loader.IsSet("SQL_DATABASE_READ_TIMEOUT") {
+		c.ReadTimeout = loader.GetDuration("SQL_DATABASE_READ_TIMEOUT")
+	}
+	if loader.IsSet("SQL_DATABASE_WRITE_TIMEOUT") {
+		c.WriteTimeout = loader.GetDuration("SQL_DATABASE_WRITE_TIMEOUT")
+	}
+
 	c.User = strings.TrimSpace(loader.GetString("SQL_DATABASE_USER"))
-	c.Passwd = strings.TrimSpace(loader.GetString("SQL_DATABASE_PASSWORD"))
+	c.Passwd = loader.GetString("SQL_DATABASE_PASSWORD")
 	c.DBName = strings.TrimSpace(loader.GetString("SQL_DATABASE_NAME"))
 	c.PrimaryAddr = strings.TrimSpace(loader.GetString("SQL_DATABASE_PRIMARY_ADDRESS"))
 	c.ReplicaAddrs = config.SplitList(loader.GetString("SQL_DATABASE_REPLICA_ADDRESSES"))

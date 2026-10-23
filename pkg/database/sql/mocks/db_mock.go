@@ -41,26 +41,13 @@ func (m *MockDB) EXPECT() *MockDBMockRecorder {
 	return m.recorder
 }
 
-// Close mocks base method.
-func (m *MockDB) Close() error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Close")
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Close indicates an expected call of Close.
-func (mr *MockDBMockRecorder) Close() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockDB)(nil).Close))
-}
-
 // Open mocks base method.
-func (m *MockDB) Open(ctx context.Context, cfg sql.Config) error {
+func (m *MockDB) Open(ctx context.Context, cfg sql.Config) (func() error, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Open", ctx, cfg)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(func() error)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Open indicates an expected call of Open.

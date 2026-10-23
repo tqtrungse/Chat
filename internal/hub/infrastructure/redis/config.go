@@ -1,26 +1,25 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package redis
 
 import (
+	"runtime"
 	"strings"
 	"time"
 
+	"xxx/internal/hub/core/presence"
+
 	"xxx/pkg/config"
+)
+
+const (
+	defaultDeviceBucketCount = uint16(4096)
+	defaultReapBatchSize     = uint16(presence.MaxBatchSize)
+	defaultHeartbeatInterval = 3 * time.Second
+	defaultHeartbeatTTL      = 10 * time.Second
 )
 
 type Config struct {
@@ -76,6 +75,8 @@ type Config struct {
 	// Redis for too long in one shot.
 	//
 	// Default: 500
+	//
+	// Values above presence.MaxBatchSize are clamped to that limit.
 	ReapBatchSize uint16
 
 	// DeviceBucketCount is how many bucket hashes ("devices:0".."devices:{N-1}")
@@ -104,18 +105,34 @@ type Config struct {
 }
 
 func (c *Config) Load(loader config.Loader) {
-	if loader == nil {
-		return
+	if loader != nil {
+		c.Addr = strings.TrimSpace(loader.GetString("DISTRIBUTED_CACHE_ADDRESS"))
+		c.Password = strings.TrimSpace(loader.GetString("DISTRIBUTED_CACHE_PASSWORD"))
+		c.PoolSize = loader.GetUint16("DISTRIBUTED_CACHE_POOL_SIZE")
+		c.MaxIdleConns = loader.GetUint16("DISTRIBUTED_CACHE_MAX_IDLE_CONNS")
+		c.MaxActiveConns = loader.GetUint16("DISTRIBUTED_CACHE_MAX_ACTIVE_CONNS")
+		c.DB = loader.GetUint16("DISTRIBUTED_CACHE_DB")
+		c.HeartbeatInterval = loader.GetDuration("DISTRIBUTED_CACHE_HEARTBEAT_INTERVAL")
+		c.HeartbeatTTL = loader.GetDuration("DISTRIBUTED_CACHE_HEARTBEAT_TTL")
+		c.ReapBatchSize = loader.GetUint16("DISTRIBUTED_CACHE_REAP_BATCH_SIZE")
+		c.DeviceBucketCount = loader.GetUint16("DISTRIBUTED_CACHE_DEVICE_BUCKET_COUNT")
+		c.VerifyExpiredNotifications = loader.GetBool("DISTRIBUTED_CACHE_VERIFY_EVENT_EXPIRED")
 	}
-	c.Addr = strings.TrimSpace(loader.GetString("DISTRIBUTED_CACHE_ADDRESS"))
-	c.Password = strings.TrimSpace(loader.GetString("DISTRIBUTED_CACHE_PASSWORD"))
-	c.PoolSize = loader.GetUint16("DISTRIBUTED_CACHE_POOL_SIZE")
-	c.MaxIdleConns = loader.GetUint16("DISTRIBUTED_CACHE_MAX_IDLE_CONNS")
-	c.MaxActiveConns = loader.GetUint16("DISTRIBUTED_CACHE_MAX_ACTIVE_CONNS")
-	c.DB = loader.GetUint16("DISTRIBUTED_CACHE_DB")
-	c.HeartbeatInterval = loader.GetDuration("DISTRIBUTED_CACHE_HEARTBEAT_INTERVAL")
-	c.HeartbeatTTL = loader.GetDuration("DISTRIBUTED_CACHE_HEARTBEAT_TTL")
-	c.ReapBatchSize = loader.GetUint16("DISTRIBUTED_CACHE_REAP_BATCH_SIZE")
-	c.DeviceBucketCount = loader.GetUint16("DISTRIBUTED_CACHE_DEVICE_BUCKET_COUNT")
-	c.VerifyExpiredNotifications = loader.GetBool("DISTRIBUTED_CACHE_VERIFY_EVENT_EXPIRED")
+	if c.PoolSize == 0 {
+		c.PoolSize = uint16(10 * runtime.GOMAXPROCS(0))
+	}
+	if c.HeartbeatInterval <= 0 {
+		c.HeartbeatInterval = defaultHeartbeatInterval
+	}
+	if c.HeartbeatTTL <= 0 {
+		c.HeartbeatTTL = defaultHeartbeatTTL
+	}
+	if c.ReapBatchSize == 0 {
+		c.ReapBatchSize = defaultReapBatchSize
+	}
+
+	c.ReapBatchSize = min(c.ReapBatchSize, uint16(presence.MaxBatchSize))
+	if c.DeviceBucketCount == 0 {
+		c.DeviceBucketCount = defaultDeviceBucketCount
+	}
 }

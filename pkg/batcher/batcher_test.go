@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package batcher
@@ -37,26 +26,25 @@ import (
 // Test helpers
 // ------------
 
-// testItem is the shared item type used across all tests. gid identifies the
-// producing goroutine, for tests that need to reason about per-caller order.
+// testItem is the shared item type for all tests.
+// gid identifies the producer goroutine for tests of per-caller order.
 type testItem struct {
 	key string
 	seq int
 	gid int
 }
 
-// hashOf is a plain deterministic hash over key -- New no longer owns
-// any internal randomization (the previous API's per-instance random seed is
-// gone), so any stable hash works here.
+// hashOf returns a deterministic hash of key.
+// New has no internal randomization or per-instance random seed. Any stable hash works here.
 func hashOf(i testItem) uint64 {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(i.key))
 	return h.Sum64()
 }
 
-// waitDone blocks until b.WaitDone() returns, or fails the test after timeout.
-// Callers must cancel the batcher's context before calling this -- WaitDone()
-// only returns once every partition loop has exited.
+// waitDone waits for b.WaitDone() or fails the test after timeout.
+// Cancel the batcher's context before a call to waitDone.
+// WaitDone() returns only after every partition loop exits.
 func waitDone(t *testing.T, b *Batcher[testItem], timeout time.Duration) {
 	t.Helper()
 	done := make(chan struct{})
@@ -64,6 +52,7 @@ func waitDone(t *testing.T, b *Batcher[testItem], timeout time.Duration) {
 		b.WaitDone()
 		close(done)
 	}()
+
 	select {
 	case <-done:
 	case <-time.After(timeout):
@@ -71,13 +60,10 @@ func waitDone(t *testing.T, b *Batcher[testItem], timeout time.Duration) {
 	}
 }
 
-// submitSync bridges the callback-based Submit API back into a single
-// blocking call, for tests that only care about the end-to-end outcome.
-// It handles two cancellation points itself: if the request is
-// rejected before being admitted, that error is returned directly; if it
-// has already been admitted, the request stays in the batch and is still
-// flushed regardless, but this call stops waiting for its OnResult once
-// ctx is done, returning ctx.Err().
+// submitSync waits for the result of an accepted request or ctx cancellation.
+// Before admission, submitSync returns rejection errors directly.
+// After admission, ctx cancellation does not remove the request from the batcher.
+// If the result and ctx.Done are ready together, the select can choose either case.
 func submitSync(ctx context.Context, b *Batcher[testItem], data testItem) error {
 	resultCh := make(chan error, 1)
 	if err := b.Submit(ctx, data, func(_ any, err error) {
@@ -93,9 +79,8 @@ func submitSync(ctx context.Context, b *Batcher[testItem], data testItem) error 
 	}
 }
 
-// echoFlush replies nil to every request in the batch, optionally recording
-// every batch it sees (guarded by a mutex) so tests can inspect batching
-// behavior after the fact.
+// echoFlush replies nil to every request in the batch.
+// echoFlush can record each batch under a mutex for later inspection by tests.
 func echoFlush(mu *sync.Mutex, batches *[][]testItem) func(ctx context.Context, reqs []Req[testItem]) {
 	return func(ctx context.Context, reqs []Req[testItem]) {
 		items := make([]testItem, len(reqs))
@@ -113,12 +98,11 @@ func echoFlush(mu *sync.Mutex, batches *[][]testItem) func(ctx context.Context, 
 	}
 }
 
-// newTestBatcher constructs a batcher against a fresh, independently
-// cancelable context. New starts every partition goroutine
-// immediately (there is no separate Start() anymore), so every batcher
-// constructed by a test -- including this helper -- must eventually be
-// torn down via cancel() + waitDone() to avoid leaking goroutines across
-// the test binary.
+// newTestBatcher creates a batcher with an independent cancelable context.
+// New starts every partition goroutine immediately. The API has no separate Start method.
+//
+// Call cancel() for each test batcher to prevent goroutine leaks.
+// Then call waitDone().
 func newTestBatcher(
 	t *testing.T,
 	batchSize int,
@@ -147,6 +131,19 @@ func newTestBatcher(
 // -----------
 // Logic tests
 // -----------
+
+func TestNewRejectsNilContext(t *testing.T) {
+	//nolint:staticcheck // intentionally passing nil
+	b, err := New[testItem](
+		nil,
+		Config[testItem]{
+			Hash:  hashOf,
+			Flush: func(context.Context, []Req[testItem]) {},
+		},
+	)
+	assert.Nil(t, b)
+	assert.ErrorIs(t, err, ErrCtxNil)
+}
 
 func TestNewBatcherConstructorDefaults(t *testing.T) {
 	noopFlush := func(ctx context.Context, reqs []Req[testItem]) {}
@@ -311,11 +308,10 @@ func TestPerKeyOrderPreservedAcrossBatches(t *testing.T) {
 	var mu sync.Mutex
 	var batches [][]testItem
 
-	// Single caller, sequential submits: each Submit blocks until its own
-	// result arrives, so batchSize can never actually be reached (never more
-	// than 1 item in flight at once). linger is the only path to completion
-	// here, so every batch ends up size 1 -- what we're checking is that 6
-	// flush calls in a row for the same key are observed in submitted order.
+	// A single caller submits requests sequentially and waits for each result.
+	// At most 1 item is active, so the batch cannot reach batchSize.
+	// Only linger completes each batch. Every batch has size 1.
+	// Verify that 6 consecutive flush calls for the same key preserve submission order.
 	b, cancel := newTestBatcher(t, 2, 15*time.Millisecond, 16, 1, echoFlush(&mu, &batches))
 	defer func() {
 		cancel()
@@ -343,8 +339,8 @@ func TestPerKeyOrderPreservedAcrossBatches(t *testing.T) {
 	}
 }
 
-// A later batch for the SAME partition must not enter flush until the
-// earlier batch's synchronous flush call has returned.
+// A later batch for the same partition cannot enter flush until the earlier batch's synchronous
+// flush call returns.
 func TestSamePartitionLaterBatchWaitsForEarlierFlush(t *testing.T) {
 	entered := make(chan int, 2)
 	release := make(chan struct{})
@@ -386,14 +382,13 @@ func TestSamePartitionLaterBatchWaitsForEarlierFlush(t *testing.T) {
 		errCh1 <- submitSync(sctx, b, testItem{key: "same", seq: 1})
 	}()
 
-	// Batch 1 must NOT enter flush while batch 0's flush is still blocked
-	// open -- the partition loop can only be inside one synchronous flush
-	// call at a time.
+	// Batch 1 cannot enter flush while batch 0's flush blocks.
+	// The partition loop executes at most one synchronous flush call at a time.
 	select {
 	case got := <-entered:
 		require.Failf(t, "", "batch 1 (seq=%d) entered flush before batch 0's flush returned", got)
 	case <-time.After(150 * time.Millisecond):
-		// expected: nothing happened yet.
+		// Batch 1 does not enter flush yet.
 	}
 
 	close(release)
@@ -409,23 +404,26 @@ func TestSamePartitionLaterBatchWaitsForEarlierFlush(t *testing.T) {
 	assert.NoError(t, <-errCh1)
 }
 
-// Different partitions must be free to flush concurrently -- no unintended
-// global serialization across partitions.
+// Different partitions can flush concurrently without global serialization.
 func TestDifferentPartitionsCanFlushConcurrently(t *testing.T) {
 	const numPartitions = 4
 
-	var enteredCount int32
-	barrierReached := make(chan struct{})
-	var once sync.Once
+	var (
+		once           sync.Once
+		enteredCount   atomic.Int32
+		barrierReached = make(chan struct{})
+	)
 
 	flush := func(ctx context.Context, reqs []Req[testItem]) {
-		if atomic.AddInt32(&enteredCount, 1) == int32(numPartitions) {
+		if enteredCount.Add(1) == int32(numPartitions) {
 			once.Do(func() { close(barrierReached) })
 		}
+
 		select {
 		case <-barrierReached:
 		case <-time.After(3 * time.Second):
 		}
+
 		for _, r := range reqs {
 			r.OnResult(nil, nil)
 		}
@@ -524,11 +522,89 @@ func TestSubmitOnClosedBatcherIsRejected(t *testing.T) {
 	ctx, c := context.WithTimeout(context.Background(), time.Second)
 	defer c()
 	err := submitSync(ctx, b, testItem{key: "late"})
-	assert.ErrorIs(t, err, ErrClosed)
+	var ce *CloseError
+	require.ErrorAs(t, err, &ce)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
-// Cancel BEFORE enqueue: the request must never reach the channel, and
-// therefore must never be flushed.
+func TestSubmitRejectsNilCallbackBeforeAdmission(t *testing.T) {
+	hashCalls := 0
+	b := &Batcher[testItem]{
+		rootCtx: t.Context(),
+		hash: func(testItem) uint64 {
+			hashCalls++
+			return 0
+		},
+		partitions: make([]partition[testItem], 1),
+	}
+
+	b.partitions[0].incoming = make(chan Req[testItem], 1)
+
+	err := b.Submit(
+		t.Context(),
+		testItem{key: "invalid"},
+		nil,
+	)
+	require.ErrorIs(t, err, ErrResultFuncNil)
+	require.Zero(t, hashCalls)
+	require.Zero(t, b.partitions[0].activeCount())
+	require.Empty(t, b.partitions[0].incoming)
+}
+
+func TestSubmitAlreadyCanceledWithQueueSpaceIsRejected(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		name := "canceled"
+		if deadline {
+			name = "deadline_exceeded"
+		}
+
+		t.Run(
+			name,
+			func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel()
+
+				want := context.Canceled
+				if deadline {
+					ctx, cancel = context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+					defer cancel()
+					want = context.DeadlineExceeded
+				}
+
+				hashCalls := 0
+				callbackCalls := 0
+				b := &Batcher[testItem]{
+					rootCtx: t.Context(),
+					hash: func(testItem) uint64 {
+						hashCalls++
+						return 0
+					},
+					partitions: make([]partition[testItem], 1),
+				}
+				// Leave space throughout the test: a select between enqueue and
+				// ctx.Done alone could otherwise accept an already canceled request.
+				b.partitions[0].incoming = make(chan Req[testItem], 32)
+				for range 32 {
+					err := b.Submit(
+						ctx,
+						testItem{key: "canceled"},
+						func(any, error) {
+							callbackCalls++
+						},
+					)
+					require.ErrorIs(t, err, want)
+				}
+				require.Zero(t, hashCalls)
+				require.Zero(t, callbackCalls)
+				require.Zero(t, b.partitions[0].activeCount())
+				require.Empty(t, b.partitions[0].incoming)
+			},
+		)
+	}
+}
+
+// A full queue prevents enqueue until the request context expires in this test.
+// Submit rejects the request, so Flush never receives it.
 func TestSubmitCanceledBeforeEnqueueNeverFlushed(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{}, 1)
@@ -537,30 +613,37 @@ func TestSubmitCanceledBeforeEnqueueNeverFlushed(t *testing.T) {
 	var flushedKeys []string
 
 	// batchSize=1, queueCap=1 (queue capacity 1), single partition.
-	b, cancel := newTestBatcher(t, 1, 0, 1, 1, func(ctx context.Context, reqs []Req[testItem]) {
-		select {
-		case started <- struct{}{}:
-		default:
-		}
-		if reqs[0].Data.key == "blocker" {
-			<-release
-		}
-		mu.Lock()
-		for _, r := range reqs {
-			flushedKeys = append(flushedKeys, r.Data.key)
-		}
-		mu.Unlock()
-		for _, r := range reqs {
-			r.OnResult(nil, nil)
-		}
-	})
+	b, cancel := newTestBatcher(
+		t,
+		1, 0, 1, 1,
+		func(ctx context.Context, reqs []Req[testItem]) {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+
+			if reqs[0].Data.key == "blocker" {
+				<-release
+			}
+
+			mu.Lock()
+			for _, r := range reqs {
+				flushedKeys = append(flushedKeys, r.Data.key)
+			}
+			mu.Unlock()
+
+			for _, r := range reqs {
+				r.OnResult(nil, nil)
+			}
+		},
+	)
 	defer func() {
 		cancel()
 		waitDone(t, b, 5*time.Second)
 	}()
 
-	// Step 1: "blocker" is pulled off the (now empty) channel and its flush
-	// blocks on `release`, occupying the partition loop.
+	// Step 1: The partition removes "blocker" from the channel, which becomes empty.
+	// The flush blocks on release and occupies the partition loop.
 	blockerErr := make(chan error, 1)
 	go func() {
 		ctx, c := context.WithTimeout(context.Background(), 5*time.Second)
@@ -573,20 +656,26 @@ func TestSubmitCanceledBeforeEnqueueNeverFlushed(t *testing.T) {
 		t.Fatal("flush never started; test setup is broken")
 	}
 
-	// Step 2: "filler" takes the only queue slot (channel is empty again
-	// right after blocker was pulled out of it).
+	// Step 2: "filler" takes the only queue slot after the partition removes "blocker".
 	fillerErr := make(chan error, 1)
 	go func() {
 		ctx, c := context.WithTimeout(context.Background(), 5*time.Second)
 		defer c()
 		fillerErr <- submitSync(ctx, b, testItem{key: "filler"})
 	}()
-	time.Sleep(100 * time.Millisecond) // let it actually land in the channel
 
-	// Step 3: queue is now genuinely full and nothing drains it (the
-	// partition goroutine is stuck inside blocker's flush) -- this Submit's
-	// enqueue-select must take the ctx.Done() branch; it can never reach
-	// the channel.
+	require.Eventually(
+		t,
+		func() bool {
+			return len(b.partitions[0].incoming) == 1
+		},
+		2*time.Second,
+		time.Millisecond,
+	)
+
+	// Step 3: The queue is full. The partition goroutine blocks inside the flush for "blocker".
+	// No goroutine drains the queue. This Submit's enqueue-select must take the ctx.Done() branch.
+	// The request cannot reach the channel.
 	enqueueCtx, enqueueCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer enqueueCancel()
 	err := submitSync(enqueueCtx, b, testItem{key: "cancel-me"})
@@ -597,7 +686,7 @@ func TestSubmitCanceledBeforeEnqueueNeverFlushed(t *testing.T) {
 	require.NoError(t, <-blockerErr)
 	require.NoError(t, <-fillerErr)
 
-	// System must still be healthy: a normal submit afterward must work.
+	// Verify that a subsequent normal submit succeeds.
 	ctx, c := context.WithTimeout(context.Background(), 2*time.Second)
 	defer c()
 	require.NoError(t, submitSync(ctx, b, testItem{key: "after"}))
@@ -608,24 +697,30 @@ func TestSubmitCanceledBeforeEnqueueNeverFlushed(t *testing.T) {
 	assert.ElementsMatch(t, []string{"blocker", "filler", "after"}, flushedKeys)
 }
 
-// Cancel AFTER enqueue: the request stays in the batch and is still
-// flushed, even though its caller already gave up waiting.
+// After queue acceptance, request context cancellation does not stop batch execution.
+// This test uses submitSync to wait for the result or cancellation.
 func TestSubmitCanceledAfterEnqueueStillFlushed(t *testing.T) {
 	var mu sync.Mutex
 	var flushedKeys []string
 	releaseFlush := make(chan struct{})
 
-	b, cancel := newTestBatcher(t, 1, 0, 4, 1, func(ctx context.Context, reqs []Req[testItem]) {
-		<-releaseFlush // hold the batch open long enough for the caller's ctx to expire
-		mu.Lock()
-		for _, r := range reqs {
-			flushedKeys = append(flushedKeys, r.Data.key)
-		}
-		mu.Unlock()
-		for _, r := range reqs {
-			r.OnResult(nil, nil)
-		}
-	})
+	b, cancel := newTestBatcher(
+		t,
+		1, 0, 4, 1,
+		func(ctx context.Context, reqs []Req[testItem]) {
+			<-releaseFlush // hold the batch open long enough for the caller's ctx to expire
+
+			mu.Lock()
+			for _, r := range reqs {
+				flushedKeys = append(flushedKeys, r.Data.key)
+			}
+			mu.Unlock()
+
+			for _, r := range reqs {
+				r.OnResult(nil, nil)
+			}
+		},
+	)
 	defer func() {
 		cancel()
 		waitDone(t, b, 5*time.Second)
@@ -639,7 +734,7 @@ func TestSubmitCanceledAfterEnqueueStillFlushed(t *testing.T) {
 		submitDone <- submitSync(submitCtx, b, testItem{key: "late-caller"})
 	}()
 
-	time.Sleep(150 * time.Millisecond) // let the caller's ctx expire first
+	<-submitCtx.Done()
 	close(releaseFlush)
 
 	select {
@@ -737,13 +832,247 @@ func TestShutdownWithEmptyPartitionsDoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestFlushPanicIsRecoveredAndPartitionSurvives(t *testing.T) {
+	var (
+		panics      atomic.Int32
+		ctx, cancel = context.WithCancel(context.Background())
+	)
+
+	b, err := New(ctx, Config[testItem]{
+		BatchSize:  2,
+		Partitions: 1,
+		Hash:       hashOf,
+		OnPanic:    func(*PanicError) { panics.Add(1) },
+		Flush: func(_ context.Context, reqs []Req[testItem]) {
+			if reqs[0].Data.key == "boom" {
+				reqs[0].OnResult(nil, nil) // answered before the panic
+				panic("kaboom")
+			}
+			for _, r := range reqs {
+				r.OnResult(nil, nil)
+			}
+		},
+	})
+	require.NoError(t, err)
+	defer func() {
+		cancel()
+		waitDone(t, b, 5*time.Second)
+	}()
+
+	errs := make(chan error, 2)
+	for _, k := range []string{"boom", "boom"} {
+		require.NoError(
+			t,
+			b.Submit(
+				t.Context(),
+				testItem{key: k},
+				func(_ any, err error) { errs <- err },
+			),
+		)
+	}
+
+	var nilCount, panicCount int
+	for range 2 {
+		select {
+		case err = <-errs:
+			if err == nil {
+				nilCount++
+			} else {
+				var pe *PanicError
+				require.ErrorAs(t, err, &pe)
+				require.NotEmpty(t, pe.Stack)
+				panicCount++
+			}
+
+		case <-time.After(2 * time.Second):
+			t.Fatal("callback not delivered after flush panic")
+		}
+	}
+	// The first request already has an answer before the panic. Prevent a duplicate answer.
+	require.Equal(t, 1, nilCount)
+	require.Equal(t, 1, panicCount)
+	require.EqualValues(t, 1, panics.Load())
+
+	// Verify that the partition still works after the panic.
+	ok := make(chan error, 2)
+	for range 2 {
+		require.NoError(
+			t,
+			b.Submit(
+				t.Context(),
+				testItem{key: "fine"},
+				func(_ any, err error) { ok <- err },
+			),
+		)
+	}
+	for range 2 {
+		require.NoError(t, <-ok)
+	}
+}
+
+func TestOnResultIsCalledAtMostOnce(t *testing.T) {
+	var (
+		calls       atomic.Int32
+		ctx, cancel = context.WithCancel(context.Background())
+	)
+
+	b, err := New(ctx, Config[testItem]{
+		BatchSize: 1, Partitions: 1, Hash: hashOf,
+		Flush: func(_ context.Context, reqs []Req[testItem]) {
+			for _, r := range reqs {
+				r.OnResult(nil, nil)
+				r.OnResult(nil, nil) // duplicate must be ignored
+			}
+		},
+	})
+	require.NoError(t, err)
+	defer func() {
+		cancel()
+		waitDone(t, b, 2*time.Second)
+	}()
+
+	done := make(chan struct{})
+	require.NoError(
+		t,
+		b.Submit(
+			t.Context(),
+			testItem{key: "x"},
+			func(any, error) {
+				if calls.Add(1) == 1 {
+					close(done)
+				}
+			},
+		),
+	)
+	<-done
+	time.Sleep(20 * time.Millisecond)
+	require.EqualValues(t, 1, calls.Load())
+}
+
+// Reuse of reqs must not expose data from a previous batch.
+func TestReqsReuseDoesNotLeakPreviousBatch(t *testing.T) {
+	var mu sync.Mutex
+	var seen [][]int
+	b, cancel := newTestBatcher(
+		t,
+		2,
+		time.Hour,
+		16,
+		1,
+		func(_ context.Context, reqs []Req[testItem]) {
+			ids := make([]int, len(reqs))
+			for i, r := range reqs {
+				ids[i] = r.Data.seq
+				r.OnResult(nil, nil)
+			}
+			mu.Lock()
+			seen = append(seen, ids)
+			mu.Unlock()
+		},
+	)
+	defer func() {
+		cancel()
+		waitDone(t, b, 5*time.Second)
+	}()
+
+	done := make(chan struct{}, 6)
+	for i := range 6 {
+		require.NoError(
+			t,
+			b.Submit(
+				t.Context(),
+				testItem{key: "k", seq: i},
+				func(any, error) { done <- struct{}{} },
+			),
+		)
+	}
+	for range 6 {
+		<-done
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, [][]int{{0, 1}, {2, 3}, {4, 5}}, seen)
+}
+
+// With no size or timer flush possible, root context cancellation leaves accepted requests
+// for shutdown.
+// Shutdown returns the context error through their callbacks without a Flush call.
+// This test does not cover cancellation between the context test and the Flush call.
+func TestShutdownAnswersPartialBatchAndNeverFlushesCanceledCtx(t *testing.T) {
+	var flushedWithCanceled atomic.Int32
+	b, cancel := newTestBatcher(
+		t,
+		100,
+		time.Hour,
+		16,
+		1,
+		func(ctx context.Context, reqs []Req[testItem]) {
+			if ctx.Err() != nil {
+				flushedWithCanceled.Add(1)
+			}
+			for _, r := range reqs {
+				r.OnResult(nil, nil)
+			}
+		},
+	)
+
+	const n = 5
+	errs := make(chan error, n)
+	for i := range n {
+		require.NoError(
+			t,
+			b.Submit(
+				t.Context(),
+				testItem{key: "k", seq: i},
+				func(_ any, err error) { errs <- err },
+			),
+		)
+	}
+
+	cancel()
+	waitDone(t, b, 5*time.Second)
+
+	for range n {
+		require.ErrorIs(t, <-errs, context.Canceled)
+	}
+	require.Zero(t, flushedWithCanceled.Load())
+}
+
+func TestShutdownErrorIsClosedAndCanceled(t *testing.T) {
+	b, cancel := newTestBatcher(
+		t,
+		100,
+		time.Hour,
+		16,
+		1,
+		func(context.Context, []Req[testItem]) {},
+	)
+	errCh := make(chan error, 1)
+	require.NoError(
+		t,
+		b.Submit(
+			t.Context(),
+			testItem{key: "a"},
+			func(_ any, err error) { errCh <- err },
+		),
+	)
+	cancel()
+	waitDone(t, b, 5*time.Second)
+
+	err := <-errCh
+	var ce *CloseError
+	require.ErrorAs(t, err, &ce)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 // -----------------------------------------
 // Concurrency / race tests (run with -race)
 // -----------------------------------------
 
-// Concurrent submit stress with a per-(key,goroutine) ordering assertion: a
-// single caller's own submissions for a given key can never be observed out
-// of order by flush, no matter how they interleave with other callers/keys.
+// Concurrent submit stress verifies order for each (key,goroutine) pair.
+// flush must observe each caller's submissions for a key in order, regardless of interleaving with
+// other callers or keys.
 func TestConcurrent_SubmitAllCompleteAndOrderedPerKey(t *testing.T) {
 	type flushRecord struct {
 		key string
@@ -823,7 +1152,7 @@ func TestConcurrent_SubmitAllCompleteAndOrderedPerKey(t *testing.T) {
 	}
 }
 
-func TestConcurrent_SubmitDuringShutdownNoDeadlockNoPanic(t *testing.T) {
+func TestConcurrent_SubmitDuringShutdownCompletesEveryAcceptedRequest(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	b, err := New(
 		ctx,
@@ -843,6 +1172,7 @@ func TestConcurrent_SubmitDuringShutdownNoDeadlockNoPanic(t *testing.T) {
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup
+	var accepted, completed, duplicateCallbacks, unexpectedErrors atomic.Int64
 	stop := make(chan struct{})
 
 	for g := range 30 {
@@ -856,9 +1186,33 @@ func TestConcurrent_SubmitDuringShutdownNoDeadlockNoPanic(t *testing.T) {
 					return
 				default:
 				}
-				sctx, c := context.WithTimeout(context.Background(), 500*time.Millisecond)
-				_ = submitSync(sctx, b, testItem{key: fmt.Sprintf("k%d-%d", g, i%5), seq: i})
+
+				var calls atomic.Int32
+				sctx, c := context.WithTimeout(
+					context.Background(),
+					500*time.Millisecond,
+				)
+				err2 := b.Submit(
+					sctx,
+					testItem{
+						key: fmt.Sprintf("k%d-%d", g, i%5),
+						seq: i,
+					}, func(any, error) {
+						completed.Add(1)
+						if calls.Add(1) != 1 {
+							duplicateCallbacks.Add(1)
+						}
+					},
+				)
+
 				c()
+
+				var ce *CloseError
+				if err2 == nil {
+					accepted.Add(1)
+				} else if !errors.As(err2, &ce) && !errors.Is(err2, context.DeadlineExceeded) {
+					unexpectedErrors.Add(1)
+				}
 				i++
 			}
 		}(g)
@@ -866,6 +1220,7 @@ func TestConcurrent_SubmitDuringShutdownNoDeadlockNoPanic(t *testing.T) {
 
 	time.Sleep(30 * time.Millisecond)
 	cancel()
+
 	time.Sleep(30 * time.Millisecond)
 	close(stop)
 
@@ -881,10 +1236,24 @@ func TestConcurrent_SubmitDuringShutdownNoDeadlockNoPanic(t *testing.T) {
 	}
 
 	waitDone(t, b, 5*time.Second)
+	require.Zero(t, unexpectedErrors.Load())
+	require.Zero(t, duplicateCallbacks.Load())
+	require.Positive(
+		t,
+		accepted.Load(),
+		"the test must admit requests before shutdown",
+	)
+	require.Equal(
+		t,
+		accepted.Load(),
+		completed.Load(),
+		"every accepted request must receive exactly one callback",
+	)
 }
 
-// Every request gets its own, verifiably-unique result -- proves the
-// Result channels are never mixed up under heavy concurrent batching.
+// Every request receives its own unique result.
+// This verifies that heavy concurrent batching preserves the correct result channel for each
+// request.
 func TestConcurrent_NoResultCrossWiringUnder(t *testing.T) {
 	flush := func(ctx context.Context, reqs []Req[testItem]) {
 		for _, r := range reqs {
@@ -970,8 +1339,8 @@ func TestStressManyPartitionsManyGoroutines(t *testing.T) {
 			for i := range perGoroutine {
 				timeout := 2 * time.Second
 				if rnd.Intn(20) == 0 {
-					// Occasionally use a very tight deadline to exercise the
-					// cancel-before/after-enqueue paths under real contention.
+					// Occasionally use a very short deadline to test cancellation before and after enqueue under
+					// contention.
 					timeout = time.Millisecond
 				}
 				sctx, c := context.WithTimeout(context.Background(), timeout)

@@ -1,5 +1,8 @@
 /cmd/iam/.local
+/cmd/hub/.local
+/deploy/k8s/.local/
 /deploy/root-ca/
 /deploy/redis/local/.local.env
 /deploy/nats/local/.local.env
 /deploy/scylla/local
+*.noise-keyring.json

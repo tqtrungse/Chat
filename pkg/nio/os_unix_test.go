@@ -1,19 +1,10 @@
 //go:build darwin || dragonfly || freebsd || netbsd || openbsd || linux
 
-// Copyright (c) 2019 The Gnet Authors. All rights reserved.
-// Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * Copyright (c) 2019 The Gnet Authors. All rights reserved.
+ * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
+ */
 
 package nio
 
@@ -32,41 +23,88 @@ import (
 	"xxx/pkg/log"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // NOTE: TestServeMulticast can fail with "write: no buffer space available" on Wi-Fi interface.
 func TestServeMulticast(t *testing.T) {
-	t.Run("IPv4", func(t *testing.T) {
-		// 224.0.0.169 is an unassigned address from the Local Network Control Block
-		// https://www.iana.org/assignments/multicast-addresses/multicast-addresses.xhtml#multicast-addresses-1
-		t.Run("udp-multicast", func(t *testing.T) {
-			testMulticast(t, "224.0.0.169:9991", false, false, -1, 10)
-		})
-		t.Run("udp-multicast-reuseport", func(t *testing.T) {
-			testMulticast(t, "224.0.0.169:9991", true, false, -1, 10)
-		})
-		t.Run("udp-multicast-reuseaddr", func(t *testing.T) {
-			testMulticast(t, "224.0.0.169:9991", false, true, -1, 10)
-		})
-	})
-	t.Run("IPv6", func(t *testing.T) {
-		iface, err := findLoopbackInterface()
-		assert.NoError(t, err)
-		if iface.Flags&net.FlagMulticast != net.FlagMulticast {
-			t.Skip("multicast is not supported on loopback interface")
-		}
-		// ff02::3 is an unassigned address from Link-Local Scope Multicast Addresses
-		// https://www.iana.org/assignments/ipv6-multicast-addresses/ipv6-multicast-addresses.xhtml#link-local
-		t.Run("udp-multicast", func(t *testing.T) {
-			testMulticast(t, fmt.Sprintf("[ff02::3%%%s]:9991", iface.Name), false, false, iface.Index, 10)
-		})
-		t.Run("udp-multicast-reuseport", func(t *testing.T) {
-			testMulticast(t, fmt.Sprintf("[ff02::3%%%s]:9991", iface.Name), true, false, iface.Index, 10)
-		})
-		t.Run("udp-multicast-reuseaddr", func(t *testing.T) {
-			testMulticast(t, fmt.Sprintf("[ff02::3%%%s]:9991", iface.Name), false, true, iface.Index, 10)
-		})
-	})
+	t.Run(
+		"IPv4",
+		func(t *testing.T) {
+			// 224.0.0.169 is an unassigned address from the Local Network Control Block
+			// https://www.iana.org/assignments/multicast-addresses/multicast-addresses.xhtml#multicast-addresses-1
+			t.Run(
+				"udp-multicast",
+				func(t *testing.T) {
+					testMulticast(t, "224.0.0.169:0", false, false, -1, 10)
+				},
+			)
+			t.Run(
+				"udp-multicast-reuseport",
+				func(t *testing.T) {
+					testMulticast(t, "224.0.0.169:0", true, false, -1, 10)
+				},
+			)
+			t.Run(
+				"udp-multicast-reuseaddr",
+				func(t *testing.T) {
+					testMulticast(t, "224.0.0.169:0", false, true, -1, 10)
+				},
+			)
+		},
+	)
+
+	t.Run(
+		"IPv6",
+		func(t *testing.T) {
+			iface, err := findLoopbackInterface()
+			require.NoError(t, err)
+			if iface.Flags&net.FlagMulticast != net.FlagMulticast {
+				t.Skip("multicast is not supported on loopback interface")
+			}
+			// ff02::3 is an unassigned address from Link-Local Scope Multicast Addresses
+			// https://www.iana.org/assignments/ipv6-multicast-addresses/ipv6-multicast-addresses.xhtml#link-local
+			t.Run(
+				"udp-multicast",
+				func(t *testing.T) {
+					testMulticast(
+						t,
+						fmt.Sprintf("[ff02::3%%%s]:0", iface.Name),
+						false,
+						false,
+						iface.Index,
+						10,
+					)
+				},
+			)
+			t.Run(
+				"udp-multicast-reuseport",
+				func(t *testing.T) {
+					testMulticast(
+						t,
+						fmt.Sprintf("[ff02::3%%%s]:0", iface.Name),
+						true,
+						false,
+						iface.Index,
+						10,
+					)
+				},
+			)
+			t.Run(
+				"udp-multicast-reuseaddr",
+				func(t *testing.T) {
+					testMulticast(
+						t,
+						fmt.Sprintf("[ff02::3%%%s]:0", iface.Name),
+						false,
+						true,
+						iface.Index,
+						10,
+					)
+				},
+			)
+		},
+	)
 }
 
 func findLoopbackInterface() (*net.Interface, error) {
@@ -82,27 +120,36 @@ func findLoopbackInterface() (*net.Interface, error) {
 	return nil, errors.New("no loopback interface")
 }
 
-func testMulticast(t *testing.T, addr string, reuseport, reuseaddr bool, index, nclients int) {
+func testMulticast(
+	t *testing.T,
+	addr string,
+	reuseport bool,
+	reuseaddr bool,
+	index int,
+	nclients int,
+) {
 	ts := &testMcastServer{
 		t:        t,
 		addr:     addr,
 		nclients: nclients,
 	}
 
-	logger, closeLogger := log.NewLogger(nil)
+	logger, closeLogger, err := log.NewLogger(nil)
+	require.NoError(t, err)
 	defer func() { _ = closeLogger() }()
 
 	options := []Option{
 		WithReuseAddr(reuseaddr),
 		WithReusePort(reuseport),
-		WithSocketRecvBuffer(2 * nclients * 1024), // enough space to receive messages from nclients to eliminate dropped packets
+		// enough space to receive messages from nclients to eliminate dropped packets
+		WithSocketRecvBuffer(2 * nclients * 1024),
 		WithTicker(true),
 		WithLogger(logger),
 	}
 	if index != -1 {
 		options = append(options, WithMulticastInterfaceIndex(index))
 	}
-	err := Run(ts, "udp://"+addr, options...)
+	err = Run(ts, "udp://"+addr, options...)
 	assert.NoError(t, err)
 }
 
@@ -116,15 +163,46 @@ type testMcastServer struct {
 	active   int32
 }
 
+// OnBoot runs before the ticker or traffic callbacks and publishes the actual
+// listener port to all clients without probing and releasing a temporary port.
+func (s *testMcastServer) OnBoot(eng Engine) Action {
+	addrs := eng.ListenerAddresses()
+	if !assert.Len(s.t, addrs, 1) {
+		return Shutdown
+	}
+
+	group, _, err := net.SplitHostPort(s.addr)
+	if !assert.NoError(s.t, err) {
+		return Shutdown
+	}
+
+	_, port, err := net.SplitHostPort(addrs[0])
+	if !assert.NoError(s.t, err) {
+		return Shutdown
+	}
+	if !assert.NotEqual(s.t, "0", port) {
+		return Shutdown
+	}
+	// Preserve the configured multicast group/zone if the OS reports a
+	// wildcard address for the bound listener.
+	s.addr = net.JoinHostPort(group, port)
+	return None
+}
+
 func (s *testMcastServer) startMcastClient() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c, err := net.Dial("udp", s.addr)
-	assert.NoError(s.t, err)
-	defer c.Close() //nolint:errcheck
+
+	socket, err := net.Dial("udp", s.addr)
+	if !assert.NoError(s.t, err) {
+		return
+	}
+	defer socket.Close() //nolint:errcheck
+
 	ch := make(chan []byte, 10000)
-	s.mcast.Store(c.LocalAddr().String(), ch)
+	s.mcast.Store(socket.LocalAddr().String(), ch)
 	duration := time.Duration((rand.Float64()*2+1)*float64(time.Second)) / 2
+
 	//logging.Debugf("test duration: %v", duration)
 	fmt.Printf("test duration: %v", duration)
 	start := time.Now()
@@ -132,14 +210,20 @@ func (s *testMcastServer) startMcastClient() {
 		reqData := make([]byte, 1024)
 		_, err = crand.Read(reqData)
 		assert.NoError(s.t, err)
-		_, err = c.Write(reqData)
+
+		_, err = socket.Write(reqData)
 		assert.NoError(s.t, err)
 		// Workaround for MacOS "write: no buffer space available" error messages
 		// https://developer.apple.com/forums/thread/42334
 		time.Sleep(time.Millisecond * 100)
 		select {
 		case respData := <-ch:
-			assert.Equalf(s.t, reqData, respData, "response mismatch, length of bytes: %d vs %d", len(reqData), len(respData))
+			assert.Equalf(
+				s.t,
+				reqData,
+				respData,
+				"response mismatch, length of bytes: %d vs %d", len(reqData), len(respData),
+			)
 		case <-ctx.Done():
 			assert.Fail(s.t, "timeout receiving message")
 			return
@@ -187,11 +271,14 @@ func (t *testMulticastBindServer) OnTick() (delay time.Duration, action Action) 
 func TestMulticastBindIPv4(t *testing.T) {
 	ts := &testMulticastBindServer{}
 	iface, err := findLoopbackInterface()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	logger, closeLogger := log.NewLogger(nil)
+	logger, closeLogger, err := log.NewLogger(nil)
+	require.NoError(t, err)
 	defer func() { _ = closeLogger() }()
-	err = Run(ts, "udp://224.0.0.169:9991",
+	err = Run(
+		ts,
+		"udp://224.0.0.169:0",
 		WithMulticastInterfaceIndex(iface.Index),
 		WithTicker(true),
 		WithLogger(logger),
@@ -202,11 +289,14 @@ func TestMulticastBindIPv4(t *testing.T) {
 func TestMulticastBindIPv6(t *testing.T) {
 	ts := &testMulticastBindServer{}
 	iface, err := findLoopbackInterface()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	logger, closeLogger := log.NewLogger(nil)
+	logger, closeLogger, err := log.NewLogger(nil)
+	require.NoError(t, err)
 	defer func() { _ = closeLogger() }()
-	err = Run(ts, fmt.Sprintf("udp://[ff02::3%%%s]:9991", iface.Name),
+	err = Run(
+		ts,
+		fmt.Sprintf("udp://[ff02::3%%%s]:0", iface.Name),
 		WithMulticastInterfaceIndex(iface.Index),
 		WithTicker(true),
 		WithLogger(logger),

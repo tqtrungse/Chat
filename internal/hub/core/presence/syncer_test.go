@@ -1,18 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package presence
@@ -23,13 +11,14 @@ import (
 	"testing"
 	"time"
 
-	presencemock "xxx/internal/hub/core/presence/mocks"
+	"xxx/internal/hub/core/presence/mocks"
 	"xxx/internal/hub/domain/message"
-	shareddevice "xxx/internal/shared/device"
+	"xxx/internal/shared/device"
 
 	"xxx/pkg/batcher"
 	"xxx/pkg/breaker"
 	breakermocks "xxx/pkg/breaker/mocks"
+	"xxx/pkg/jitter"
 	"xxx/pkg/log"
 	workerpool "xxx/pkg/pool/worker"
 
@@ -44,14 +33,18 @@ import (
 func newTestLogger(t *testing.T) *log.Logger {
 	t.Helper()
 
-	logger, closeLogger := log.NewLogger(nil)
+	logger, closeLogger, loggerErr := log.NewLogger(nil)
+	require.NoError(t, loggerErr)
 	t.Cleanup(func() { _ = closeLogger() })
 	return logger
 }
 
 func newTestPool(t *testing.T) (*workerpool.Pool, func()) {
 	t.Helper()
-	pool, closePool := workerpool.New(workerpool.Config{NumWorkers: 1}, nil)
+
+	poolConfig := workerpool.Config{NumWorkers: 1}
+	poolConfig.Load(nil)
+	pool, closePool := workerpool.New(poolConfig, nil)
 	t.Cleanup(closePool)
 	return pool, closePool
 }
@@ -62,21 +55,25 @@ func runThrough(ctx context.Context, fn func(context.Context) error) error {
 }
 
 type testEnv struct {
-	dCache         *presencemock.MockDistributedCache
+	dCache         *mocks.MockDistributedCache
 	circuitBreaker *breakermocks.MockCircuit
 }
 
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
+
 	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
 	return &testEnv{
-		dCache:         presencemock.NewMockDistributedCache(ctrl),
+		dCache:         mocks.NewMockDistributedCache(ctrl),
 		circuitBreaker: breakermocks.NewMockCircuit(ctrl),
 	}
 }
 
 func (e *testEnv) newSyncerCore(t *testing.T, retryAttempts uint32) *Syncer {
 	t.Helper()
+
 	return &Syncer{
 		dCache:            e.dCache,
 		circuitBreaker:    e.circuitBreaker,
@@ -90,6 +87,51 @@ func (e *testEnv) newSyncerCore(t *testing.T, retryAttempts uint32) *Syncer {
 // -----
 // retry
 // -----
+
+func TestSyncer_RetryDistCacheOperationRejectsInvalidJitter(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		base, cap time.Duration
+		want      error
+	}{
+		{
+			name: "negative_base",
+			base: -time.Second,
+			cap:  time.Second,
+			want: jitter.ErrBaseNegative,
+		},
+		{
+			name: "base_over_cap",
+			base: 2 * time.Second,
+			cap:  time.Second,
+			want: jitter.ErrBaseOverCap,
+		},
+	} {
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				var (
+					env    = newTestEnv(t)
+					syncer = env.newSyncerCore(t, 3)
+					called = false
+				)
+
+				syncer.backoffJitterBase = tc.base
+				syncer.backoffJitterCap = tc.cap
+				err := syncer.retryDistCacheOperation(
+					t.Context(),
+					func(context.Context) error {
+						called = true
+						return nil
+					},
+				)
+				require.ErrorIs(t, err, tc.want)
+				require.False(t, called)
+				// No breaker or Redis calls are expected for invalid configuration.
+			},
+		)
+	}
+}
 
 func TestSyncer_RetryDistCacheOperationRetriesOnlyInfrastructureErrors(t *testing.T) {
 	env := newTestEnv(t)
@@ -109,17 +151,22 @@ func TestSyncer_RetryDistCacheOperationRetriesOnlyInfrastructureErrors(t *testin
 	env.dCache.
 		EXPECT().
 		IsInfraError(gomock.Any()).
-		DoAndReturn(func(err error) bool { return errors.Is(err, transientErr) }).
+		DoAndReturn(func(err error) bool {
+			return errors.Is(err, transientErr)
+		}).
 		Times(2)
 
 	syncer := env.newSyncerCore(t, 3)
-	err := syncer.retryDistCacheOperation(context.Background(), func(context.Context) error {
-		attempts++
-		if attempts < 3 {
-			return transientErr
-		}
-		return nil
-	})
+	err := syncer.retryDistCacheOperation(
+		t.Context(),
+		func(context.Context) error {
+			attempts++
+			if attempts < 3 {
+				return transientErr
+			}
+			return nil
+		},
+	)
 
 	require.NoError(t, err)
 	require.Equal(t, 3, attempts)
@@ -147,7 +194,7 @@ func TestSyncer_RetryDistCacheOperationStopsForNonInfrastructureError(t *testing
 
 	syncer := env.newSyncerCore(t, 5)
 	err := syncer.retryDistCacheOperation(
-		context.Background(),
+		t.Context(),
 		func(context.Context) error {
 			attempts++
 			return wantErr
@@ -173,9 +220,9 @@ func TestSyncer_RetryDistCacheOperationStopsForOpenBreaker(t *testing.T) {
 
 	syncer := env.newSyncerCore(t, 3)
 	err := syncer.retryDistCacheOperation(
-		context.Background(),
+		t.Context(),
 		func(context.Context) error {
-			t.Fatal("operation must not run while breaker is open")
+			require.Fail(t, "operation must not run while breaker is open")
 			return nil
 		},
 	)
@@ -184,7 +231,7 @@ func TestSyncer_RetryDistCacheOperationStopsForOpenBreaker(t *testing.T) {
 
 func TestSyncer_RetryDistCacheOperationDoesNotRunAfterCancellation(t *testing.T) {
 	env := newTestEnv(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	// Nothing is EXPECTED: cb.Execute and IsInfraError are not called.
@@ -192,7 +239,7 @@ func TestSyncer_RetryDistCacheOperationDoesNotRunAfterCancellation(t *testing.T)
 	err := syncer.retryDistCacheOperation(
 		ctx,
 		func(context.Context) error {
-			t.Fatal("operation must not run for a canceled context")
+			require.Fail(t, "operation must not run for a canceled context")
 			return nil
 		},
 	)
@@ -212,10 +259,10 @@ func TestSyncer_RetryDistCacheOperationDoesNotRetryPanic(t *testing.T) {
 		).
 		DoAndReturn(runThrough).
 		Times(1)
-	syncer := env.newSyncerCore(t, 4)
 
+	syncer := env.newSyncerCore(t, 4)
 	err := syncer.retryDistCacheOperation(
-		context.Background(),
+		t.Context(),
 		func(context.Context) error {
 			attempts++
 			panic("cache panic")
@@ -249,10 +296,10 @@ func TestSyncer_FlushDeduplicatesAndSendsResults(t *testing.T) {
 		EXPECT().
 		BatchAddDevices(
 			gomock.Any(),
-			gomock.Eq([]shareddevice.ID{2}),
+			gomock.Eq([]device.ID{2}),
 		).
 		Return(
-			map[shareddevice.ID][]message.Date(nil),
+			map[device.ID][]message.Date(nil),
 			nil,
 		).
 		Times(1)
@@ -261,7 +308,7 @@ func TestSyncer_FlushDeduplicatesAndSendsResults(t *testing.T) {
 		EXPECT().
 		BatchDelDevices(
 			gomock.Any(),
-			gomock.Eq([]shareddevice.ID{1}),
+			gomock.Eq([]device.ID{1}),
 		).
 		Return(nil).
 		Times(1)
@@ -273,15 +320,23 @@ func TestSyncer_FlushDeduplicatesAndSendsResults(t *testing.T) {
 		idx int
 		err error
 	}
+
 	results := make(chan result, 3)
 	reqs := []batcher.Req[deviceOp]{
-		{Data: deviceOp{DeviceID: 1, Timestamp: 10, Op: addDeviceOp}, OnResult: func(_ any, err error) { results <- result{0, err} }},
-		{Data: deviceOp{DeviceID: 1, Timestamp: 11, Op: delDeviceOp}, OnResult: func(_ any, err error) { results <- result{1, err} }},
-		{Data: deviceOp{DeviceID: 2, Timestamp: 20, Op: addDeviceOp}, OnResult: func(_ any, err error) { results <- result{2, err} }},
+		batcher.NewReq(
+			deviceOp{DeviceID: 1, Timestamp: 10, Op: addDeviceOp},
+			func(_ any, err error) { results <- result{0, err} },
+		),
+		batcher.NewReq(
+			deviceOp{DeviceID: 1, Timestamp: 11, Op: delDeviceOp},
+			func(_ any, err error) { results <- result{1, err} },
+		),
+		batcher.NewReq(
+			deviceOp{DeviceID: 2, Timestamp: 20, Op: addDeviceOp},
+			func(_ any, err error) { results <- result{2, err} },
+		),
 	}
-
-	syncer.flush(context.Background(), reqs)
-
+	syncer.flush(t.Context(), reqs)
 	got := map[int]error{}
 	for range len(reqs) {
 		item := <-results
@@ -297,15 +352,18 @@ func TestSyncer_FlushResolvesDeleteWhenWorkerPoolIsClosed(t *testing.T) {
 	pool, closePool := newTestPool(t)
 	closePool()
 
-	// The pool is closed, so the delete will never reach the store/breaker: nothing will be EXPECTed.
+	// The pool is closed, so to delete will never reach the store/breaker: nothing will be EXPECTed.
 	syncer := env.newSyncerCore(t, 1)
 	syncer.pool = pool
 
 	var got error
 	reqs := []batcher.Req[deviceOp]{
-		{Data: deviceOp{DeviceID: 9, Timestamp: 1, Op: delDeviceOp}, OnResult: func(_ any, err error) { got = err }},
+		batcher.NewReq(
+			deviceOp{DeviceID: 9, Timestamp: 1, Op: delDeviceOp},
+			func(_ any, err error) { got = err },
+		),
 	}
-	syncer.flush(context.Background(), reqs)
+	syncer.flush(t.Context(), reqs)
 	require.ErrorIs(t, got, workerpool.ErrPoolClosed)
 }
 
@@ -313,17 +371,20 @@ func TestSyncer_FlushResolvesDeleteWhenWorkerPoolIsClosed(t *testing.T) {
 // constructor
 // -----------
 
-func TestNewSyncer_UsesRetryDefaults(t *testing.T) {
+func TestNewSyncer_UsesLoadedRetryDefaults(t *testing.T) {
 	env := newTestEnv(t)
 	pool, _ := newTestPool(t)
-	rootCtx, cancel := context.WithCancel(context.Background())
+	rootCtx, cancel := context.WithCancel(t.Context())
+
+	cfg := Config{
+		BatchSize: 1,
+		Linger:    time.Hour,
+	}
+	cfg.Load(nil)
 
 	syncer := NewSyncer(
 		rootCtx,
-		Config{
-			BatchSize: 1,
-			Linger:    time.Hour,
-		},
+		cfg,
 		env.dCache,
 		env.circuitBreaker,
 		newTestLogger(t),

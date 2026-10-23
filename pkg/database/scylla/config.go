@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package scylla
@@ -22,6 +11,15 @@ import (
 	"xxx/pkg/config"
 
 	"github.com/gocql/gocql"
+)
+
+const (
+	defaultNumRetries             = 3
+	defaultReconnectMaxRetries    = 3
+	defaultReconnectionJitterBase = 2 * time.Second
+	defaultReconnectionJitterCap  = 60 * time.Second
+	defaultConnectTimeout         = 11 * time.Second
+	defaultTimeout                = 11 * time.Second
 )
 
 type Config struct {
@@ -104,8 +102,14 @@ type Config struct {
 	// Default: gocql.Serial (use gocql.LocalSerial for multi-DC clusters)
 	SerialConsistency gocql.SerialConsistency
 
-	ReconnectionBackoffJitterBase time.Duration
-	ReconnectionBackoffJitterCap  time.Duration
+	// Default: 3
+	ReconnectMaxRetries uint16
+
+	// Default: 2s
+	ReconnectionJitterBase time.Duration
+
+	// Default: 60s
+	ReconnectionJitterCap time.Duration
 
 	// CAPath enables encryption in transit.
 	//
@@ -119,22 +123,50 @@ type Config struct {
 }
 
 func (c *Config) Load(loader config.Loader) {
-	if loader == nil {
-		return
+	if loader != nil {
+		c.Hosts = config.SplitList(loader.GetString("SCYLLA_DATABASE_HOSTS")) // If empty, open() will return ErrNilHosts
+		c.User = loader.GetString("SCYLLA_DATABASE_USER")
+		c.Passwd = loader.GetString("SCYLLA_DATABASE_PASSWORD")
+		c.Keyspace = loader.GetString("SCYLLA_DATABASE_KEYSPACE")
+		c.LocalDC = loader.GetString("SCYLLA_DATABASE_LOCAL_DC")
+		c.NumConns = loader.GetInt("SCYLLA_DATABASE_NUM_CONNS")
+		c.NumRetries = loader.GetInt("SCYLLA_DATABASE_NUM_RETRIES")
+		c.ConnectTimeout = loader.GetDuration("SCYLLA_DATABASE_CONNECT_TIMEOUT")
+		c.Timeout = loader.GetDuration("SCYLLA_DATABASE_TIMEOUT")
+		c.Consistency = gocql.Consistency(loader.GetUint16("SCYLLA_DATABASE_CONSISTENCY"))
+		c.SerialConsistency = gocql.SerialConsistency(loader.GetUint16("SCYLLA_DATABASE_SERIAL_CONSISTENCY"))
+		c.ReconnectMaxRetries = loader.GetUint16("SCYLLA_DATABASE_RECONNECTION_MAX_RETRIES")
+		c.ReconnectionJitterBase = loader.GetDuration("SCYLLA_DATABASE_RECONNECTION_JITTER_BASE")
+		c.ReconnectionJitterCap = loader.GetDuration("SCYLLA_DATABASE_RECONNECTION_JITTER_CAP")
+		c.CAPath = loader.GetString("SCYLLA_DATABASE_CA_PATH")
+		c.Compression = loader.GetBool("SCYLLA_DATABASE_COMPRESSION")
 	}
-	c.Hosts = config.SplitList(loader.GetString("SCYLLA_DATABASE_HOSTS")) // If empty, open() will return ErrNilHosts
-	c.User = loader.GetString("SCYLLA_DATABASE_USER")
-	c.Passwd = loader.GetString("SCYLLA_DATABASE_PASSWORD")
-	c.Keyspace = loader.GetString("SCYLLA_DATABASE_KEYSPACE")
-	c.LocalDC = loader.GetString("SCYLLA_DATABASE_LOCAL_DC")
-	c.NumConns = loader.GetInt("SCYLLA_DATABASE_NUM_CONNS")
-	c.NumRetries = loader.GetInt("SCYLLA_DATABASE_NUM_RETRIES")
-	c.ConnectTimeout = loader.GetDuration("SCYLLA_DATABASE_CONNECT_TIMEOUT")
-	c.Timeout = loader.GetDuration("SCYLLA_DATABASE_TIMEOUT")
-	c.Consistency = gocql.Consistency(loader.GetUint16("SCYLLA_DATABASE_CONSISTENCY"))
-	c.SerialConsistency = gocql.SerialConsistency(loader.GetUint16("SCYLLA_DATABASE_SERIAL_CONSISTENCY"))
-	c.ReconnectionBackoffJitterBase = loader.GetDuration("SCYLLA_DATABASE_RECONNECTION_BACKOFF_JITTER_BASE")
-	c.ReconnectionBackoffJitterCap = loader.GetDuration("SCYLLA_DATABASE_RECONNECTION_BACKOFF_JITTER_CAP")
-	c.CAPath = loader.GetString("SCYLLA_DATABASE_CA_PATH")
-	c.Compression = loader.GetBool("SCYLLA_DATABASE_COMPRESSION")
+	if c.NumConns <= 0 {
+		c.NumConns = 2
+	}
+	if c.NumRetries < 0 ||
+		(c.NumRetries == 0 && (loader == nil || loader.GetString("SCYLLA_DATABASE_NUM_RETRIES") == "")) {
+		c.NumRetries = defaultNumRetries
+	}
+	if c.ConnectTimeout <= 0 {
+		c.ConnectTimeout = defaultConnectTimeout
+	}
+	if c.Timeout <= 0 {
+		c.Timeout = defaultTimeout
+	}
+	if c.Consistency == 0 && (loader == nil || loader.GetString("SCYLLA_DATABASE_CONSISTENCY") == "") {
+		c.Consistency = gocql.Quorum
+	}
+	if c.SerialConsistency == 0 {
+		c.SerialConsistency = gocql.Serial
+	}
+	if c.ReconnectMaxRetries == 0 {
+		c.ReconnectMaxRetries = defaultReconnectMaxRetries
+	}
+	if c.ReconnectionJitterBase <= 0 {
+		c.ReconnectionJitterBase = defaultReconnectionJitterBase
+	}
+	if c.ReconnectionJitterCap <= 0 {
+		c.ReconnectionJitterCap = defaultReconnectionJitterCap
+	}
 }

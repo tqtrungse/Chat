@@ -1,18 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package presence
@@ -23,16 +11,27 @@ import (
 	"xxx/pkg/config"
 )
 
+const (
+	// MaxBatchSize bounds the device count submitted in one cache batch.
+	MaxBatchSize             = 500
+	defaultBatchSize         = 100
+	defaultLinger            = 50 * time.Millisecond
+	defaultRetryAttempts     = 3
+	defaultBackoffJitterBase = time.Second
+	defaultBackoffJitterCap  = 30 * time.Second
+)
+
 type Config struct {
 	// BatchSize is the maximum number of add/delete device requests accumulated before a partition
 	// flushes immediately.
 	//
 	// Default: 100
+	//
+	// Values above MaxBatchSize are clamped to MaxBatchSize.
 	BatchSize int
 
 	// Linger is the maximum time a non-empty partition batch waits for more
-	// add/delete device requests. A non-positive value disables the linger timer;
-	// such a batch is flushed only when BatchSize is reached or the batcher's context is canceled.
+	// add/delete device requests. Load replaces a non-positive value with the default.
 	//
 	// Default: 50ms
 	Linger time.Duration
@@ -53,13 +52,34 @@ type Config struct {
 	BackoffJitterCap time.Duration
 }
 
+// Load reads batching and retry settings when a loader is provided and applies defaults.
 func (c *Config) Load(loader config.Loader) {
-	if loader == nil {
-		return
+	if loader != nil {
+		c.BatchSize = loader.GetInt("PRESENCE_CACHE_BATCH_SIZE")
+		c.Linger = loader.GetDuration("PRESENCE_CACHE_LINGER")
+		c.RetryAttempts = loader.GetUint32("PRESENCE_CACHE_RETRY_ATTEMPT")
+		c.BackoffJitterBase = loader.GetDuration("PRESENCE_SYNC_BACKOFF_JITTER_BASE")
+		c.BackoffJitterCap = loader.GetDuration("PRESENCE_SYNC_BACKOFF_JITTER_CAP")
 	}
-	c.BatchSize = loader.GetInt("PRESENCE_CACHE_BATCH_SIZE")
-	c.Linger = loader.GetDuration("PRESENCE_CACHE_LINGER")
-	c.RetryAttempts = loader.GetUint32("PRESENCE_CACHE_RETRY_ATTEMPT")
-	c.BackoffJitterBase = loader.GetDuration("PRESENCE_SYNC_BACKOFF_JITTER_BASE")
-	c.BackoffJitterCap = loader.GetDuration("PRESENCE_SYNC_BACKOFF_JITTER_CAP")
+	c.BatchSize = normalizeBatchSize(c.BatchSize)
+	if c.Linger <= 0 {
+		c.Linger = defaultLinger
+	}
+	if c.RetryAttempts == 0 {
+		c.RetryAttempts = defaultRetryAttempts
+	}
+	if c.BackoffJitterBase <= 0 {
+		c.BackoffJitterBase = defaultBackoffJitterBase
+	}
+	if c.BackoffJitterCap <= 0 {
+		c.BackoffJitterCap = defaultBackoffJitterCap
+	}
+}
+
+// normalizeBatchSize applies the default and upper bound for a cache batch.
+func normalizeBatchSize(size int) int {
+	if size <= 0 {
+		return defaultBatchSize
+	}
+	return min(size, MaxBatchSize)
 }

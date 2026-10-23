@@ -7,7 +7,7 @@ access token audience.
 Start Keycloak from the repository root:
 
 ```sh
-docker compose -f infrastructure/auth/local/keycloak/docker-compose.yaml up
+docker compose -f deploy/auth/local/keycloak/docker-compose.yaml up
 ```
 
 Keycloak listens on `http://localhost:8080`. Its development admin account is
@@ -49,7 +49,7 @@ openssl req -x509 -newkey rsa:2048 -nodes \
   -days 2 -subj '/CN=localhost'
 ```
 
-Then start IAM with `IAM_CONFIG_FILE=cmd/iam/.prod.env`, the three OIDC
+Then start IAM with `IAM_CONFIG_FILE=cmd/iam/.local/.config.env`, the three OIDC
 variables above, and `HTTP_SERVER_CERT_FILE=/tmp/iam-local/iam.crt` plus
 `HTTP_SERVER_KEY_FILE=/tmp/iam-local/iam.key`. The current config file leaves
 `SQL_DATABASE_NAME` empty, so set it to an existing local database before
@@ -60,8 +60,21 @@ an empty request body. IAM should return `400 invalid client request`; a
 missing or invalid token should return `401`:
 
 ```sh
-curl -k -i -X POST https://localhost:2008/iam/v1/exchange-key \
+curl -k -i -X POST https://localhost:2008/iam/v2/connection-ticket \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H 'Content-Type: application/json' \
   --data '{}'
 ```
+
+For a device owned by the token subject, request a signed connection ticket:
+
+```sh
+curl -k -X POST https://localhost:2008/iam/v2/connection-ticket \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"device_id":"42"}'
+```
+
+Provision the Hub keyring separately and set `HUB_NOISE_DESCRIPTOR_FILE` to its
+public descriptor. No client X25519 key is sent to IAM. The response contains
+`ticket` and `hub`; use the trusted Hub public key for Noise NK over TCP.

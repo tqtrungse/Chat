@@ -3,20 +3,7 @@
 /*
  * Copyright (c) 2019 The Gnet Authors. All rights reserved.
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Modified from the original gnet source by tqtrungse@gmail.com in 2026.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package nio
@@ -39,6 +26,7 @@ import (
 
 type listener struct {
 	openOnce, closeOnce sync.Once
+	openErr             error
 	fd                  int
 	addr                net.Addr
 	address, network    string
@@ -57,23 +45,23 @@ func (ln *listener) dup() (int, error) {
 	return socket.Dup(ln.fd)
 }
 
-func (ln *listener) open() (err error) {
+func (ln *listener) open() error {
 	ln.openOnce.Do(func() {
 		switch ln.network {
 		case "tcp", "tcp4", "tcp6":
-			ln.fd, ln.addr, err = socket.TCPSocket(ln.network, ln.address, true, ln.sockOptInts, ln.sockOptStrs)
+			ln.fd, ln.addr, ln.openErr = socket.TCPSocket(ln.network, ln.address, true, ln.sockOptInts, ln.sockOptStrs)
 			ln.network = "tcp"
 		case "udp", "udp4", "udp6":
-			ln.fd, ln.addr, err = socket.UDPSocket(ln.network, ln.address, false, ln.sockOptInts, ln.sockOptStrs)
+			ln.fd, ln.addr, ln.openErr = socket.UDPSocket(ln.network, ln.address, false, ln.sockOptInts, ln.sockOptStrs)
 			ln.network = "udp"
 		case "unix":
 			_ = os.RemoveAll(ln.address)
-			ln.fd, ln.addr, err = socket.UnixSocket(ln.network, ln.address, true, ln.sockOptInts, ln.sockOptStrs)
+			ln.fd, ln.addr, ln.openErr = socket.UnixSocket(ln.network, ln.address, true, ln.sockOptInts, ln.sockOptStrs)
 		default:
-			err = errorx.ErrUnsupportedProtocol
+			ln.openErr = errorx.ErrUnsupportedProtocol
 		}
 	})
-	return
+	return ln.openErr
 }
 
 func (ln *listener) close() {

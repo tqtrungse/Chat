@@ -1,20 +1,7 @@
 /*
  * Copyright (c) 2019 The Gnet Authors. All rights reserved.
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Modified from the original gnet source by tqtrungse@gmail.com in 2026.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package nio
@@ -293,9 +280,11 @@ type (
 		EventLoop() EventLoop
 
 		// Context returns a user-defined context, it's concurrency-safe.
+		// Synchronizing access to the returned object's fields is the caller's responsibility.
 		Context() (ctx any)
 
-		// SetContext sets a user-defined context, it's concurrency-safe.
+		// SetContext atomically replaces the user-defined context, it's concurrency-safe.
+		// It does not synchronize mutations to fields inside the stored object.
 		SetContext(ctx any)
 
 		// LocalAddr is the connection's local socket address, it's not concurrency-safe,
@@ -337,6 +326,21 @@ type RegisteredResult struct {
 type Engine struct {
 	// eng is the internal engine struct.
 	eng *engine
+}
+
+// ListenerAddresses returns the bound addresses, including OS-assigned ports.
+// Call it from OnBoot while listener metadata is stable. Returned strings do
+// not expose the mutable listener address values.
+func (e Engine) ListenerAddresses() []string {
+	if e.eng == nil {
+		return nil
+	}
+	addrs := make([]string, 0, e.eng.listeners.Len())
+	e.eng.listeners.Range(func(_ int, ln *listener) bool {
+		addrs = append(addrs, ln.addr.String())
+		return true
+	})
+	return addrs
 }
 
 // Validate checks whether the engine is available.

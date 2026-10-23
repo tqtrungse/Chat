@@ -1,18 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package breaker
@@ -20,12 +8,20 @@ package breaker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/sony/gobreaker/v2"
 	"github.com/stretchr/testify/require"
+)
+
+var (
+	// errBusiness is an example of an error that is not an infrastructure
+	// error.
+	errBusiness  = errors.New("device not found")
+	errCacheDown = errors.New("cache: connection refused")
 )
 
 func isInfra(target error) func(error) bool {
@@ -45,16 +41,11 @@ func newTestBreaker(
 	return New(cfg, isInfraErr, onChange)
 }
 
-var (
-	errBusiness  = errors.New("device not found") // stand-in for a non-infra error
-	errCacheDown = errors.New("cache: connection refused")
-)
-
 func TestExecute_SuccessPassesCtxThrough(t *testing.T) {
 	cb := newTestBreaker(Config{ConsecutiveFailures: 3}, func(error) bool { return true }, nil)
 
 	type ctxKey struct{}
-	ctx := context.WithValue(context.Background(), ctxKey{}, "value")
+	ctx := context.WithValue(t.Context(), ctxKey{}, "value")
 
 	var gotCtx context.Context
 	err := cb.Execute(ctx, func(c context.Context) error {
@@ -67,20 +58,23 @@ func TestExecute_SuccessPassesCtxThrough(t *testing.T) {
 	require.Equal(t, StateClosed, cb.State())
 }
 
-// This is the property the whole IsExcluded wiring exists for: an error the
-// classifier doesn't recognize as infrastructure-related must never count
-// toward tripping, no matter how many times it happens.
+// IsExcluded exists for this property. If isInfrastructureError does not
+// identify an error, that error must never open the circuit. The number of
+// times that the error occurs makes no difference.
 func TestExecute_NonInfraErrorsAreExcludedNeverTrip(t *testing.T) {
 	cb := newTestBreaker(
 		Config{ConsecutiveFailures: 2},
-		func(error) bool { return false }, // nothing is ever classified as infra
+		func(error) bool { return false }, // no error is an infrastructure error
 		nil,
 	)
 
-	for range 10 { // far past ConsecutiveFailures=2
-		err := cb.Execute(context.Background(), func(context.Context) error {
-			return errBusiness
-		})
+	for range 10 { // many more times than ConsecutiveFailures=2
+		err := cb.Execute(
+			t.Context(),
+			func(context.Context) error {
+				return errBusiness
+			},
+		)
 		require.Equal(t, errBusiness, err)
 	}
 	require.Equal(t, StateClosed, cb.State())
@@ -94,9 +88,12 @@ func TestExecute_InfraErrorsTripAfterConsecutiveFailures(t *testing.T) {
 	)
 
 	for range 3 {
-		err := cb.Execute(context.Background(), func(context.Context) error {
-			return errCacheDown
-		})
+		err := cb.Execute(
+			t.Context(),
+			func(context.Context) error {
+				return errCacheDown
+			},
+		)
 		require.Equal(t, errCacheDown, err)
 	}
 	require.Equal(t, StateOpen, cb.State())
@@ -108,55 +105,128 @@ func TestExecute_OpenStateFailsFastWithoutCallingFn(t *testing.T) {
 		isInfra(errCacheDown),
 		nil,
 	)
-	_ = cb.Execute(context.Background(), func(context.Context) error { return errCacheDown }) // trip it
+	_ = cb.Execute(
+		t.Context(),
+		func(context.Context) error { return errCacheDown },
+	) // open the circuit
 	require.Equal(t, StateOpen, cb.State())
 
 	called := false
-	err := cb.Execute(context.Background(), func(context.Context) error {
-		called = true
-		return nil
-	})
+	err := cb.Execute(
+		t.Context(),
+		func(context.Context) error {
+			called = true
+			return nil
+		},
+	)
 	require.Equal(t, ErrOpen, err)
 	require.False(t, called)
 }
 
+func TestExecute_PreservesCallbackBreakerErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		sentinel error
+		returned error
+	}{
+		{
+			name:     "open state",
+			sentinel: gobreaker.ErrOpenState,
+			returned: gobreaker.ErrOpenState,
+		},
+		{
+			name:     "wrapped open state",
+			sentinel: gobreaker.ErrOpenState,
+			returned: fmt.Errorf("inner dependency: %w", gobreaker.ErrOpenState),
+		},
+		{
+			name:     "too many requests",
+			sentinel: gobreaker.ErrTooManyRequests,
+			returned: gobreaker.ErrTooManyRequests,
+		},
+		{
+			name:     "wrapped too many requests",
+			sentinel: gobreaker.ErrTooManyRequests,
+			returned: fmt.Errorf("inner dependency: %w", gobreaker.ErrTooManyRequests),
+		},
+	} {
+		t.Run(
+			tt.name,
+			func(t *testing.T) {
+				cb := newTestBreaker(
+					Config{ConsecutiveFailures: 1},
+					func(error) bool { return false },
+					nil,
+				)
+
+				calls := 0
+				err := cb.Execute(t.Context(), func(context.Context) error {
+					calls++
+					return tt.returned
+				})
+
+				require.Equal(t, 1, calls)
+				require.Same(t, tt.returned, err)
+				require.ErrorIs(t, err, tt.sentinel)
+				require.NotErrorIs(t, err, ErrOpen)
+				require.Equal(t, StateClosed, cb.State())
+			},
+		)
+	}
+}
+
 func TestExecute_HalfOpenProbeSucceedsCloses(t *testing.T) {
 	cb := newTestBreaker(
-		// MaxRequests left at 0 -> gobreaker defaults it to 1, so a single
-		// successful probe is enough to close.
+		// MaxRequests stays at 0, and gobreaker changes the value to 1.
+		// One successful request is then enough to close the circuit.
 		Config{ConsecutiveFailures: 1, Timeout: 20 * time.Millisecond},
 		isInfra(errCacheDown),
 		nil,
 	)
-	_ = cb.Execute(context.Background(), func(context.Context) error { return errCacheDown })
+	_ = cb.Execute(
+		t.Context(),
+		func(context.Context) error { return errCacheDown },
+	)
 	require.Equal(t, StateOpen, cb.State())
 
-	time.Sleep(30 * time.Millisecond) // let Timeout elapse
+	time.Sleep(30 * time.Millisecond) // wait for the end of Timeout
 
-	err := cb.Execute(context.Background(), func(context.Context) error { return nil })
+	err := cb.Execute(
+		t.Context(),
+		func(context.Context) error { return nil },
+	)
 	require.NoError(t, err)
 	require.Equal(t, StateClosed, cb.State())
 }
 
 func TestExecute_HalfOpenProbeFailsReopens(t *testing.T) {
 	cb := newTestBreaker(
-		Config{ConsecutiveFailures: 1, Timeout: 20 * time.Millisecond},
+		Config{
+			ConsecutiveFailures: 1,
+			Timeout:             20 * time.Millisecond,
+		},
 		isInfra(errCacheDown),
 		nil,
 	)
-	_ = cb.Execute(context.Background(), func(context.Context) error { return errCacheDown })
+	_ = cb.Execute(
+		t.Context(),
+		func(context.Context) error { return errCacheDown },
+	)
 	time.Sleep(30 * time.Millisecond)
 
-	err := cb.Execute(context.Background(), func(context.Context) error { return errCacheDown })
+	err := cb.Execute(
+		t.Context(),
+		func(context.Context) error { return errCacheDown },
+	)
 	require.Equal(t, errCacheDown, err)
 	require.Equal(t, StateOpen, cb.State())
 }
 
-// The concurrency gate is the entire point of half-open: only MaxRequests
-// probes may be in flight at once, and gobreaker enforces this by
-// incrementing Requests synchronously in beforeRequest before fn ever runs
-// — so a second, genuinely concurrent probe must be rejected without its fn
-// being called at all, not just eventually outvoted.
+// A limit on the number of requests is the purpose of the half-open state.
+// Only MaxRequests requests can be active at the same time. gobreaker
+// increases the Requests count in beforeRequest, and does this before fn
+// runs. Therefore the circuit breaker must reject a second request that
+// starts at the same time. It must not run the fn of that request.
 func TestExecute_HalfOpenRejectsConcurrentProbeBeyondMaxRequests(t *testing.T) {
 	cb := newTestBreaker(
 		Config{
@@ -168,7 +238,7 @@ func TestExecute_HalfOpenRejectsConcurrentProbeBeyondMaxRequests(t *testing.T) {
 		nil,
 	)
 	_ = cb.Execute(
-		context.Background(),
+		t.Context(),
 		func(context.Context) error { return errCacheDown },
 	)
 	time.Sleep(30 * time.Millisecond)
@@ -178,20 +248,26 @@ func TestExecute_HalfOpenRejectsConcurrentProbeBeyondMaxRequests(t *testing.T) {
 	firstDone := make(chan error, 1)
 
 	go func() {
-		firstDone <- cb.Execute(context.Background(), func(context.Context) error {
-			close(started)
-			<-release
-			return nil
-		})
+		firstDone <- cb.Execute(
+			t.Context(),
+			func(context.Context) error {
+				close(started)
+				<-release
+				return nil
+			},
+		)
 	}()
 
-	<-started // first probe is confirmed admitted and in flight
+	<-started // the first request is now active
 
 	var secondCalled bool
-	secondErr := cb.Execute(context.Background(), func(context.Context) error {
-		secondCalled = true
-		return nil
-	})
+	secondErr := cb.Execute(
+		t.Context(),
+		func(context.Context) error {
+			secondCalled = true
+			return nil
+		},
+	)
 	close(release)
 
 	require.NoError(t, <-firstDone)
@@ -201,7 +277,11 @@ func TestExecute_HalfOpenRejectsConcurrentProbeBeyondMaxRequests(t *testing.T) {
 }
 
 func TestExecute_PanicIsRecoveredAndRepanickedWithOriginalValue(t *testing.T) {
-	cb := newTestBreaker(Config{ConsecutiveFailures: 5}, func(error) bool { return true }, nil)
+	cb := newTestBreaker(
+		Config{ConsecutiveFailures: 5},
+		func(error) bool { return true },
+		nil,
+	)
 
 	type sentinel struct{ msg string }
 	want := sentinel{msg: "boom"}
@@ -209,9 +289,12 @@ func TestExecute_PanicIsRecoveredAndRepanickedWithOriginalValue(t *testing.T) {
 	var got any
 	func() {
 		defer func() { got = recover() }()
-		_ = cb.Execute(context.Background(), func(context.Context) error {
-			panic(want)
-		})
+		_ = cb.Execute(
+			t.Context(),
+			func(context.Context) error {
+				panic(want)
+			},
+		)
 	}()
 
 	gotVal, ok := got.(sentinel)
@@ -219,10 +302,11 @@ func TestExecute_PanicIsRecoveredAndRepanickedWithOriginalValue(t *testing.T) {
 	require.Equal(t, want, gotVal)
 }
 
-// This is the specific behavior panicError exists for: with a classifier
-// that excludes everything (see TestExecute_NonInfraErrorsAreExcludedNeverTrip
-// for the contrasting case with an ordinary error), a panic must still count
-// as a failure and trip the breaker.
+// panicError exists for this behavior. The isInfrastructureError function
+// excludes each error in this test, but a panic must still count as a
+// failure and open the circuit. The test
+// TestExecute_NonInfraErrorsAreExcludedNeverTrip shows the different result
+// for an ordinary error.
 func TestExecute_PanicAlwaysCountsAsFailureEvenIfClassifierWouldExcludeIt(t *testing.T) {
 	cb := newTestBreaker(
 		Config{ConsecutiveFailures: 2},
@@ -233,9 +317,12 @@ func TestExecute_PanicAlwaysCountsAsFailureEvenIfClassifierWouldExcludeIt(t *tes
 	for range 2 {
 		func() {
 			defer func() { _ = recover() }()
-			_ = cb.Execute(context.Background(), func(context.Context) error {
-				panic("boom")
-			})
+			_ = cb.Execute(
+				t.Context(),
+				func(context.Context) error {
+					panic("boom")
+				},
+			)
 		}()
 	}
 
@@ -248,7 +335,10 @@ func TestExecute_OnStateChangeReportsTransitions(t *testing.T) {
 	var got []transition
 
 	cb := newTestBreaker(
-		Config{ConsecutiveFailures: 1, Timeout: 20 * time.Millisecond},
+		Config{
+			ConsecutiveFailures: 1,
+			Timeout:             20 * time.Millisecond,
+		},
 		isInfra(errCacheDown),
 		func(_ string, from, to gobreaker.State) {
 			mu.Lock()
@@ -258,17 +348,19 @@ func TestExecute_OnStateChangeReportsTransitions(t *testing.T) {
 	)
 
 	_ = cb.Execute(
-		context.Background(),
+		t.Context(),
 		func(context.Context) error { return errCacheDown }, // Closed -> Open
 	)
 	time.Sleep(30 * time.Millisecond)
 	_ = cb.Execute(
-		context.Background(),
-		func(context.Context) error { return nil }, // Open -> HalfOpen -> Closed, both within this one call
+		t.Context(),
+		// Open -> HalfOpen -> Closed. Both changes occur in this one call.
+		func(context.Context) error { return nil },
 	)
 
 	mu.Lock()
 	defer mu.Unlock()
+
 	want := []transition{
 		{gobreaker.StateClosed, gobreaker.StateOpen},
 		{gobreaker.StateOpen, gobreaker.StateHalfOpen},

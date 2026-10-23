@@ -1,18 +1,7 @@
 /*
  * Copyright (c) 2019 The Gnet Authors. All rights reserved.
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package buffer
@@ -144,11 +133,14 @@ func (e *Elastic) Writev(bs [][]byte) (int, error) {
 
 // WriteTo implements io.WriterTo.
 func (e *Elastic) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = e.ring.WriteTo(w); err != nil {
-		return
+	if !e.ring.IsEmpty() {
+		n, err = e.ring.WriteTo(w)
+		if err != nil {
+			return
+		}
 	}
-	var m int64
-	m, err = e.list.WriteTo(w)
+
+	m, err := e.list.WriteTo(w)
 	n += m
 	return
 }

@@ -1,0 +1,19 @@
+{
+  "challenge_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+  "channel_binding_hex": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+  "descriptor": {
+    "address": "hub.example.com:9000",
+    "audience": "hub.chat",
+    "key_id": 7,
+    "protocol": "Noise_NK_25519_ChaChaPoly_SHA256",
+    "public_key": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtHHw=",
+    "version": 2
+  },
+  "identity_public_hex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+  "identity_seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "identity_signature_hex": "e5171417bb6c80eafded27c60fd9335c83017fa10ff735a209f4255b59e9b3316bcd8f16a6503a599fba93e585a1c77a5caa62847060c1e79819032daf69e700",
+  "note": "Public test-only identity seed; opaque ticket exercises encoding, not ticket parsing.",
+  "prologue_hex": "100000007878782f6875622f6e6f6973652f763202200000004e6f6973655f4e4b5f32353531395f436861436861506f6c795f534841323536080000006875622e6368617407000000",
+  "signature_input_hex": "160000007878782f6875622f6465766963652d617574682f763220000000202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f20000000836f595b5b3ded3e4e0260fb120637867abb7b708a7c83968636a6a9781f86a420000000a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+  "ticket_hex": "6f70617175652d7469636b65742d666f722d656e636f64696e672d766563746f722d7632"
+}

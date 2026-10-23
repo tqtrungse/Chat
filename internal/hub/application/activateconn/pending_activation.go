@@ -1,18 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package activateconn
@@ -21,37 +9,60 @@ import (
 	"sync/atomic"
 	"time"
 
-	sharedticket "xxx/internal/shared/ticket"
+	"xxx/internal/hub/core/transport"
+
+	slicepool "xxx/pkg/pool/slice"
 )
 
-// pendingActivation is the conn context from OnOpen until activation succeeds
-// or the conn closes. stage is touched only by the event-loop goroutine.
 type pendingActivation struct {
-	owner      *connActivator
-	ticket     *sharedticket.Ticket // verified; holds session keys until activation completes
-	transcript [32]byte
-	nonce      [32]byte
-	deadline   time.Time   // proof deadline
-	timer      *time.Timer // whole pre-auth window
+	owner     *ConnActivator
+	channel   transport.Channel
+	identity  transport.Identity
+	binding   []byte
+	challenge []byte
+	// deadline is the timestamp used to check expiry of the entire authentication process.
+	deadline time.Time
+	// phaseDeadline is the timestamp used to check expiry of the current phase:
+	// handshake first, then proof submission and verification.
+	phaseDeadline time.Time
+	// timer enforces PreAuthTimeout for the entire activation, from admission
+	// through handshake, authorization, presence registration, and ACK. Phase
+	// transitions never reset it; clear stops it when activation ends.
+	timer *time.Timer
+	// phaseTimer first enforces HandshakeTimeout, then is replaced with the
+	// authentication challenge timer after the server hello. That timer covers
+	// both waiting for proof and queued/running verification. It stops when
+	// registration begins; the overall timer still bounds registration and ACK.
+	phaseTimer *time.Timer
 	stage      uint8
 	released   atomic.Bool
 }
 
-// clear zeroes secrets, stops the timer and releases the pre-auth slot (exactly once).
+// clear runs on the connection event loop. Before registration, the connection
+// context owns cleanup; after handoff, the session owns it until activation or close.
 func (p *pendingActivation) clear() {
-	if p == nil {
+	if p == nil || !p.released.CompareAndSwap(false, true) {
 		return
 	}
+
 	if p.timer != nil {
 		p.timer.Stop()
 	}
-	if p.ticket != nil {
-		p.ticket.Clear()
-		p.ticket = nil
+
+	if p.phaseTimer != nil {
+		p.phaseTimer.Stop()
 	}
-	clear(p.transcript[:])
-	clear(p.nonce[:])
-	if p.released.CompareAndSwap(false, true) {
-		p.owner.preAuth.Add(-1)
+
+	if p.channel != nil {
+		p.channel.Close()
+		p.channel = nil
 	}
+
+	clear(p.binding[:cap(p.binding)])
+	clear(p.challenge[:cap(p.challenge)])
+	slicepool.Put(p.challenge[:cap(p.challenge)])
+	p.binding = nil
+	p.challenge = nil
+
+	p.owner.preAuth.Add(-1)
 }

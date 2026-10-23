@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package mysql
@@ -24,9 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"xxx/internal/iam/application/keyexchange"
-	"xxx/internal/iam/domain/device"
-	shareddevice "xxx/internal/shared/device"
+	"xxx/internal/iam/application/connticket"
+	"xxx/internal/shared/device"
 
 	"xxx/pkg/database/sql"
 	"xxx/pkg/database/sql/mocks"
@@ -48,8 +36,8 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 
 	type testcase struct {
 		prepare  func(f *fields)
-		args     shareddevice.ID
-		expected *keyexchange.DeviceMeta
+		args     device.ID
+		expected *connticket.DeviceMeta
 		wantErr  bool
 	}
 
@@ -66,7 +54,7 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 						}, " "),
 					))).
 					WithArgs(
-						shareddevice.ID(1),
+						device.ID(1),
 						1,
 					).
 					WillReturnRows(
@@ -83,8 +71,8 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 							),
 					)
 			},
-			args: shareddevice.ID(1),
-			expected: &keyexchange.DeviceMeta{
+			args: device.ID(1),
+			expected: &connticket.DeviceMeta{
 				ExternalID:  "abc-123",
 				State:       device.StateActive,
 				IdentityPub: []byte("123456789"),
@@ -103,12 +91,12 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 						}, " "),
 					))).
 					WithArgs(
-						shareddevice.ID(2),
+						device.ID(2),
 						1,
 					).
 					WillReturnRows(sqlmock.NewRows(nil))
 			},
-			args:     shareddevice.ID(2),
+			args:     device.ID(2),
 			expected: nil,
 			wantErr:  false,
 		},
@@ -124,12 +112,12 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 						}, " "),
 					))).
 					WithArgs(
-						shareddevice.ID(3),
+						device.ID(3),
 						1,
 					).
 					WillReturnError(errors.New("expected error"))
 			},
-			args:     shareddevice.ID(3),
+			args:     device.ID(3),
 			expected: nil,
 			wantErr:  true,
 		},
@@ -156,7 +144,7 @@ func Test_DeviceMetaReader_FindDeviceMeta(t *testing.T) {
 
 			var (
 				err    error
-				resp   *keyexchange.DeviceMeta
+				resp   *connticket.DeviceMeta
 				reader = NewDeviceMetaReader()
 			)
 

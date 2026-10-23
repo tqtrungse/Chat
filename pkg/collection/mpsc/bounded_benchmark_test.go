@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package mpsc
@@ -22,8 +11,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
-
-	"xxx/pkg/backoff"
+	"xxx/pkg/cpu"
 )
 
 func mpscProducerCounts() []int {
@@ -158,13 +146,13 @@ func boundedTryPush(b *testing.B, producers int) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			var bkc backoff.Cpu
+			var contention cpu.Backoff
 			for i := 0; i < n; {
 				if q.TryPush(i) {
 					i++
-					bkc.Reset()
+					contention.Reset()
 				} else {
-					bkc.Snooze()
+					contention.Snooze()
 				}
 			}
 		}(n)
@@ -199,14 +187,15 @@ func chanTryPush(b *testing.B, producers int) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			var bkc backoff.Cpu
+
+			var contention cpu.Backoff
 			for i := 0; i < n; {
 				select {
 				case ch <- i:
 					i++
-					bkc.Reset()
+					contention.Reset()
 				default:
-					bkc.Snooze()
+					contention.Snooze()
 				}
 			}
 		}(n)

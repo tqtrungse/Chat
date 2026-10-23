@@ -1,29 +1,16 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package worker
 
 import (
 	"errors"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 
-	"xxx/pkg/backoff"
 	"xxx/pkg/cpu"
 	"xxx/pkg/os"
 )
@@ -61,6 +48,7 @@ type Pool struct {
 }
 
 // New creates a worker pool.
+// cfg must be initialized with Config.Load before calling New.
 //
 // panicHandler, if non-nil, is invoked (from the recovering worker's own
 // goroutine) whenever a Task panics. If unset, panics are reported
@@ -75,18 +63,6 @@ func New(
 	cfg Config,
 	panicHandler func(workerID int, recovered any, stack []byte),
 ) (p *Pool, closeFn func()) {
-	if cfg.NumWorkers <= 0 {
-		cfg.NumWorkers = runtime.GOMAXPROCS(0)
-	}
-
-	if cfg.GlobalCheckInterval <= 0 {
-		cfg.GlobalCheckInterval = 64
-	}
-
-	if cfg.GlobalBatchSize <= 0 {
-		cfg.GlobalBatchSize = 32
-	}
-
 	p = &Pool{
 		panicHandler:        panicHandler,
 		global:              newElastic[Task](),
@@ -172,9 +148,9 @@ func (p *Pool) close() {
 
 	// All admitted Submit calls must finish Add/Push before Wait can
 	// observe a zero task count. No new Submit can pass the closed bit.
-	var bc backoff.Cpu
+	var contention cpu.Backoff
 	for p.submitState.Load()&^closedBit != 0 {
-		bc.Snooze()
+		contention.Snooze()
 	}
 
 	// every submitted/spawned task has actually run, not just been queued

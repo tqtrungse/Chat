@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package log
@@ -20,6 +9,12 @@ import (
 	"time"
 
 	"xxx/pkg/config"
+)
+
+const (
+	defaultMaxSize       = 100 // megabytes, as required by lumberjack.Logger.MaxSize
+	defaultBufferSize    = 256 * 1024
+	defaultFlushInterval = 30 * time.Second
 )
 
 type FileConfig struct {
@@ -53,27 +48,46 @@ type FileConfig struct {
 	Compress bool
 
 	// BufferSize specifies the maximum amount of data the writer will buffer
-	// before flushing.
+	// before flushing. It must not exceed MaxSize * 1024 * 1024 bytes.
 	//
 	// Default: 256 KB
 	BufferSize int
 
-	// FlushInterval specifies how often the writer should flush data if
-	// there have been no writes.
+	// FlushInterval specifies how often the file writer flushes buffered data.
+	// Stdout logging does not use this buffer or interval.
 	//
 	// Default: 30s
 	FlushInterval time.Duration
 }
 
 func (f *FileConfig) Load(loader config.Loader) {
-	if loader == nil {
-		return
+	if loader != nil {
+		f.Filename = loader.GetString("LOGGER_FILENAME")
+		f.MaxSize = loader.GetInt("LOGGER_MAX_SIZE")
+		f.MaxBackups = loader.GetInt("LOGGER_MAX_BACKUPS")
+		f.MaxAge = loader.GetInt("LOGGER_MAX_AGE")
+		f.Compress = loader.GetBool("LOGGER_COMPRESS")
+		f.BufferSize = loader.GetInt("LOGGER_BUFFER_SIZE")
+		f.FlushInterval = loader.GetDuration("LOGGER_FLUSH_INTERVAL")
 	}
-	f.Filename = loader.GetString("LOGGER_FILENAME")
-	f.MaxSize = loader.GetInt("LOGGER_MAX_SIZE")
-	f.MaxBackups = loader.GetInt("LOGGER_MAX_BACKUPS")
-	f.MaxAge = loader.GetInt("LOGGER_MAX_AGE")
-	f.Compress = loader.GetBool("LOGGER_COMPRESS")
-	f.BufferSize = loader.GetInt("LOGGER_BUFFER_SIZE")
-	f.FlushInterval = loader.GetDuration("LOGGER_FLUSH_INTERVAL")
+	f.applyDefault()
+}
+
+func (f *FileConfig) applyDefault() {
+	if f.MaxSize <= 0 {
+		f.MaxSize = defaultMaxSize
+	}
+	if f.BufferSize <= 0 {
+		f.BufferSize = defaultBufferSize
+	}
+	// FlushInterval is only used in zapcore.BufferedWriteSyncer.
+	// zapcore.BufferedWriteSyncer will set default 30s for FlushInterval if it is zero.
+	// If it is negative, a panic occurs during the first `Write` call (due to lazy initialization)
+	// rather than when the logger is created; consequently, configuration errors surface late—specifically,
+	// at the moment a log is written.
+	//
+	// So we will set default in here to prevent lazy panic.
+	if f.FlushInterval <= 0 {
+		f.FlushInterval = defaultFlushInterval
+	}
 }

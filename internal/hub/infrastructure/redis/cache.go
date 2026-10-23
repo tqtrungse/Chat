@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package redis
@@ -64,11 +53,7 @@ const (
 
 	pendingBucketsPrefix = "pending_buckets:"
 
-	defaultDeviceBucketCount = uint16(4096)
-	defaultReapBatchSize     = uint16(500)
-	defaultHeartbeatInterval = 3 * time.Second
-	defaultHeartbeatTTL      = 10 * time.Second
-	reapLockTTL              = 30 * time.Second
+	reapLockTTL = 30 * time.Second
 )
 
 type Callbacks struct {
@@ -91,7 +76,9 @@ type subscribers struct {
 	expired   *redis.PubSub
 }
 
-type cache struct {
+// Cache owns Redis commands, subscriptions, and the Hub heartbeat lifecycle.
+// Configure callbacks before Start; they remain immutable while events are handled.
+type Cache struct {
 	rdb                        *redis.Client
 	logger                     *log.Logger
 	pool                       *workerpool.Pool
@@ -109,41 +96,23 @@ type cache struct {
 	running                    atomic.Bool
 	closeOnce                  sync.Once
 	closeErr                   error
-	setCbOnce                  atomic.Bool
+	lifecycleMu                sync.Mutex
+	callbacksSet               bool
+	closed                     bool
 	verifyExpiredNotifications bool
 }
 
-// NewCache creates a Redis-backed cache for the specified hub and applies
-// default values for optional timing, reaping, and device-bucket settings.
-// The returned cache is not started until startFn is called.
-//
-// startFn initializes the Redis connection, subscribes to required Pub/Sub
-// channels, registers the hub, and starts the background event handler.
-//
-// startFn is safe to call concurrently and more than once: only one call can
-// be in flight or have succeeded at a time. If a call fails, the guard is
-// released so a later retry can still succeed; once a call succeeds,
-// further calls return an error instead of leaking subscribers or starting
-// a second background event handler.
-//
-// closeFn closes Redis Pub/Sub subscriptions, waits for the background event
-// handler to exit, and then closes the Redis client.
-//
-// Safe to call even if start failed or was never called — it only waits on
-// c.done if the background event handler was actually launched, so it
-// never hangs waiting for a signal that would never come. Safe to call more
-// than once, concurrently or not; only the first call does anything.
+var _ presence.DistributedCache = (*Cache)(nil)
+
+// NewCache creates an unstarted Redis-backed cache. Configure any callbacks before Start.
+// Close is safe before startup, after a failed startup, and on repeated calls.
 func NewCache(
 	hubID uint64,
 	cfg Config,
 	logger *log.Logger,
 	pool *workerpool.Pool,
-) (
-	c presence.DistributedCache,
-	startFn func(rootCtx context.Context) error,
-	closeFn func() error,
-	setCbFn func(callbacks Callbacks) bool,
-) {
+) *Cache {
+	cfg.Load(nil)
 	rdb := redis.NewClient(&redis.Options{
 		Addr:           cfg.Addr,
 		Password:       cfg.Password,
@@ -153,23 +122,7 @@ func NewCache(
 		MaxActiveConns: int(cfg.MaxActiveConns),
 	})
 
-	if cfg.HeartbeatInterval <= 0 {
-		cfg.HeartbeatInterval = defaultHeartbeatInterval
-	}
-
-	if cfg.HeartbeatTTL <= 0 {
-		cfg.HeartbeatTTL = defaultHeartbeatTTL
-	}
-
-	if cfg.ReapBatchSize <= 0 {
-		cfg.ReapBatchSize = defaultReapBatchSize
-	}
-
-	if cfg.DeviceBucketCount == 0 {
-		cfg.DeviceBucketCount = defaultDeviceBucketCount
-	}
-
-	cc := &cache{
+	cc := &Cache{
 		rdb:                        rdb,
 		logger:                     logger,
 		pool:                       pool,
@@ -181,24 +134,26 @@ func NewCache(
 		reapBatchSize:              cfg.ReapBatchSize,
 		deviceBucketCount:          cfg.DeviceBucketCount,
 		verifyExpiredNotifications: cfg.VerifyExpiredNotifications,
+		callbacks: Callbacks{
+			OnHubDeleted:    func(uint64) {},
+			OnDeviceDeleted: func(uint64, shareddevice.ID) {},
+			OnSelfReaped:    func() {},
+		},
 	}
-	startFn = cc.start
-	closeFn = cc.close
-	setCbFn = cc.setCallback
-	return cc, startFn, closeFn, setCbFn
+	return cc
 }
 
 // ReapHub removes the specified hub and reaps the devices still associated
 // with it. The distributed reap lock ensures that concurrent cache instances
 // do not reap the same hub at the same time.
-func (c *cache) ReapHub(ctx context.Context) error {
+func (c *Cache) ReapHub(ctx context.Context) error {
 	return c.reapHub(ctx, c.hubID)
 }
 
 // ListHubsByDevices returns the hub ID currently owning each device ID.
 // The returned slice preserves the same order as deviceIDs; a zero value
 // indicates that a device has no registered hub.
-func (c *cache) ListHubsByDevices(
+func (c *Cache) ListHubsByDevices(
 	ctx context.Context,
 	deviceIDs []shareddevice.ID,
 ) ([]uint64, error) {
@@ -273,7 +228,7 @@ func (c *cache) ListHubsByDevices(
 // Only exported github.com/redis/go-redis/v9 API is used here — the typed
 // Is*Error helpers and sentinel vars — so this keeps working across
 // go-redis versions without reaching into its internal packages.
-func (c *cache) IsInfraError(err error) bool {
+func (c *Cache) IsInfraError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -373,12 +328,17 @@ func (c *cache) IsInfraError(err error) bool {
 // BatchAddDevices registers multiple devices as owned by this hub.
 // Devices are grouped by bucket and updated through the corresponding Lua
 // script so the device registry and this hub's device set remain consistent.
-func (c *cache) BatchAddDevices(
+// Inputs above presence.MaxBatchSize are rejected before any Redis command.
+func (c *Cache) BatchAddDevices(
 	ctx context.Context,
 	deviceIDs []shareddevice.ID,
 ) (map[shareddevice.ID][]message.Date, error) {
 	if len(deviceIDs) == 0 {
 		return nil, nil
+	}
+
+	if len(deviceIDs) > presence.MaxBatchSize {
+		return nil, ErrBatchTooLarge
 	}
 
 	var (
@@ -502,13 +462,18 @@ func (c *cache) BatchAddDevices(
 // One Lua call handles every bucket present in deviceIDs (unlike what the
 // name might suggest, buckets are not split into separate calls); see
 // batchDelDeviceScript for why the PUBLISH payload is precomputed here
-// rather than built in Lua.
-func (c *cache) BatchDelDevices(
+// rather than built in Lua. Inputs above presence.MaxBatchSize are rejected
+// before any Redis command.
+func (c *Cache) BatchDelDevices(
 	ctx context.Context,
 	deviceIDs []shareddevice.ID,
 ) error {
 	if len(deviceIDs) == 0 {
 		return nil
+	}
+
+	if len(deviceIDs) > presence.MaxBatchSize {
+		return ErrBatchTooLarge
 	}
 
 	var (
@@ -592,9 +557,17 @@ func (c *cache) BatchDelDevices(
 	return err
 }
 
-func (c *cache) start(rootCtx context.Context) error {
+// Start subscribes to events, registers the Hub lease, and starts event handling.
+// Only one start attempt may be in flight; a successful Start cannot be repeated.
+func (c *Cache) Start(rootCtx context.Context) error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if c.closed {
+		return ErrCacheClosed
+	}
+
 	if !c.starting.CompareAndSwap(false, true) {
-		return errors.New("cache: start already called")
+		return ErrCacheStarted
 	}
 
 	// Track every PubSub connection opened below so we can close them on
@@ -679,7 +652,13 @@ func (c *cache) start(rootCtx context.Context) error {
 	return err
 }
 
-func (c *cache) close() error {
+// Close stops subscriptions and event handling, then closes the Redis client.
+// It waits for an in-flight Start and is safe to call repeatedly or before Start.
+func (c *Cache) Close() error {
+	c.lifecycleMu.Lock()
+	c.closed = true
+	c.lifecycleMu.Unlock()
+
 	c.closeOnce.Do(func() {
 		if c.subscribers.delHub != nil {
 			if err := c.subscribers.delHub.Close(); err != nil {
@@ -706,17 +685,37 @@ func (c *cache) close() error {
 	return c.closeErr
 }
 
-func (c *cache) setCallback(cb Callbacks) bool {
-	if c.setCbOnce.Swap(true) {
-		return true
+// SetCallbacks installs optional event callbacks once, before Start. Nil callbacks
+// are treated as no-ops. It returns an error if already configured, started, or closed.
+func (c *Cache) SetCallbacks(cb Callbacks) error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if c.closed {
+		return ErrCacheClosed
+	}
+	if c.starting.Load() {
+		return ErrCallbacksAfterStart
+	}
+	if c.callbacksSet {
+		return ErrCallbacksAlreadySet
+	}
+	if cb.OnHubDeleted == nil {
+		cb.OnHubDeleted = func(uint64) {}
+	}
+	if cb.OnDeviceDeleted == nil {
+		cb.OnDeviceDeleted = func(uint64, shareddevice.ID) {}
+	}
+	if cb.OnSelfReaped == nil {
+		cb.OnSelfReaped = func() {}
 	}
 	c.callbacks = cb
-	return false
+	c.callbacksSet = true
+	return nil
 }
 
 // addHub registers this hub in the global hub registry with no expiration.
 // The hub's liveness is tracked separately by its heartbeat key.
-func (c *cache) addHub(ctx context.Context) error {
+func (c *Cache) addHub(ctx context.Context) error {
 	bHubID := bs.U64ToBytes(c.hubID)
 	defer slicepool.Put(bHubID)
 	return c.rdb.SAdd(ctx, hubsKey, bHubID).Err()
@@ -731,7 +730,7 @@ func (c *cache) addHub(ctx context.Context) error {
 // handleEvents), and is safe to call concurrently from multiple hub
 // instances: only one of them wins the reap lock and actually does the work,
 // the rest return immediately.
-func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
+func (c *Cache) reapHub(ctx context.Context, hubID uint64) error {
 	var (
 		bHubID         = bs.U64ToBytes(hubID)
 		reapHubLockKey = bs.Concat(hubReapLockPrefix, hubID)
@@ -866,7 +865,7 @@ func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
 // this hub was partitioned, and needs to reconcile that itself (e.g.
 // force-disconnect local clients so they reconnect fresh and get correctly
 // re-assigned) — this function does not attempt that reconciliation.
-func (c *cache) checkSelfReaped(ctx context.Context) {
+func (c *Cache) checkSelfReaped(ctx context.Context) {
 	if !c.selfReapChecking.CompareAndSwap(false, true) {
 		return // there is anyone is already running; skipping this one.
 	}
@@ -901,7 +900,7 @@ func (c *cache) checkSelfReaped(ctx context.Context) {
 // verifyTurnOnExpiredNotifications check Redis turn on emit keyEvent
 // notifications for expired keys, which handleEvents relies on to
 // detect a crashed hub's expired heartbeat lease.
-func (c *cache) verifyTurnOnExpiredNotifications(ctx context.Context) error {
+func (c *Cache) verifyTurnOnExpiredNotifications(ctx context.Context) error {
 	verify, err := c.rdb.ConfigGet(ctx, "notify-keyspace-events").Result()
 	if err != nil {
 		return err
@@ -919,7 +918,7 @@ func (c *cache) verifyTurnOnExpiredNotifications(ctx context.Context) error {
 // handleEvents runs the cache background loop. It refreshes the hub
 // heartbeat and processes hub/device deletion and heartbeat-expiration events
 // until the context is canceled or a subscription is closed.
-func (c *cache) handleEvents(ctx context.Context) {
+func (c *Cache) handleEvents(ctx context.Context) {
 	var (
 		ticker          = time.NewTicker(c.heartbeatInterval)
 		hubHeartbeatKey = bs.Concat(hubHeartbeatPrefix, c.hubID)
@@ -1019,13 +1018,13 @@ func (c *cache) handleEvents(ctx context.Context) {
 }
 
 // bucketFor returns the registry bucket for the given device ID.
-func (c *cache) bucketFor(id uint64) uint32 {
+func (c *Cache) bucketFor(id uint64) uint32 {
 	return uint32(bit.Mix64(id) % uint64(c.deviceBucketCount))
 }
 
 // subscribe creates a Redis Pub/Sub subscription and waits until Redis
 // acknowledges the subscription before returning it.
-func (c *cache) subscribe(ctx context.Context, channel string) (*redis.PubSub, error) {
+func (c *Cache) subscribe(ctx context.Context, channel string) (*redis.PubSub, error) {
 	sub := c.rdb.Subscribe(ctx, channel)
 	if _, err := sub.Receive(ctx); err != nil {
 		_ = sub.Close()

@@ -1,15 +1,17 @@
 module xxx
 
-go 1.26.0
+go 1.27.0
 
 replace github.com/gocql/gocql => github.com/scylladb/gocql v1.19.0
 
 require (
+	filippo.io/edwards25519 v1.2.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/MicahParks/keyfunc/v3 v3.8.0
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/envoyproxy/protoc-gen-validate v1.3.3
-	github.com/go-chi/chi/v5 v5.3.0
+	github.com/flynn/noise v1.1.0
+	github.com/go-chi/chi/v5 v5.4.0
 	github.com/go-sql-driver/mysql v1.7.0
 	github.com/gocql/gocql v1.7.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -23,12 +25,12 @@ require (
 	github.com/sony/sonyflake/v2 v2.2.0
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
+	go.uber.org/goleak v1.3.0
 	go.uber.org/mock v0.6.0
 	go.uber.org/zap v1.28.0
 	golang.org/x/crypto v0.56.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
-	golang.org/x/term v0.45.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gorm.io/driver/mysql v1.5.7
@@ -37,7 +39,6 @@ require (
 )
 
 require (
-	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/MicahParks/jwkset v0.11.0 // indirect
 	github.com/antithesishq/antithesis-sdk-go v0.7.2-default-no-op // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

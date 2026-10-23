@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package nats
@@ -27,13 +16,14 @@ import (
 	"testing"
 	"time"
 
-	pbpriv "xxx/api/hub/v1/proto/gen/priv"
+	pbpriv "xxx/api/hub/v2/proto/gen/priv"
 
 	"xxx/pkg/log"
 	workerpool "xxx/pkg/pool/worker"
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -87,15 +77,20 @@ func startTestNATS(t *testing.T, clientOptions ...nats.Option) *nats.Conn {
 
 func newTestLogger(t *testing.T) *log.Logger {
 	t.Helper()
-	logger, closeLogger := log.NewLogger(nil)
+
+	logger, closeLogger, loggerErr := log.NewLogger(nil)
+	require.NoError(t, loggerErr)
 	t.Cleanup(func() { _ = closeLogger() })
 	return logger
 }
 
 func newTestPool(t *testing.T, workers int) *workerpool.Pool {
 	t.Helper()
+
+	poolConfig := workerpool.Config{NumWorkers: workers}
+	poolConfig.Load(nil)
 	p, closePool := workerpool.New(
-		workerpool.Config{NumWorkers: workers},
+		poolConfig,
 		func(workerID int, recovered any, stack []byte) {},
 	)
 	t.Cleanup(func() { closePool() })
@@ -113,6 +108,7 @@ func validConfig() Config {
 
 func marshalValidInboxMessage(t *testing.T, recvDeviceID uint64) []byte {
 	t.Helper()
+
 	msg := &pbpriv.Message{
 		SendDeviceId: 1,
 		RecvDeviceId: recvDeviceID,
@@ -121,8 +117,10 @@ func marshalValidInboxMessage(t *testing.T, recvDeviceID uint64) []byte {
 		EncryptedMsg: []byte("encrypted-message"),
 	}
 	require.NoError(t, msg.ValidateAll())
+
 	payload, err := proto.Marshal(msg)
 	require.NoError(t, err)
+
 	return payload
 }
 
@@ -136,6 +134,7 @@ func mustNewBroker(
 ) *broker {
 	t.Helper()
 
+	require.NoError(t, cfg.Load(nil))
 	svc, err := NewBroker(
 		cfg,
 		hubID,
@@ -149,6 +148,7 @@ func mustNewBroker(
 
 	br, ok := svc.(*broker)
 	require.True(t, ok)
+
 	return br
 }
 
@@ -221,10 +221,12 @@ func startConsumer(t *testing.T, br *broker) (cancel context.CancelFunc, wait fu
 	ctx, cancelFn := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- br.RunInboxConsumer(ctx) }()
+
 	return cancelFn, func() error {
 		select {
 		case err := <-errCh:
 			return err
+
 		case <-time.After(5 * time.Second):
 			t.Fatal("RunInboxConsumer did not return in time")
 			return nil
@@ -259,6 +261,7 @@ func TestBroker_New_MaxHopsTooLarge(t *testing.T) {
 	cfg := validConfig()
 	cfg.MaxHops = limitMaxHops + 1
 
+	require.NoError(t, cfg.Load(nil))
 	_, err := NewBroker(
 		cfg,
 		1,
@@ -284,9 +287,8 @@ func TestBroker_New_HappyPath(t *testing.T) {
 	require.NotNil(t, br)
 }
 
-// TestBroker_New_DefaultsWhenZeroValue documents the intended (and, for the
-// all-zero-value path, actually working) behavior.
-func TestBroker_New_DefaultsWhenZeroValue(t *testing.T) {
+// Defaults are loaded before constructing the broker.
+func TestBroker_New_UsesLoadedDefaults(t *testing.T) {
 	nc := startTestNATS(t)
 	cfg := Config{HubSubjectPrefix: "hub.inbox."} // everything else zero-value
 
@@ -356,7 +358,7 @@ func TestBroker_Route_PublishesToTargetHubInbox(t *testing.T) {
 		Hops:         0,
 	}
 	err = br.Route(
-		context.Background(),
+		t.Context(),
 		toHubID,
 		msg,
 	)
@@ -395,7 +397,7 @@ func TestBroker_Route_MaxHopsExceeded(t *testing.T) {
 		Hops:         uint32(cfg.MaxHops),
 	}
 	err = br.Route(
-		context.Background(),
+		t.Context(),
 		toHubID,
 		msg,
 	)
@@ -415,7 +417,7 @@ func TestBroker_RouteDoesNotFlushPerMessage(t *testing.T) {
 	)
 	before := dialer.pings.Load()
 	for range 32 {
-		require.NoError(t, br.Route(context.Background(), 42, &pbpriv.Message{RecvDeviceId: 7}))
+		require.NoError(t, br.Route(t.Context(), 42, &pbpriv.Message{RecvDeviceId: 7}))
 	}
 	// Flush once to ensure all writes reached the server before inspecting
 	// protocol traffic. Only this explicit flush should have sent a PING.
@@ -434,7 +436,7 @@ func TestBroker_Route_RespectsCallerContextCancellation(t *testing.T) {
 		func(context.Context, uint64, []byte) error { return nil },
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // already canceled
 	before := nc.Stats().OutMsgs
 
@@ -459,7 +461,7 @@ func TestBroker_Resolve_PropagatesOnMessageError(t *testing.T) {
 	)
 
 	err := br.resolve(
-		context.Background(),
+		t.Context(),
 		&pbpriv.Message{},
 		false,
 		0,
@@ -479,7 +481,7 @@ func TestResolve_SentReturnsNil(t *testing.T) {
 	)
 
 	err := br.resolve(
-		context.Background(),
+		t.Context(),
 		&pbpriv.Message{},
 		true,
 		0,
@@ -509,7 +511,7 @@ func TestBroker_Resolve_HubIDZeroPushesOffline(t *testing.T) {
 
 	msg := &pbpriv.Message{RecvDeviceId: 99}
 	err := br.resolve(
-		context.Background(),
+		t.Context(),
 		msg,
 		false,
 		0,
@@ -537,7 +539,7 @@ func TestBroker_Resolve_ForwardsToNewHubAndIncrementsHops(t *testing.T) {
 
 	msg := &pbpriv.Message{RecvDeviceId: 3, Hops: 1}
 	err = br.resolve(
-		context.Background(),
+		t.Context(),
 		msg,
 		false,
 		otherHubID,
@@ -580,7 +582,7 @@ func TestBroker_Resolve_FallsBackToOfflineWhenForwardExceedsMaxHops(t *testing.T
 		Hops:         uint32(br.maxHops) - 1,
 	}
 	err := br.resolve(
-		context.Background(),
+		t.Context(),
 		msg,
 		false,
 		2,
@@ -613,7 +615,7 @@ func TestBroker_PushOffline_MarshalsAndCallsCallback(t *testing.T) {
 		RecvDeviceId: 55,
 		Hops:         3,
 	}
-	err := br.pushOffline(context.Background(), msg)
+	err := br.pushOffline(t.Context(), msg)
 	require.NoError(t, err)
 	require.Equal(t, uint64(55), gotDeviceID)
 
@@ -635,16 +637,16 @@ func TestBroker_PushOffline_PropagatesCallbackError(t *testing.T) {
 		pushOff,
 	)
 
-	err := br.pushOffline(context.Background(), &pbpriv.Message{RecvDeviceId: 1})
+	err := br.pushOffline(t.Context(), &pbpriv.Message{RecvDeviceId: 1})
 	require.Equal(t, wantErr, err)
 }
 
 func TestBroker_RetryLocalDelivery_SucceedsBeforeExhaustingBackoff(t *testing.T) {
 	nc := startTestNATS(t)
 
-	var attempts int32
+	var attempts atomic.Int32
 	onMsg := func(*pbpriv.Message) (bool, uint64, error) {
-		n := atomic.AddInt32(&attempts, 1)
+		n := attempts.Add(1)
 		if n < 3 {
 			return false, 0, errors.New("transient")
 		}
@@ -674,18 +676,18 @@ func TestBroker_RetryLocalDelivery_SucceedsBeforeExhaustingBackoff(t *testing.T)
 		5 * time.Millisecond,
 	}
 
-	br.retryLocalDelivery(context.Background(), &pbpriv.Message{RecvDeviceId: 1})
+	br.retryLocalDelivery(t.Context(), &pbpriv.Message{RecvDeviceId: 1})
 
-	require.Equal(t, int32(3), atomic.LoadInt32(&attempts))
+	require.Equal(t, int32(3), attempts.Load())
 	require.Zero(t, offline.len())
 }
 
 func TestBroker_RetryLocalDelivery_ExhaustsBudgetThenPushesOffline(t *testing.T) {
 	nc := startTestNATS(t)
 
-	var attempts int32
+	var attempts atomic.Int32
 	onMsg := func(*pbpriv.Message) (bool, uint64, error) {
-		atomic.AddInt32(&attempts, 1)
+		attempts.Add(1)
 		return false, 0, errors.New("permanently down")
 	}
 
@@ -711,9 +713,9 @@ func TestBroker_RetryLocalDelivery_ExhaustsBudgetThenPushesOffline(t *testing.T)
 	)
 	br.deliveryBackOff = backoff
 
-	br.retryLocalDelivery(context.Background(), &pbpriv.Message{RecvDeviceId: 1})
+	br.retryLocalDelivery(t.Context(), &pbpriv.Message{RecvDeviceId: 1})
 
-	require.Len(t, backoff, int(atomic.LoadInt32(&attempts)))
+	require.Len(t, backoff, int(attempts.Load()))
 	require.Equal(t, 1, offline.len())
 }
 
@@ -806,8 +808,10 @@ func TestBroker_RunInboxConsumer_HandlerPanicReleasesSlotAndCompletesShutdown(t 
 
 			const panicMessages = 3
 			recovered := make(chan any, panicMessages)
+			poolConfig := workerpool.Config{NumWorkers: 1}
+			poolConfig.Load(nil)
 			pool, closePool := workerpool.New(
-				workerpool.Config{NumWorkers: 1},
+				poolConfig,
 				func(_ int, value any, _ []byte) { recovered <- value },
 			)
 			t.Cleanup(closePool)
@@ -820,6 +824,7 @@ func TestBroker_RunInboxConsumer_HandlerPanicReleasesSlotAndCompletesShutdown(t 
 				}
 				delivered <- struct{}{}
 			}
+			require.NoError(t, cfg.Load(nil))
 			svc, err := NewBroker(
 				cfg, 1, nc, newTestLogger(t), pool,
 				func(*pbpriv.Message) (bool, uint64, error) {
@@ -966,12 +971,17 @@ func TestBroker_RunInboxConsumer_PushesOfflineWhenDeviceUnreachable(t *testing.T
 }
 
 func TestBroker_RunInboxConsumer_DropsCorruptedMessage(t *testing.T) {
+	const sentinelID = uint64(77)
+
+	var onMsgCalls atomic.Int32
 	nc := startTestNATS(t)
 	cfg := validConfig()
-
-	var onMsgCalls int32
-	onMsg := func(*pbpriv.Message) (bool, uint64, error) {
-		atomic.AddInt32(&onMsgCalls, 1)
+	// A later sentinel cannot enter its handler before earlier work finishes.
+	cfg.InboxWorkers = 1
+	delivered := make(chan uint64, 2)
+	onMsg := func(msg *pbpriv.Message) (bool, uint64, error) {
+		onMsgCalls.Add(1)
+		delivered <- msg.RecvDeviceId
 		return true, 0, nil
 	}
 	br := mustNewBroker(
@@ -982,24 +992,41 @@ func TestBroker_RunInboxConsumer_DropsCorruptedMessage(t *testing.T) {
 		onMsg,
 		func(context.Context, uint64, []byte) error { return nil },
 	)
-
 	baseline := nc.NumSubscriptions()
 	cancel, wait := startConsumer(t, br)
-	defer func() {
-		cancel()
-		_ = wait()
-	}()
+	defer func() { cancel(); _ = wait() }()
 	waitForSubscription(t, nc, baseline)
-
 	inbox := fmt.Sprintf("%s%d", cfg.HubSubjectPrefix, br.hubID)
-	err := nc.Publish(inbox, []byte("not a valid protobuf message"))
-	require.NoError(t, err)
-	_ = nc.Flush()
+	require.NoError(t, nc.Publish(inbox, []byte("not a valid protobuf message")))
+	require.NoError(t, nc.Publish(inbox, marshalValidInboxMessage(t, sentinelID)))
+	require.NoError(t, nc.FlushTimeout(time.Second))
 
-	// Negative assertion: give it a generous window, then confirm
-	// onMessage was never reached for the corrupted payload.
-	time.Sleep(300 * time.Millisecond)
-	require.Equal(t, int32(0), atomic.LoadInt32(&onMsgCalls))
+	select {
+	case id := <-delivered:
+		require.Equal(t, sentinelID, id)
+
+	case <-time.After(2 * time.Second):
+		t.Fatal("consumer did not process the sentinel after the corrupted message")
+	}
+	require.Equal(t, int32(1), onMsgCalls.Load(), "only the valid sentinel may reach onMessage")
+}
+
+func TestHandleInboxMessageDropsCorruptedMessage(t *testing.T) {
+	br := &broker{
+		logger: newTestLogger(t),
+		onMessage: func(*pbpriv.Message) (bool, uint64, error) {
+			assert.Fail(t, "corrupted message reached onMessage")
+			return true, 0, nil
+		},
+		pushToOffline: func(context.Context, uint64, []byte) error {
+			assert.Fail(t, "corrupted message reached offline storage")
+			return nil
+		},
+	}
+	br.handleInboxMessage(
+		t.Context(),
+		&nats.Msg{Data: []byte("not a valid protobuf message")},
+	)
 }
 
 func TestBroker_RunInboxConsumer_ShutdownWaitsForInFlightHandler(t *testing.T) {
@@ -1034,6 +1061,7 @@ func TestBroker_RunInboxConsumer_ShutdownWaitsForInFlightHandler(t *testing.T) {
 	t.Cleanup(func() {
 		cancel()
 		releaseHandler()
+
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
@@ -1058,6 +1086,7 @@ func TestBroker_RunInboxConsumer_ShutdownWaitsForInFlightHandler(t *testing.T) {
 	select {
 	case <-done:
 		require.Fail(t, "RunInboxConsumer returned before the in-flight handler finished")
+
 	case <-time.After(200 * time.Millisecond):
 		// Expected: still blocked on wg.Wait().
 	}
@@ -1067,6 +1096,7 @@ func TestBroker_RunInboxConsumer_ShutdownWaitsForInFlightHandler(t *testing.T) {
 	select {
 	case <-done:
 		require.ErrorIs(t, consumeErr, context.Canceled)
+
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunInboxConsumer did not return after the handler finished")
 	}

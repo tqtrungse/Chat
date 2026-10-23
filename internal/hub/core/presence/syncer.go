@@ -1,18 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package presence
@@ -24,28 +12,23 @@ import (
 	"sync"
 	"time"
 
-	shareddevice "xxx/internal/shared/device"
+	"xxx/internal/shared/device"
 
-	"xxx/pkg/backoff"
 	"xxx/pkg/batcher"
 	"xxx/pkg/bit"
 	"xxx/pkg/breaker"
+	"xxx/pkg/jitter"
 	"xxx/pkg/log"
 	workerpool "xxx/pkg/pool/worker"
 
 	"go.uber.org/zap"
 )
 
-const (
-	defaultRetryAttempts     = 3
-	defaultBackoffJitterBase = time.Second
-	defaultBackoffJitterCap  = 30 * time.Second
-)
-
 type cacheOpPanicError struct {
 	value any
 }
 
+// Error describes the recovered cache-operation panic.
 func (e *cacheOpPanicError) Error() string {
 	return fmt.Sprintf("redis operation panic: %v", e.value)
 }
@@ -68,8 +51,10 @@ type Syncer struct {
 	batcher           *batcher.Batcher[deviceOp]
 }
 
+// NewSyncer creates a presence batcher partitioned by device ID, using the supplied
+// worker pool and circuit breaker for cache operations.
 func NewSyncer(
-	rootCtx context.Context,
+	ctx context.Context,
 	cfg Config,
 	dCache DistributedCache,
 	circuitBreaker breaker.Circuit,
@@ -86,20 +71,10 @@ func NewSyncer(
 		pool:              pool,
 	}
 
-	if s.retryAttempts == 0 {
-		s.retryAttempts = defaultRetryAttempts
-	}
-	if s.backoffJitterBase <= 0 {
-		s.backoffJitterBase = defaultBackoffJitterBase
-	}
-	if s.backoffJitterCap <= 0 {
-		s.backoffJitterCap = defaultBackoffJitterCap
-	}
-
 	s.batcher, _ = batcher.New(
-		rootCtx,
+		ctx,
 		batcher.Config[deviceOp]{
-			BatchSize: cfg.BatchSize,
+			BatchSize: normalizeBatchSize(cfg.BatchSize),
 			Linger:    cfg.Linger,
 			Hash:      func(op deviceOp) uint64 { return bit.Mix64(op.DeviceID.Uint64()) },
 			Flush:     s.flush,
@@ -108,9 +83,11 @@ func NewSyncer(
 	return s
 }
 
+// Add queues a timestamped device registration and reports the eventual batch result
+// through onResult. An immediate submission error is returned to the caller.
 func (s *Syncer) Add(
 	ctx context.Context,
-	id shareddevice.ID,
+	id device.ID,
 	ts int64,
 	onResult func(any, error),
 ) error {
@@ -132,9 +109,11 @@ func (s *Syncer) Add(
 	})
 }
 
+// Del queues a timestamped device removal. A removal superseded by a newer
+// operation completes successfully; immediate worker submission failures are returned.
 func (s *Syncer) Del(
 	ctx context.Context,
-	id shareddevice.ID,
+	id device.ID,
 	ts int64,
 	onResult func(error),
 ) error {
@@ -160,6 +139,8 @@ func (s *Syncer) Del(
 	})
 }
 
+// flush selects the latest operation per device, executes cache batches with
+// retries, and resolves all callbacks before the partition processes another batch.
 func (s *Syncer) flush(ctx context.Context, reqs []batcher.Req[deviceOp]) {
 	if len(reqs) == 0 {
 		return
@@ -245,18 +226,23 @@ func (s *Syncer) retryDistCacheOperation(
 	ctx context.Context,
 	fn func(context.Context) error,
 ) error {
+	delay, err := jitter.New(s.backoffJitterBase, s.backoffJitterCap)
+	if err != nil {
+		return fmt.Errorf("create cache retry jitter: %w", err)
+	}
+
 	var (
 		maxAttempts = s.retryAttempts
-		jitter      = backoff.NewJitter(s.backoffJitterBase, s.backoffJitterCap)
 		lastErr     error
 	)
 
 	for attempt := range maxAttempts {
-		if err := ctx.Err(); err != nil {
+		err = ctx.Err()
+		if err != nil {
 			return err
 		}
 
-		err := s.executeDistCacheAttempt(ctx, fn)
+		err = s.executeDistCacheAttempt(ctx, fn)
 		if err == nil {
 			return nil
 		}
@@ -265,8 +251,8 @@ func (s *Syncer) retryDistCacheOperation(
 
 		// A panic is a programming/dependency failure, not a transient
 		// infrastructure error. Never retry it.
-		var panicErr *cacheOpPanicError
-		if errors.As(err, &panicErr) {
+		_, ok := errors.AsType[*cacheOpPanicError](err)
+		if ok {
 			return err
 		}
 
@@ -292,10 +278,11 @@ func (s *Syncer) retryDistCacheOperation(
 			return lastErr
 		}
 
-		duration := jitter.Next()
+		duration := delay.Next()
 		timer := time.NewTimer(duration)
 
 		select {
+		case <-timer.C:
 		case <-ctx.Done():
 			if !timer.Stop() {
 				select {
@@ -304,14 +291,14 @@ func (s *Syncer) retryDistCacheOperation(
 				}
 			}
 			return ctx.Err()
-
-		case <-timer.C:
 		}
 	}
 
 	return lastErr
 }
 
+// executeDistCacheAttempt runs one operation through the circuit breaker and
+// converts a panic into a logged, non-retryable cacheOpPanicError.
 func (s *Syncer) executeDistCacheAttempt(
 	ctx context.Context,
 	fn func(context.Context) error,

@@ -1,7 +1,6 @@
 /*
- * Copyright 2026 tqtrungse@gmail.com. All rights reserved.
- * Use of this pub code is governed by a BSD-style
- * license that can be found in the LICENSE file.
+ * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package protocol
@@ -9,11 +8,7 @@ package protocol
 import "errors"
 
 var (
-	ErrPkgSizeInvalid       = errors.New("invalid packet size")
-	ErrPkgModified          = errors.New("the packet is modified")
-	ErrPkgTooLarge          = errors.New("packet too large")
-	ErrPkgHandshakeTooLarge = errors.New("handshake packet too large")
-	ErrMsgTypeInvalid       = errors.New("invalid message type")
-	ErrMsgCipherInvalid     = errors.New("invalid message cipher size")
-	ErrConnKeyBaseNil       = errors.New("connection key base is nil")
+	ErrPkgSizeInvalid = errors.New("invalid packet size")
+	ErrPkgTooLarge    = errors.New("packet too large")
+	ErrMsgKindInvalid = errors.New("invalid message type")
 )

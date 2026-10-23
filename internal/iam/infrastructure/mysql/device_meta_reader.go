@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package mysql
@@ -20,9 +9,9 @@ import (
 	"context"
 	"errors"
 
-	"xxx/internal/iam/application/keyexchange"
+	"xxx/internal/iam/application/connticket"
 	"xxx/internal/iam/infrastructure/mysql/model"
-	shareddevice "xxx/internal/shared/device"
+	"xxx/internal/shared/device"
 
 	"xxx/pkg/database/sql"
 
@@ -31,28 +20,31 @@ import (
 
 type deviceMetaReader struct{}
 
-func NewDeviceMetaReader() keyexchange.DeviceMetaReader {
+// NewDeviceMetaReader creates the MySQL reader used to load device authorization metadata.
+func NewDeviceMetaReader() connticket.DeviceMetaReader {
 	return new(deviceMetaReader)
 }
 
+// FindDeviceMeta reads the device owner, state, and identity public key using
+// the database handle in dbCtx. It returns nil, nil when the device is absent.
 func (d *deviceMetaReader) FindDeviceMeta(
 	dbCtx context.Context,
-	deviceID shareddevice.ID,
-) (*keyexchange.DeviceMeta, error) {
+	deviceID device.ID,
+) (*connticket.DeviceMeta, error) {
 	val, err := sql.ExtractDB(dbCtx)
 	if err != nil {
 		return nil, err
 	}
 
 	var (
-		db     = val.(*gorm.DB)
-		device = &model.Device{ID: deviceID}
+		db      = val.(*gorm.DB)
+		mDevice = &model.Device{ID: deviceID}
 	)
 
 	err = db.
 		WithContext(dbCtx).
 		Select("external_id", "state", "identity_pub").
-		Take(device).
+		Take(mDevice).
 		Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -60,9 +52,9 @@ func (d *deviceMetaReader) FindDeviceMeta(
 		}
 		return nil, err
 	}
-	return &keyexchange.DeviceMeta{
-		ExternalID:  device.ExternalID,
-		State:       device.State,
-		IdentityPub: device.IdentityPub,
+	return &connticket.DeviceMeta{
+		ExternalID:  mDevice.ExternalID,
+		State:       mDevice.State,
+		IdentityPub: mDevice.IdentityPub,
 	}, nil
 }

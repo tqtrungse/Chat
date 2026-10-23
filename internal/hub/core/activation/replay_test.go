@@ -1,91 +1,58 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
-package activation
+package activation_test
 
 import (
+	"bytes"
+	"crypto/ed25519"
 	"testing"
 
-	pbpub "xxx/api/hub/v1/proto/gen/pub"
-	"xxx/internal/hub/core/protocol"
-	"xxx/internal/hub/core/protocol/protocoltest"
-	sharedsession "xxx/internal/shared/session"
+	"xxx/internal/hub/core/auth"
+	"xxx/internal/shared/ticket/tickettest"
 
 	slicepool "xxx/pkg/pool/slice"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestDeriveConnKeys_RejectsFrameReplayAcrossConnections(t *testing.T) {
-	var ticketKeys sharedsession.Keys
-	for i := range 32 {
-		ticketKeys.RecvEnc[i] = byte(i + 1)
-		ticketKeys.SendEnc[i] = byte(i + 2)
-		ticketKeys.RecvMac[i] = byte(i + 3)
-		ticketKeys.SendMac[i] = byte(i + 4)
-	}
-	defer ticketKeys.Clear()
-
-	var nonceA, nonceB [32]byte
-	for i := range 32 {
-		nonceA[i] = byte(i + 5)
-		nonceB[i] = byte(i + 6)
-	}
-	keysA, err := DeriveConnKeys(&ticketKeys, nonceA)
-	require.NoError(t, err)
-	defer keysA.Clear()
-	keysB, err := DeriveConnKeys(&ticketKeys, nonceB)
-	require.NoError(t, err)
-	defer keysB.Clear()
-
-	encoder := protocol.NewEncoder(nil)
-	decoder := protocol.NewDecoder(nil)
-	frame, err := encoder.Encode(
-		&keysA.RecvMac,
-		0,
-		pbpub.MsgType_REQ_DIRECT_FORWARD_MSG,
-		new(pbpub.DirectForwardMsgReq),
-		nil,
+func TestIdentityProofCannotReplayAcrossBindingTicketOrChallenge(t *testing.T) {
+	var (
+		binding   = bytes.Repeat([]byte{1}, 32)
+		challenge = bytes.Repeat([]byte{2}, 32)
+		ticket    = []byte("signed ticket")
+		msg, err  = auth.SigningMessage(binding, ticket, challenge)
 	)
+
+	t.Cleanup(func() {
+		clear(msg[:cap(msg)])
+		slicepool.Put(msg)
+	})
 	require.NoError(t, err)
-	defer func() {
-		clear(frame[:cap(frame)])
-		slicepool.Put(frame)
-	}()
 
-	_, _, _, err = decoder.Decode(&keysB.RecvMac, 0, frame)
-	require.ErrorIs(t, err, protocol.ErrPkgModified)
-
-	ch := protocoltest.NewSecureChannel(t)
-	secureEncoder := protocol.NewEncoder(ch)
-	secureDecoder := protocol.NewDecoder(ch)
-	secureFrame, err := secureEncoder.EncodeS(
-		&keysA.RecvEnc,
-		0,
-		pbpub.MsgType_REQ_SEND_MSG,
-		new(pbpub.SendMsgReq),
-		nil,
+	var (
+		private   = tickettest.IdentityPrivate()
+		signature = ed25519.Sign(private, msg)
+		public    = private.Public().(ed25519.PublicKey)
 	)
-	require.NoError(t, err)
-	defer func() {
-		clear(secureFrame[:cap(secureFrame)])
-		slicepool.Put(secureFrame)
-	}()
 
-	_, _, _, err = secureDecoder.DecodeS(&keysB.RecvEnc, 0, secureFrame)
-	require.Error(t, err)
+	for _, change := range []int{0, 1, 2} {
+		b, c, w := bytes.Clone(binding), bytes.Clone(challenge), bytes.Clone(ticket)
+		switch change {
+		case 0:
+			b[0] ^= 1
+		case 1:
+			c[0] ^= 1
+		case 2:
+			w[0] ^= 1
+		}
+
+		var other []byte
+		other, err = auth.SigningMessage(b, w, c)
+		require.NoError(t, err)
+		require.False(t, ed25519.Verify(public, other, signature))
+		slicepool.Put(other)
+	}
 }

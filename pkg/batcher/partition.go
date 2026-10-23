@@ -1,67 +1,52 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package batcher
 
 import (
 	"sync/atomic"
+	"unsafe"
 
-	"xxx/pkg/backoff"
+	"xxx/pkg/cpu"
+	"xxx/pkg/os"
 )
 
+// partition holds the admission state and the queue of one batching loop.
+//
+// state packs two values. The top bit is closedBit.
+// The remaining bits count currently admitted Submit calls (active).
+// Each successful acquire requires one release.
+// Once close sets closedBit, no later acquire can succeed.
 type partition[T any] struct {
+	state atomic.Uint64
+	_     [cpu.CacheLineSize - unsafe.Sizeof(atomic.Uint64{})]byte
+
 	incoming chan Req[T]
-	state    atomic.Uint64
+	_        [cpu.CacheLineSize - os.PtrSize]byte
 }
 
-// acquire atomically admits a new Submit and increments the number of active
-// Submit calls.
+// acquire admits a new Submit call and increments the active count.
 //
-// The closed bit and active count share one atomic word. The CAS makes the
-// admission decision and increment one indivisible operation, preventing this
-// shutdown race:
+// acquire uses an optimistic increment.
+// First, acquire adds 1 atomically and examines the returned closed bit.
+// If admission is closed, acquire reverses the increment and rejects the call.
+// A successful caller already contributes to the active count before it can enqueue.
+// There is no separate Load-then-Add gap.
 //
-// Submit: Load -> sees open
-// Shutdown: sets closed bit -> observes zero active -> returns
-// Submit: Add active
-//
-// A plain Load followed by Add would allow to Submit to be admitted after
-// shutdown had already decided that no active callers remained.
+// After close, a late caller can temporarily increase activeCount before reversal.
+// This increase can delay shutdown, but it cannot permit an enqueue.
 func (p *partition[T]) acquire() bool {
-	var bc backoff.Cpu
-	for {
-		state := p.state.Load()
-
-		if state&closedBit != 0 {
-			return false
-		}
-
-		if p.state.CompareAndSwap(state, state+1) {
-			return true
-		}
-
-		bc.Snooze()
-		if bc.IsDone() {
-			bc.Reset()
-		}
+	if p.state.Add(1)&closedBit != 0 {
+		p.state.Add(^uint64(0)) // Reverse the failed admission increment.
+		return false
 	}
+	return true
 }
 
-// release decrements the number of Submit calls that have acquired admission.
-// It must be called exactly once for every successful acquire.
+// release decrements the number of Submit calls that have admission.
+// Call release once for each successful acquire, after the enqueue attempt completes.
 func (p *partition[T]) release() {
 	p.state.Add(^uint64(0))
 }

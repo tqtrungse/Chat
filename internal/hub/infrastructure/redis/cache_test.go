@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package redis
@@ -19,11 +8,14 @@ package redis
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
-	shareddevice "xxx/internal/shared/device"
+	"xxx/internal/hub/core/presence"
+	"xxx/internal/shared/device"
 
 	"xxx/pkg/bs"
 	"xxx/pkg/log"
@@ -40,20 +32,21 @@ import (
 
 const testBucketCount = uint16(4)
 
-// newTestCache spins up a fresh miniredis instance and a *cache wired
+// newTestCache spins up a fresh miniredis instance and a *Cache wired
 // directly to it (white-box: same package as cache.go), bypassing Start()
 // so most tests don't need pub/sub plumbing.
-func newTestCache(t *testing.T, hubID uint64) (*cache, *miniredis.Miniredis) {
+func newTestCache(t *testing.T, hubID uint64) (*Cache, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
 	rdb := redisv9.NewClient(&redisv9.Options{Addr: mr.Addr()})
-	logger, closeLogger := log.NewLogger(nil)
+	logger, closeLogger, loggerErr := log.NewLogger(nil)
+	require.NoError(t, loggerErr)
 	t.Cleanup(func() {
 		_ = rdb.Close()
 		_ = closeLogger()
 	})
 
-	c := &cache{
+	c := &Cache{
 		rdb:                        rdb,
 		logger:                     logger,
 		done:                       make(chan struct{}),
@@ -67,17 +60,18 @@ func newTestCache(t *testing.T, hubID uint64) (*cache, *miniredis.Miniredis) {
 	return c, mr
 }
 
-// sharedCache builds a second *cache pointed at an already-running
+// sharedCache builds a second *Cache pointed at an already-running
 // miniredis instance, simulating another hub process.
-func sharedCache(t *testing.T, mr *miniredis.Miniredis, hubID uint64) *cache {
+func sharedCache(t *testing.T, mr *miniredis.Miniredis, hubID uint64) *Cache {
 	t.Helper()
 	rdb := redisv9.NewClient(&redisv9.Options{Addr: mr.Addr()})
-	logger, closeLogger := log.NewLogger(nil)
+	logger, closeLogger, loggerErr := log.NewLogger(nil)
+	require.NoError(t, loggerErr)
 	t.Cleanup(func() {
 		_ = rdb.Close()
 		_ = closeLogger()
 	})
-	return &cache{
+	return &Cache{
 		rdb:               rdb,
 		logger:            logger,
 		done:              make(chan struct{}),
@@ -101,7 +95,7 @@ func ctxT(t *testing.T) context.Context {
 // handleEvents expects all three subscribers to be initialized before it
 // starts. This helper wires them directly so tests can exercise event handling
 // without going through Start.
-func attachHandlerSubs(t *testing.T, c *cache, ctx context.Context) {
+func attachHandlerSubs(t *testing.T, c *Cache, ctx context.Context) {
 	t.Helper()
 	mustSub := func(channel string) *redisv9.PubSub {
 		sub := c.rdb.Subscribe(ctx, channel)
@@ -174,10 +168,10 @@ func TestBatchAddDevices_MultipleBuckets_AllDevicesOwnedCorrectly(t *testing.T) 
 
 	// 4 buckets (testBucketCount), 3 devices per bucket, deliberately out
 	// of bucket order in the input slice.
-	var devices []shareddevice.ID
+	var devices []device.ID
 	for round := range uint64(3) {
 		for b := range uint64(testBucketCount) {
-			devices = append(devices, shareddevice.ID(b+round*uint64(testBucketCount)))
+			devices = append(devices, device.ID(b+round*uint64(testBucketCount)))
 		}
 	}
 
@@ -218,7 +212,7 @@ func TestBatchAddDevices_MultipleBuckets_AllDevicesOwnedCorrectly(t *testing.T) 
 func TestBatchAddDevices_MovesDevicesFromOldHub(t *testing.T) {
 	c, _ := newTestCache(t, 2)
 	ctx := ctxT(t)
-	devices := []shareddevice.ID{10, 11, 12, 13}
+	devices := []device.ID{10, 11, 12, 13}
 
 	for _, dev := range devices {
 		bucket := c.bucketFor(dev.Uint64())
@@ -301,12 +295,12 @@ func TestBatchAddDevices_DuplicateDeviceIDs(t *testing.T) {
 	c, _ := newTestCache(t, 9)
 	ctx := ctxT(t)
 
-	devices := []shareddevice.ID{1, 5, 1, 9, 5}
+	devices := []device.ID{1, 5, 1, 9, 5}
 
 	_, err := c.BatchAddDevices(ctx, devices)
 	require.NoError(t, err)
 
-	for _, dev := range []shareddevice.ID{1, 5, 9} {
+	for _, dev := range []device.ID{1, 5, 9} {
 		bucket := c.bucketFor(dev.Uint64())
 		key := bs.Concat(devicesPrefix, uint64(bucket))
 		field := bs.U64ToBytes(dev.Uint64())
@@ -342,7 +336,7 @@ func TestListHubsByDevices_MixedFoundAndMissing_PreservesInputOrder(t *testing.T
 
 	// Owned devices spread across every bucket; one device (99) is never
 	// registered anywhere, so it must come back as 0.
-	owners := map[shareddevice.ID]uint64{0: 10, 1: 20, 2: 30, 3: 40, 5: 50}
+	owners := map[device.ID]uint64{0: 10, 1: 20, 2: 30, 3: 40, 5: 50}
 	for dev, hub := range owners {
 		bucket := c.bucketFor(dev.Uint64())
 		deviceKey := bs.Concat(devicesPrefix, uint64(bucket))
@@ -363,7 +357,7 @@ func TestListHubsByDevices_MixedFoundAndMissing_PreservesInputOrder(t *testing.T
 		require.NoError(t, err)
 	}
 
-	query := []shareddevice.ID{5, 99, 0, 3, 1, 2} // shuffled, includes the unregistered one
+	query := []device.ID{5, 99, 0, 3, 1, 2} // shuffled, includes the unregistered one
 	result, err := c.ListHubsByDevices(ctx, query)
 	require.NoError(t, err)
 	require.Equal(t, len(query), len(result))
@@ -381,9 +375,9 @@ func TestListHubsByDevices_MixedFoundAndMissing_PreservesInputOrder(t *testing.T
 func TestDelDevice_OwnedByCaller_RemovesAndPublishes(t *testing.T) {
 	c, _ := newTestCache(t, 1)
 	ctx := ctxT(t)
-	dev := shareddevice.ID(500)
+	dev := device.ID(500)
 
-	_, err := c.BatchAddDevices(ctx, []shareddevice.ID{dev})
+	_, err := c.BatchAddDevices(ctx, []device.ID{dev})
 	require.NoError(t, err)
 
 	sub := c.rdb.Subscribe(ctx, eventDelDevice)
@@ -391,7 +385,7 @@ func TestDelDevice_OwnedByCaller_RemovesAndPublishes(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = sub.Close() }()
 
-	err = c.BatchDelDevices(ctx, []shareddevice.ID{dev})
+	err = c.BatchDelDevices(ctx, []device.ID{dev})
 	require.NoError(t, err)
 
 	bucket := c.bucketFor(dev.Uint64())
@@ -438,7 +432,7 @@ func TestDelDevice_NotOwner_NoOp(t *testing.T) {
 	var (
 		c, _         = newTestCache(t, 2) // caller is hub 2
 		ctx          = ctxT(t)
-		dev          = shareddevice.ID(600)
+		dev          = device.ID(600)
 		bucket       = c.bucketFor(dev.Uint64())
 		hubDeviceKey = bs.Concat(hubDevicesPrefix, uint64(1))
 		deviceKey    = bs.Concat(devicesPrefix, uint64(bucket))
@@ -466,7 +460,7 @@ func TestDelDevice_NotOwner_NoOp(t *testing.T) {
 	).Err()
 	require.NoError(t, err)
 
-	err = c.BatchDelDevices(ctx, []shareddevice.ID{dev})
+	err = c.BatchDelDevices(ctx, []device.ID{dev})
 	require.NoError(t, err)
 
 	owner, err := c.rdb.HGet(
@@ -490,18 +484,18 @@ func TestBatchDelDevices_MixedOwnershipDeletesOnlyOwnedDevices(t *testing.T) {
 
 	otherCache := sharedCache(t, mr, 2)
 
-	owned1 := shareddevice.ID(1)
-	other := shareddevice.ID(2)
-	owned2 := shareddevice.ID(3)
-	missing := shareddevice.ID(4)
+	owned1 := device.ID(1)
+	other := device.ID(2)
+	owned2 := device.ID(3)
+	missing := device.ID(4)
 
-	_, err := c.BatchAddDevices(ctx, []shareddevice.ID{owned1, owned2})
+	_, err := c.BatchAddDevices(ctx, []device.ID{owned1, owned2})
 	require.NoError(t, err)
 
-	_, err = otherCache.BatchAddDevices(ctx, []shareddevice.ID{other})
+	_, err = otherCache.BatchAddDevices(ctx, []device.ID{other})
 	require.NoError(t, err)
 
-	require.NoError(t, c.BatchDelDevices(ctx, []shareddevice.ID{
+	require.NoError(t, c.BatchDelDevices(ctx, []device.ID{
 		owned1,
 		other,
 		owned2,
@@ -510,7 +504,7 @@ func TestBatchDelDevices_MixedOwnershipDeletesOnlyOwnedDevices(t *testing.T) {
 
 	result, err := c.ListHubsByDevices(
 		ctx,
-		[]shareddevice.ID{owned1, other, owned2, missing},
+		[]device.ID{owned1, other, owned2, missing},
 	)
 	require.NoError(t, err)
 
@@ -530,9 +524,9 @@ func TestReapHub_DrainsDevicesAcrossBuckets(t *testing.T) {
 	c, _ := newTestCache(t, 1)
 	ctx := ctxT(t)
 
-	var devices []shareddevice.ID
+	var devices []device.ID
 	for i := range uint64(20) {
-		devices = append(devices, shareddevice.ID(i))
+		devices = append(devices, device.ID(i))
 	}
 
 	_, err := c.BatchAddDevices(ctx, devices)
@@ -587,7 +581,7 @@ func TestReapHub_LeavesReclaimedDeviceAlone(t *testing.T) {
 	var (
 		c, _          = newTestCache(t, 1)
 		ctx           = ctxT(t)
-		dev           = shareddevice.ID(700)
+		dev           = device.ID(700)
 		bucket        = c.bucketFor(dev.Uint64())
 		hubDeviceKey  = bs.Concat(hubDevicesPrefix, uint64(1))
 		hubDeviceKey2 = bs.Concat(hubDevicesPrefix, uint64(2))
@@ -704,9 +698,9 @@ func TestReapHub_DrainsDevicesAcrossMultipleBatches(t *testing.T) {
 
 	c.reapBatchSize = 3
 
-	var devices []shareddevice.ID
+	var devices []device.ID
 	for i := range uint64(10) {
-		devices = append(devices, shareddevice.ID(i))
+		devices = append(devices, device.ID(i))
 	}
 
 	_, err := c.BatchAddDevices(ctx, devices)
@@ -795,25 +789,25 @@ func TestOnDelDeviceEvent_ReceivesOtherHubsDelete_FiltersSelf(t *testing.T) {
 	ctx := ctxT(t)
 
 	other := sharedCache(t, mr, 2)
-	dev := shareddevice.ID(42)
-	_, err := other.BatchAddDevices(ctx, []shareddevice.ID{dev})
+	dev := device.ID(42)
+	_, err := other.BatchAddDevices(ctx, []device.ID{dev})
 	require.NoError(t, err)
 
 	attachHandlerSubs(t, c, ctx)
 
 	type call struct {
 		hubID uint64
-		dev   shareddevice.ID
+		dev   device.ID
 	}
 
 	got := make(chan call, 1)
-	c.callbacks.OnDeviceDeleted = func(hubID uint64, deviceID shareddevice.ID) {
+	c.callbacks.OnDeviceDeleted = func(hubID uint64, deviceID device.ID) {
 		got <- call{hubID, deviceID}
 	}
 
 	go c.handleEvents(ctx)
 
-	err = other.BatchDelDevices(ctx, []shareddevice.ID{dev})
+	err = other.BatchDelDevices(ctx, []device.ID{dev})
 	require.NoError(t, err)
 
 	select {
@@ -825,9 +819,9 @@ func TestOnDelDeviceEvent_ReceivesOtherHubsDelete_FiltersSelf(t *testing.T) {
 	}
 
 	// After receiving an event from another hub, Hub 1 deletes its own device.
-	_, err = c.BatchAddDevices(ctx, []shareddevice.ID{999})
+	_, err = c.BatchAddDevices(ctx, []device.ID{999})
 	require.NoError(t, err)
-	err = c.BatchDelDevices(ctx, []shareddevice.ID{999})
+	err = c.BatchDelDevices(ctx, []device.ID{999})
 	require.NoError(t, err)
 
 	select {
@@ -848,10 +842,11 @@ func TestStart_PingFailure_ReturnsErrorAndClosesRedis(t *testing.T) {
 		Addr: mr.Addr(),
 	})
 
-	logger, closeLogger := log.NewLogger(nil)
+	logger, closeLogger, loggerErr := log.NewLogger(nil)
+	require.NoError(t, loggerErr)
 	defer func() { _ = closeLogger() }()
 
-	c := &cache{
+	c := &Cache{
 		rdb:               rdb,
 		logger:            logger,
 		done:              make(chan struct{}),
@@ -865,7 +860,7 @@ func TestStart_PingFailure_ReturnsErrorAndClosesRedis(t *testing.T) {
 	// Make Redis unavailable before Start().
 	mr.Close()
 
-	err := c.start(ctxT(t))
+	err := c.Start(ctxT(t))
 	require.Error(t, err)
 
 	// Start() closes the Redis client when Ping fails.
@@ -875,11 +870,11 @@ func TestStart_PingFailure_ReturnsErrorAndClosesRedis(t *testing.T) {
 func TestStart_Success_RegistersHubAndSubscribes(t *testing.T) {
 	c, _ := newTestCache(t, 1)
 	c.callbacks.OnHubDeleted = func(hubID uint64) {}
-	c.callbacks.OnDeviceDeleted = func(hubID uint64, deviceID shareddevice.ID) {}
+	c.callbacks.OnDeviceDeleted = func(hubID uint64, deviceID device.ID) {}
 	ctx := ctxT(t)
 
-	require.NoError(t, c.start(ctx))
-	defer func() { _ = c.close() }()
+	require.NoError(t, c.Start(ctx))
+	defer func() { _ = c.Close() }()
 
 	isMember, err := c.rdb.SIsMember(ctx, hubsKey, "1").Result()
 	require.NoError(t, err)
@@ -903,14 +898,15 @@ func TestStart_CrossInstance_DelEventPropagates(t *testing.T) {
 	mr := miniredis.RunT(t)
 	ctx := ctxT(t)
 
-	newStarted := func(hubID uint64) (*cache, chan uint64) {
+	newStarted := func(hubID uint64) (*Cache, chan uint64) {
 		rdb := redisv9.NewClient(&redisv9.Options{Addr: mr.Addr()})
-		logger, closeLogger := log.NewLogger(nil)
+		logger, closeLogger, loggerErr := log.NewLogger(nil)
+		require.NoError(t, loggerErr)
 		t.Cleanup(func() {
 			_ = rdb.Close()
 			_ = closeLogger()
 		})
-		c := &cache{
+		c := &Cache{
 			rdb:               rdb,
 			logger:            logger,
 			done:              make(chan struct{}),
@@ -922,10 +918,10 @@ func TestStart_CrossInstance_DelEventPropagates(t *testing.T) {
 		}
 		delCh := make(chan uint64, 4)
 		c.callbacks.OnHubDeleted = func(hubID uint64) { delCh <- hubID }
-		c.callbacks.OnDeviceDeleted = func(uint64, shareddevice.ID) {}
+		c.callbacks.OnDeviceDeleted = func(uint64, device.ID) {}
 
-		require.NoError(t, c.start(ctx))
-		t.Cleanup(func() { _ = c.close() })
+		require.NoError(t, c.Start(ctx))
+		t.Cleanup(func() { _ = c.Close() })
 		return c, delCh
 	}
 
@@ -947,11 +943,11 @@ func TestStop_AfterStart_StopsBackgroundHandlerAndClosesRedis(t *testing.T) {
 	ctx := ctxT(t)
 
 	c.callbacks.OnHubDeleted = func(uint64) {}
-	c.callbacks.OnDeviceDeleted = func(uint64, shareddevice.ID) {}
+	c.callbacks.OnDeviceDeleted = func(uint64, device.ID) {}
 
-	require.NoError(t, c.start(ctx))
+	require.NoError(t, c.Start(ctx))
 
-	require.NoError(t, c.close())
+	require.NoError(t, c.Close())
 
 	// handleEvents must have exited and closed done before Stop returns.
 	select {
@@ -963,4 +959,146 @@ func TestStop_AfterStart_StopsBackgroundHandlerAndClosesRedis(t *testing.T) {
 	// Redis client must be closed by Stop().
 	err := c.rdb.Ping(ctxT(t)).Err()
 	require.Error(t, err)
+}
+
+func TestDeviceBatchesEnforceLimitBeforeRedisCommands(t *testing.T) {
+	cache, mr := newTestCache(t, 7)
+	ctx := ctxT(t)
+	ids := make([]device.ID, presence.MaxBatchSize)
+	for i := range ids {
+		ids[i] = device.ID(i + 1)
+	}
+	pending, err := cache.BatchAddDevices(ctx, ids)
+	require.NoError(t, err)
+	require.Empty(t, pending, "devices have no pending offline message dates")
+
+	oversized := append(append([]device.ID(nil), ids...), device.ID(presence.MaxBatchSize+1))
+	before := mr.CommandCount()
+	pending, err = cache.BatchAddDevices(ctx, oversized)
+	require.ErrorIs(t, err, ErrBatchTooLarge)
+	require.Nil(t, pending)
+	require.False(
+		t,
+		cache.IsInfraError(err),
+		"oversized input must not trigger infrastructure retries",
+	)
+	require.ErrorIs(
+		t,
+		cache.BatchDelDevices(ctx, oversized),
+		ErrBatchTooLarge,
+	)
+	require.Equal(
+		t,
+		before,
+		mr.CommandCount(),
+		"oversized requests must not send Redis commands",
+	)
+
+	owners, err := cache.ListHubsByDevices(ctx, ids)
+	require.NoError(t, err)
+
+	for _, owner := range owners {
+		require.Equal(t, uint64(7), owner, "rejected deletion must leave ownership unchanged")
+	}
+	require.NoError(t, cache.BatchDelDevices(ctx, ids))
+
+	owners, err = cache.ListHubsByDevices(ctx, ids)
+	require.NoError(t, err)
+
+	for _, owner := range owners {
+		require.Zero(t, owner)
+	}
+}
+
+func newLifecycleCache(t *testing.T) *Cache {
+	t.Helper()
+	mr := miniredis.RunT(t)
+	logger, closeLogger, loggerErr := log.NewLogger(nil)
+	require.NoError(t, loggerErr)
+	t.Cleanup(func() { require.NoError(t, closeLogger()) })
+	c := NewCache(7, Config{Addr: mr.Addr(), HeartbeatInterval: time.Hour, HeartbeatTTL: 2 * time.Hour}, logger, nil)
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	return c
+}
+
+func TestCacheSetCallbacksBeforeStart(t *testing.T) {
+	c := newLifecycleCache(t)
+	var got uint64
+	require.NoError(t, c.SetCallbacks(Callbacks{OnHubDeleted: func(id uint64) { got = id }}))
+	require.ErrorIs(t, c.SetCallbacks(Callbacks{}), ErrCallbacksAlreadySet)
+	c.callbacks.OnHubDeleted(42)
+	require.Equal(t, uint64(42), got, "duplicate setup must preserve the original callback")
+	require.NotPanics(t, func() { c.callbacks.OnDeviceDeleted(7, 1); c.callbacks.OnSelfReaped() })
+	require.NoError(t, c.Start(ctxT(t)))
+	require.ErrorIs(t, c.SetCallbacks(Callbacks{}), ErrCallbacksAfterStart)
+	require.ErrorIs(t, c.Start(ctxT(t)), ErrCacheStarted)
+	require.NoError(t, c.Close())
+	require.NoError(t, c.Close())
+	require.ErrorIs(t, c.SetCallbacks(Callbacks{}), ErrCacheClosed)
+	require.ErrorIs(t, c.Start(ctxT(t)), ErrCacheClosed)
+}
+
+func TestCacheCloseBeforeStart(t *testing.T) {
+	c := newLifecycleCache(t)
+	require.NoError(t, c.Close())
+	require.NoError(t, c.Close())
+	require.ErrorIs(t, c.Start(ctxT(t)), ErrCacheClosed)
+}
+
+func TestCacheConcurrentSetCallbacks(t *testing.T) {
+	c := newLifecycleCache(t)
+	results := make(chan error, 16)
+	var wg sync.WaitGroup
+	for range cap(results) {
+		wg.Go(func() { results <- c.SetCallbacks(Callbacks{}) })
+	}
+	wg.Wait()
+	close(results)
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+			continue
+		}
+		require.ErrorIs(t, err, ErrCallbacksAlreadySet)
+	}
+	require.Equal(t, 1, successes)
+}
+
+func TestCacheConcurrentStartAndSetCallbacks(t *testing.T) {
+	c := newLifecycleCache(t)
+	startErr := make(chan error, 1)
+	callbackErr := make(chan error, 1)
+	ready := make(chan struct{})
+	ctx := ctxT(t)
+	go func() { <-ready; startErr <- c.Start(ctx) }()
+	go func() { <-ready; callbackErr <- c.SetCallbacks(Callbacks{}) }()
+	close(ready)
+	require.NoError(t, <-startErr)
+	err := <-callbackErr
+	require.True(t, err == nil || errors.Is(err, ErrCallbacksAfterStart))
+	require.NotNil(t, c.callbacks.OnHubDeleted)
+}
+
+func TestCacheConcurrentStartAndClose(t *testing.T) {
+	c := newLifecycleCache(t)
+	ctx := ctxT(t)
+	startErr := make(chan error, 1)
+	closeErr := make(chan error, 1)
+	ready := make(chan struct{})
+	go func() { <-ready; startErr <- c.Start(ctx) }()
+	go func() { <-ready; closeErr <- c.Close() }()
+	close(ready)
+	err := <-startErr
+	require.True(t, err == nil || errors.Is(err, ErrCacheClosed))
+	require.NoError(t, <-closeErr)
+	require.ErrorIs(t, c.rdb.Ping(ctx).Err(), redisv9.ErrClosed)
+	require.ErrorIs(t, c.Start(ctx), ErrCacheClosed)
+	if c.running.Load() {
+		select {
+		case <-c.done:
+		default:
+			require.Fail(t, "Close must wait for the event handler to stop")
+		}
+	}
 }

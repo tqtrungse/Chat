@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package mpsc
@@ -23,7 +12,6 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"xxx/pkg/backoff"
 	"xxx/pkg/bit"
 	"xxx/pkg/cpu"
 	"xxx/pkg/generic"
@@ -72,7 +60,7 @@ func NewElastic[V any](nodeCap int) (*Elastic[V], error) {
 }
 
 func (e *Elastic[V]) Push(value V) (closed bool) {
-	var bc backoff.Cpu
+	var contention cpu.Backoff
 	for {
 		if e.IsClosed() {
 			return true
@@ -93,7 +81,7 @@ func (e *Elastic[V]) Push(value V) (closed bool) {
 
 		if tail.next.Load() != nil {
 			tail.mtx.Unlock()
-			bc.Spin()
+			contention.Spin()
 			continue
 		}
 
@@ -138,8 +126,8 @@ func (e *Elastic[V]) TryPop() (value V, ok bool) {
 
 func (e *Elastic[V]) Pop() (value V, ok bool) {
 	var (
-		closed bool
-		bkc    backoff.Cpu
+		closed     bool
+		contention cpu.Backoff
 	)
 	for {
 		value, ok, closed = e.head.rb.tryPop()
@@ -152,7 +140,7 @@ func (e *Elastic[V]) Pop() (value V, ok bool) {
 
 	retry:
 		if e.head.initNext.Load() {
-			bkc.Snooze()
+			contention.Snooze()
 			goto retry
 		}
 

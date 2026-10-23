@@ -1,33 +1,27 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package http
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
-	"xxx/internal/iam/application/keyexchange"
+	"xxx/internal/iam/core/rejection"
+	"xxx/internal/iam/core/ticketlimit"
 
 	"xxx/pkg/jwt"
 	"xxx/pkg/log"
+	"xxx/pkg/reject"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -40,27 +34,32 @@ type contextKey uint8
 
 const claimsContextKey contextKey = iota
 
-var (
-	errAuthHeaderNotFound = errors.New("missing or invalid Authorization header")
-	errAuthVerify         = errors.New("failed to verify token")
-	errJsonMarshall       = errors.New("failed to marshall JSON")
-)
-
 type Server struct {
-	srv          *http.Server
-	auth         *jwt.Auth
-	logger       *log.Logger
-	keyExchanger keyexchange.Usecase
-	certFile     string
-	keyFile      string
+	srv           *http.Server
+	auth          *jwt.Auth
+	logger        *log.Logger
+	rejections    *reject.Stats[rejection.Reason]
+	ticketIssuer  TicketIssuer
+	ticketLimiter ticketlimit.Limiter
+	certFile      string
+	keyFile       string
 }
 
+// NewServer initializes JWT verification and builds the authenticated HTTPS router
+// with request logging, recovery, timeouts, and a TLS 1.3 minimum. Admission and
+// rejection counters are supplied by the caller; the listener starts only in Run.
 func NewServer(
 	ctx context.Context,
 	cfg Config,
 	logger *log.Logger,
-	keyExchanger keyexchange.Usecase,
+	rejections *reject.Stats[rejection.Reason],
+	ticketIssuer TicketIssuer,
+	ticketLimiter ticketlimit.Limiter,
 ) (*Server, error) {
+	if ticketLimiter == nil {
+		return nil, errTicketLimiterRequired
+	}
+
 	auth, err := jwt.NewAuth(
 		ctx,
 		jwt.AuthConfig{
@@ -74,15 +73,17 @@ func NewServer(
 	}
 
 	s := &Server{
-		auth:         auth,
-		logger:       logger,
-		keyExchanger: keyExchanger,
-		certFile:     cfg.CertFile,
-		keyFile:      cfg.KeyFile,
+		auth:          auth,
+		logger:        logger,
+		rejections:    rejections,
+		ticketIssuer:  ticketIssuer,
+		ticketLimiter: ticketLimiter,
+		certFile:      cfg.CertFile,
+		keyFile:       cfg.KeyFile,
 	}
 
 	router := chi.NewRouter()
-	router.Use(middleware.Logger)
+	router.Use(middleware.RequestLogger(requestLogFormatter{logger: s.logger}))
 	router.Use(middleware.Recoverer)
 	router.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -92,7 +93,7 @@ func NewServer(
 	})
 	router.Group(func(r chi.Router) {
 		r.Use(s.authenticate)
-		r.Post("/iam/v1/exchange-key", s.exchangeKey)
+		r.Post("/iam/v2/connection-ticket", s.issueConnectionTicket)
 	})
 
 	s.srv = &http.Server{
@@ -102,32 +103,42 @@ func NewServer(
 		ReadTimeout:       cfg.ReadTimeout,
 		WriteTimeout:      cfg.WriteTimeout,
 		MaxHeaderBytes:    cfg.MaxHeaderBytes,
+		IdleTimeout:       cfg.IdleTimeout,
+		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS13},
 	}
 	return s, nil
 }
 
+// Run serves HTTPS using the configured certificate and private key until the
+// server shuts down or the listener fails.
 func (s *Server) Run() error {
 	return s.srv.ListenAndServeTLS(s.certFile, s.keyFile)
 }
 
+// Shutdown stops accepting new requests and waits up to 30 seconds for active
+// HTTP requests to finish using a fresh shutdown context.
 func (s *Server) Shutdown() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	return s.srv.Shutdown(ctx)
 }
 
+// authenticate requires a Bearer token, verifies it, and attaches its claims to
+// the request context before invoking the next handler. Rejections are sampled.
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
-		if !strings.HasPrefix(authHeader, "Bearer ") {
+		scheme, token, found := strings.Cut(authHeader, " ")
+		token = strings.TrimLeft(token, " ")
+		if !found || !strings.EqualFold(scheme, "Bearer") || token == "" {
+			s.rejections.Record(rejection.AuthHeader, errAuthHeaderNotFound)
 			s.respondErr(w, http.StatusUnauthorized, errAuthHeaderNotFound)
 			return
 		}
 
-		token := strings.TrimPrefix(authHeader, "Bearer ")
 		claims, err := s.auth.Verify(token)
 		if err != nil {
-			s.logger.Error("failed to verify token", zap.Error(err))
+			s.rejections.Record(rejection.AuthToken, err)
 			s.respondErr(w, http.StatusUnauthorized, errAuthVerify)
 			return
 		}
@@ -138,6 +149,8 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 	})
 }
 
+// respond marshals and writes a successful JSON response, releasing the writer
+// buffers after use. Write failures are logged without attempting a second response.
 func (s *Server) respond(w http.ResponseWriter, v easyjson.Marshaler) {
 	jw := jwriter.Writer{}
 
@@ -157,10 +170,29 @@ func (s *Server) respond(w http.ResponseWriter, v easyjson.Marshaler) {
 	if err != nil {
 		// Only log errors.
 		// Do not call s.respondErr here because the header has already been sent!
+		var netErr net.Error
+		if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) ||
+			(errors.As(err, &netErr) && netErr.Timeout()) {
+			s.rejections.Record(rejection.ResponseWrite, err)
+			return
+		}
 		s.logger.Error("failed to dump response", zap.Error(err))
 	}
 }
 
+// respondTicketRateLimited sets Retry-After and returns 503 for shared storage
+// exhaustion or 429 for subject and device quota limits.
+func (s *Server) respondTicketRateLimited(w http.ResponseWriter, decision ticketlimit.Decision) {
+	w.Header().Set("Retry-After", strconv.Itoa(decision.RetryAfter))
+
+	if decision.Overloaded() {
+		s.respondErr(w, http.StatusServiceUnavailable, errTicketCapacity)
+	} else {
+		s.respondErr(w, http.StatusTooManyRequests, errTicketRateLimited)
+	}
+}
+
+// respondErr writes the supplied status and error message as a plain-text HTTP response.
 func (s *Server) respondErr(w http.ResponseWriter, status int, err error) {
 	http.Error(w, err.Error(), status)
 }

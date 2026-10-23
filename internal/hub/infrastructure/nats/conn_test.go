@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package nats
@@ -33,6 +22,7 @@ import (
 // tears it down via t.Cleanup.
 func runTestServer(t *testing.T) *natsserver.Server {
 	t.Helper()
+
 	opts := &natsserver.Options{
 		Host:      "127.0.0.1",
 		Port:      -1,
@@ -56,7 +46,7 @@ func TestDefaultConnConfig(t *testing.T) {
 }
 
 func TestConnect_ValidationErrors(t *testing.T) {
-	cc := DefaultConnConfig()
+	cfgConn := DefaultConnConfig()
 	logger := newTestLogger(t)
 	flag := atomic.Bool{}
 	noop := func() {}
@@ -72,37 +62,58 @@ func TestConnect_ValidationErrors(t *testing.T) {
 		{"nil onFatalClose", logger, &flag, nil},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// An unreachable address is fine here — validation happens
-			// before nats.Connect is ever attempted.
-			nc, err := Connect("nats://127.0.0.1:1", cc, tt.logger, tt.shuttingDown, tt.onFatalClose)
-			require.Error(t, err)
-			require.Nil(t, nc)
-		})
+		t.Run(
+			tt.name,
+			func(t *testing.T) {
+				// An unreachable address is fine here — validation happens
+				// before nats.Connect is ever attempted.
+				nc, err := Connect(
+					"nats://127.0.0.1:1",
+					cfgConn,
+					tt.logger,
+					tt.shuttingDown,
+					tt.onFatalClose,
+				)
+				require.Error(t, err)
+				require.Nil(t, nc)
+			},
+		)
 	}
 }
 
 func TestConnect_UnreachableServer(t *testing.T) {
-	cc := DefaultConnConfig()
+	cfgConn := DefaultConnConfig()
 	flag := atomic.Bool{}
-	nc, err := Connect("nats://127.0.0.1:1", cc, newTestLogger(t), &flag, func() {})
+	nc, err := Connect(
+		"nats://127.0.0.1:1",
+		cfgConn,
+		newTestLogger(t),
+		&flag,
+		func() {},
+	)
 	require.Error(t, err)
 	require.Nil(t, nc)
 }
 
 func TestConnect_Success_And_GracefulClose(t *testing.T) {
-	s := runTestServer(t)
-	cc := DefaultConnConfig()
-	cc.ReconnectWait = 50 * time.Millisecond
+	server := runTestServer(t)
+	cfgConn := DefaultConnConfig()
+	cfgConn.ReconnectWait = 50 * time.Millisecond
 
 	var shuttingDown atomic.Bool
 	fatalCh := make(chan struct{}, 1)
-	nc, err := Connect(s.ClientURL(), cc, newTestLogger(t), &shuttingDown, func() {
-		select {
-		case fatalCh <- struct{}{}:
-		default:
-		}
-	})
+	nc, err := Connect(
+		server.ClientURL(),
+		cfgConn,
+		newTestLogger(t),
+		&shuttingDown,
+		func() {
+			select {
+			case fatalCh <- struct{}{}:
+			default:
+			}
+		},
+	)
 	require.NoError(t, err)
 	require.Equal(t, nats.CONNECTED, nc.Status())
 
@@ -114,23 +125,29 @@ func TestConnect_Success_And_GracefulClose(t *testing.T) {
 	select {
 	case <-fatalCh:
 		require.Fail(t, "onFatalClose fired on a graceful (flagged) shutdown")
+
 	case <-time.After(300 * time.Millisecond):
 		// expected: no fatal callback on graceful close
 	}
 }
 
 func TestConnect_UnexpectedClose_TriggersOnFatalClose(t *testing.T) {
-	s := runTestServer(t)
-	cc := DefaultConnConfig()
-
 	var shuttingDown atomic.Bool // deliberately left false
+	server := runTestServer(t)
+	cfgConn := DefaultConnConfig()
 	fatalCh := make(chan struct{}, 1)
-	nc, err := Connect(s.ClientURL(), cc, newTestLogger(t), &shuttingDown, func() {
-		select {
-		case fatalCh <- struct{}{}:
-		default:
-		}
-	})
+	nc, err := Connect(
+		server.ClientURL(),
+		cfgConn,
+		newTestLogger(t),
+		&shuttingDown,
+		func() {
+			select {
+			case fatalCh <- struct{}{}:
+			default:
+			}
+		},
+	)
 	require.NoError(t, err)
 
 	// Closing without having flagged a deliberate shutdown simulates the
@@ -157,26 +174,30 @@ func TestConnect_DisconnectAndReconnect(t *testing.T) {
 		JetStream: true,
 		StoreDir:  t.TempDir(),
 	}
-	s, err := natsserver.NewServer(opts)
+	server, err := natsserver.NewServer(opts)
 	require.NoError(t, err)
 
-	go s.Start()
-	require.True(t, s.ReadyForConnections(4*time.Second))
-	port := s.Addr().(*net.TCPAddr).Port
+	go server.Start()
+	require.True(t, server.ReadyForConnections(4*time.Second))
+	port := server.Addr().(*net.TCPAddr).Port
 
-	cc := DefaultConnConfig()
-	cc.ReconnectWait = 100 * time.Millisecond
-	cc.MaxReconnects = -1
+	cfgConn := DefaultConnConfig()
+	cfgConn.ReconnectWait = 100 * time.Millisecond
+	cfgConn.MaxReconnects = -1
 
 	var shuttingDown atomic.Bool
-	nc, err := Connect(s.ClientURL(), cc, newTestLogger(t), &shuttingDown, func() {})
+	nc, err := Connect(
+		server.ClientURL(),
+		cfgConn, newTestLogger(t),
+		&shuttingDown, func() {},
+	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		shuttingDown.Store(true)
 		nc.Close()
 	})
 
-	s.Shutdown()
+	server.Shutdown()
 	require.Eventually(
 		t,
 		func() bool {

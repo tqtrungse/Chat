@@ -1,24 +1,12 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
  */
 
 package presence
 
 import (
-	shareddevice "xxx/internal/shared/device"
+	"xxx/internal/shared/device"
 
 	"xxx/pkg/batcher"
 )
@@ -31,7 +19,7 @@ const (
 type op uint8
 
 type deviceOp struct {
-	DeviceID  shareddevice.ID
+	DeviceID  device.ID
 	Timestamp int64
 	Op        op
 }
@@ -49,19 +37,17 @@ type deviceOp struct {
 // assuming the operation is valid.
 func dedupeDeviceOps(reqs []batcher.Req[deviceOp]) (
 	isLatest []bool,
-	addDevices []shareddevice.ID,
-	delDevices []shareddevice.ID,
+	addDevices []device.ID,
+	delDevices []device.ID,
 ) {
 	type deviceOpMetadata struct {
 		idx       int
 		timestamp int64
 	}
 
-	latest := make(map[shareddevice.ID]deviceOpMetadata, len(reqs))
-
+	latest := make(map[device.ID]deviceOpMetadata, len(reqs))
 	for idx, req := range reqs {
 		deviceID := req.Data.DeviceID
-
 		meta, ok := latest[deviceID]
 		if !ok ||
 			req.Data.Timestamp > meta.timestamp ||
@@ -74,8 +60,8 @@ func dedupeDeviceOps(reqs []batcher.Req[deviceOp]) (
 	}
 
 	isLatest = make([]bool, len(reqs))
-	addDevices = make([]shareddevice.ID, 0, len(latest))
-	delDevices = make([]shareddevice.ID, 0, len(latest))
+	addDevices = make([]device.ID, 0, len(latest))
+	delDevices = make([]device.ID, 0, len(latest))
 
 	for _, meta := range latest {
 		idx := meta.idx
@@ -85,11 +71,9 @@ func dedupeDeviceOps(reqs []batcher.Req[deviceOp]) (
 		case addDeviceOp:
 			isLatest[idx] = true
 			addDevices = append(addDevices, req.Data.DeviceID)
-
 		case delDeviceOp:
 			isLatest[idx] = true
 			delDevices = append(delDevices, req.Data.DeviceID)
-
 		default:
 			// Do not mark the request as latest because it cannot be
 			// executed by Redis. flush() will resolve this request
