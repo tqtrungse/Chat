@@ -1,18 +1,7 @@
 /*
  * Copyright (c) 2019 The Gnet Authors. All rights reserved.
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package buffer
@@ -29,17 +18,20 @@ import (
 
 func TestLinkedListBuffer_Basic(t *testing.T) {
 	const maxBlocks = 100
+
 	var (
 		llb LinkedList
 		cum int
 		buf bytes.Buffer
 	)
+
 	for range maxBlocks {
 		n := rand.Intn(1024) + 128
 		cum += n
 		data := make([]byte, n)
 		_, err := crand.Read(data)
 		require.NoError(t, err)
+
 		llb.PushBack(data)
 		buf.Write(data)
 	}
@@ -48,6 +40,7 @@ func TestLinkedListBuffer_Basic(t *testing.T) {
 
 	bs, err := llb.Peek(cum / 4)
 	require.NoError(t, err)
+
 	var p []byte
 	for _, b := range bs {
 		p = append(p, b...)
@@ -55,20 +48,25 @@ func TestLinkedListBuffer_Basic(t *testing.T) {
 	pn := len(p)
 	require.Equal(t, pn, cum/4)
 	require.Equal(t, buf.Bytes()[:pn], p)
+
 	tmpA := make([]byte, cum/16)
 	tmpB := make([]byte, cum/16)
 	_, err = crand.Read(tmpA)
 	require.NoError(t, err)
+
 	_, err = crand.Read(tmpB)
 	require.NoError(t, err)
+
 	bs, err = llb.PeekWithBytes(cum/4, tmpA, tmpB)
 	require.NoError(t, err)
+
 	p = p[:0]
 	for _, b := range bs {
 		p = append(p, b...)
 	}
 	pn = len(p)
 	require.Equal(t, pn, cum/4)
+
 	var tmpBuf bytes.Buffer
 	tmpBuf.Write(tmpA)
 	tmpBuf.Write(tmpB)
@@ -86,11 +84,13 @@ func TestLinkedListBuffer_Basic(t *testing.T) {
 }
 
 func TestLinkedListBuffer_ReadFrom(t *testing.T) {
-	var llb LinkedList
 	const dataLen = 4 * 1024
+
 	data := make([]byte, dataLen)
 	_, err := crand.Read(data)
 	require.NoError(t, err)
+
+	var llb LinkedList
 	r := bytes.NewReader(data)
 	n, err := llb.ReadFrom(r)
 	require.NoError(t, err)
@@ -102,16 +102,19 @@ func TestLinkedListBuffer_ReadFrom(t *testing.T) {
 	head := make([]byte, headLen)
 	_, err = crand.Read(head)
 	require.NoError(t, err)
+
 	llb.PushBack(head)
 	_, err = crand.Read(data)
 	require.NoError(t, err)
+
 	r.Reset(data)
 	n, err = llb.ReadFrom(r)
 	require.NoError(t, err)
 	require.Equal(t, dataLen, int(n))
 	require.Equal(t, headLen+dataLen, llb.Buffered())
-	buf := make([]byte, headLen+dataLen)
+
 	var m int
+	buf := make([]byte, headLen+dataLen)
 	m, err = llb.Read(buf)
 	require.NoError(t, err)
 	require.Equal(t, headLen+dataLen, m)
@@ -121,17 +124,20 @@ func TestLinkedListBuffer_ReadFrom(t *testing.T) {
 
 func TestLinkedListBuffer_WriteTo(t *testing.T) {
 	const maxBlocks = 20
+
 	var (
 		llb LinkedList
 		cum int
 		buf bytes.Buffer
 	)
+
 	for range maxBlocks {
 		n := rand.Intn(1024) + 128
 		cum += n
 		data := make([]byte, n)
 		_, err := crand.Read(data)
 		require.NoError(t, err)
+
 		llb.PushBack(data)
 		buf.Write(data)
 	}
@@ -163,11 +169,13 @@ func TestLinkedListBuffer_WriteTo(t *testing.T) {
 	var discarded int
 	discarded, err = llb.Discard(cum / 2)
 	require.NoError(t, err)
+
 	buf.Next(discarded)
 	n, err = llb.WriteTo(newBuf)
 	require.NoError(t, err)
 	require.Equal(t, cum-discarded, int(n))
 	require.Equal(t, buf.Bytes(), newBuf.Bytes())
+
 	llb.Reset()
 	buf.Reset()
 	newBuf.Reset()
@@ -265,6 +273,7 @@ func TestLinkedListBuffer_PeekZeroMeansAll(t *testing.T) {
 
 	bs, err := llb.Peek(0)
 	require.NoError(t, err)
+
 	var got []byte
 	for _, b := range bs {
 		got = append(got, b...)
@@ -297,7 +306,9 @@ func TestLinkedListBuffer_DiscardMoreThanBuffered(t *testing.T) {
 // LinkedList.WriteTo has explicit code for this exact case (as opposed to
 // a short write bundled with a non-nil error, see the regression test
 // below), so it should already work; this locks that path in.
-type shortWriter struct{ accept int }
+type shortWriter struct {
+	accept int
+}
 
 func (w *shortWriter) Write(p []byte) (int, error) {
 	n := min(w.accept, len(p))
@@ -363,7 +374,9 @@ var errBoom = boomError{}
 
 type boomError struct{}
 
-func (boomError) Error() string { return "boom" }
+func (boomError) Error() string {
+	return "boom"
+}
 
 // When the writer returns (partial n, non-nil err) for a node, WriteTo's
 // "if err != nil" branch returns before ever checking whether the write
@@ -375,10 +388,12 @@ func TestLinkedListBuffer_WriteTo_MustPreserveRemainderOnError(t *testing.T) {
 	var llb LinkedList
 	llb.PushBack(make([]byte, 100))
 
-	w := &partialErrWriter{accept: 40, err: errBoom}
+	w := &partialErrWriter{
+		accept: 40,
+		err:    errBoom,
+	}
 	_, err := llb.WriteTo(w)
 	require.Error(t, err)
-
 	require.Equal(t, 60, llb.Buffered())
 }
 

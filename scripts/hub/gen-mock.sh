@@ -45,16 +45,21 @@ mockgen \
   -package=mocks
 
 mockgen \
-  -source=internal/hub/core/connection/presence.go \
-  -destination=internal/hub/core/connection/mocks/presence_mock.go \
+  -source=internal/hub/core/connection/ports.go \
+  -destination=internal/hub/core/connection/mocks/ports_mock.go \
   -package=mocks
 
 mockgen \
-  -source=internal/hub/core/presence/distributed_cache.go \
-  -destination=internal/hub/core/presence/mocks/distributed_cache_mock.go \
+  -source=internal/hub/core/presence/ports.go \
+  -destination=internal/hub/core/presence/mocks/ports_mock.go \
   -package=mocks
 
 mockgen \
-  -source=internal/hub/core/protocol/ports.go \
-  -destination=internal/hub/core/protocol/mocks/ports_mock.go \
+  -source=internal/hub/core/transport/ports.go \
+  -destination=internal/hub/core/transport/mocks/ports_mock.go \
+  -package=mocks
+
+mockgen \
+  -source=internal/hub/adapter/tcp/ports.go \
+  -destination=internal/hub/adapter/tcp/mocks/ports_mock.go \
   -package=mocks

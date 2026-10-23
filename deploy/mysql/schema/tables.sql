@@ -6,13 +6,13 @@
 --          + If phone number exists -> new device -> send OTP to channel on root device.
 CREATE TABLE IF NOT EXISTS `users`
 (
-    `id`          BIGINT UNSIGNED NOT NULL,           -- Snowflake
-    `username`    NVARCHAR(50)    NOT NULL,
-    `phone_hash`  BINARY(16)      NOT NULL,           -- HMAC-SHA256 full 256-bit truncate to 128 bit
-    `phone_tail`  INT UNSIGNED    NOT NULL,
-    `state`       SMALLINT        NOT NULL DEFAULT 1, -- 1: active, 3: locked
-    `created_at`  TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `updated_at`  TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    `id`         BIGINT UNSIGNED                   NOT NULL,           -- Snowflake
+    `username`   VARCHAR(50) CHARACTER SET utf8mb4 NOT NULL,
+    `phone_hash` BINARY(16)                        NOT NULL,           -- HMAC-SHA256 full 256-bit truncate to 128 bit
+    `phone_tail` INT UNSIGNED                      NOT NULL,
+    `state`      SMALLINT                          NOT NULL DEFAULT 1, -- 1: active, 3: locked
+    `created_at` TIMESTAMP                         NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updated_at` TIMESTAMP                         NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     PRIMARY KEY (`id`),
     UNIQUE (`username`),
     UNIQUE (phone_hash)
@@ -21,15 +21,15 @@ CREATE TABLE IF NOT EXISTS `users`
 -- Users have max 5 devices.
 CREATE TABLE IF NOT EXISTS `devices`
 (
-    `id`           BIGINT UNSIGNED NOT NULL,           -- Snowflake
-    `external_id`  NVARCHAR(64)    NOT NULL,           -- Auth0 ID
-    `user_id`      BIGINT UNSIGNED NOT NULL,
-    `name`         NVARCHAR(128)   NOT NULL,           -- Device type + OS name
-    `state`        SMALLINT        NOT NULL DEFAULT 1, -- 1: active, 2: locked
-    `identity_pub` TINYBLOB        NOT NULL,           -- ed25519.GenerateKey(rand.Reader)
-    `peer_pub`     TINYBLOB        NOT NULL,           -- x25519
-    `created_at`   TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `updated_at`   TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    `id`           BIGINT UNSIGNED                    NOT NULL,           -- Snowflake
+    `external_id`  VARCHAR(64) CHARACTER SET utf8mb4  NOT NULL,           -- Auth0 ID
+    `user_id`      BIGINT UNSIGNED                    NOT NULL,
+    `name`         VARCHAR(128) CHARACTER SET utf8mb4 NOT NULL,           -- Device type + OS name
+    `state`        SMALLINT                           NOT NULL DEFAULT 1, -- 1: active, 2: locked
+    `identity_pub` TINYBLOB                           NOT NULL,           -- ed25519.GenerateKey(rand.Reader)
+    `peer_pub`     TINYBLOB                           NOT NULL,           -- x25519
+    `created_at`   TIMESTAMP                          NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updated_at`   TIMESTAMP                          NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     `deleted_at`   TIMESTAMP,
     PRIMARY KEY (`id`),
     UNIQUE (`external_id`),
@@ -38,8 +38,8 @@ CREATE TABLE IF NOT EXISTS `devices`
 
 CREATE TABLE IF NOT EXISTS channels
 (
-    `id`         BIGINT UNSIGNED NOT NULL, -- Snowflake
-    `name`       NVARCHAR(128),            -- Not null for group
+    `id`         BIGINT UNSIGNED NOT NULL,           -- Snowflake
+    `name`       VARCHAR(128) CHARACTER SET utf8mb4, -- Not null for group
     `created_at` TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updated_at` TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     PRIMARY KEY (`id`)

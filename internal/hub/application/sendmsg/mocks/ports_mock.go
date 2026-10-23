@@ -12,7 +12,7 @@ package mocks
 import (
 	context "context"
 	reflect "reflect"
-	priv "xxx/api/hub/v1/proto/gen/priv"
+	priv "xxx/api/hub/v2/proto/gen/priv"
 
 	gomock "go.uber.org/mock/gomock"
 )

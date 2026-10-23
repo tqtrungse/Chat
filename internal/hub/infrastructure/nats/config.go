@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package nats
@@ -21,6 +10,12 @@ import (
 	"time"
 
 	"xxx/pkg/config"
+)
+
+const (
+	defaultMaxHops        = uint8(5)
+	defaultPublishTimeout = 30 * time.Second
+	defaultInboxWorkers   = 128
 )
 
 type Config struct {
@@ -51,19 +46,41 @@ type Config struct {
 	InboxWorkers int
 }
 
-func (c *Config) Load(loader config.Loader) error {
-	c.HubSubjectPrefix = loader.GetString("BROKER_HUB_SUBJECT_PREFIX")
-	c.MaxHops = loader.GetUint8("BROKER_MAX_HOPS")
-	c.PublishTimeout = loader.GetDuration("BROKER_PUBLISH_TIMEOUT")
-	c.InboxWorkers = loader.GetInt("BROKER_INBOX_WORKERS")
-
-	c.DeliveryBackOff = nil // If it is empty, NewBroker will use default.
-	for _, str := range config.SplitList(loader.GetString("BROKER_DELIVERY_BACKOFF")) {
-		duration, err := time.ParseDuration(str)
-		if err != nil || duration <= 0 {
-			return fmt.Errorf("BROKER_DELIVERY_BACKOFF: invalid duration %q", str)
+// LoadConfig reads the broker settings from loader and applies defaults. A nil
+// loader is an empty source. LoadConfig returns an error if
+// BROKER_DELIVERY_BACKOFF holds a duration that is not valid.
+func LoadConfig(loader config.Loader) (Config, error) {
+	var c Config
+	if loader != nil {
+		c.HubSubjectPrefix = loader.GetString("BROKER_HUB_SUBJECT_PREFIX")
+		c.MaxHops = loader.GetUint8("BROKER_MAX_HOPS")
+		c.PublishTimeout = loader.GetDuration("BROKER_PUBLISH_TIMEOUT")
+		c.InboxWorkers = loader.GetInt("BROKER_INBOX_WORKERS")
+		for _, str := range config.SplitList(loader.GetString("BROKER_DELIVERY_BACKOFF")) {
+			duration, err := time.ParseDuration(str)
+			if err != nil || duration <= 0 {
+				return Config{}, fmt.Errorf("BROKER_DELIVERY_BACKOFF: invalid duration %q", str)
+			}
+			c.DeliveryBackOff = append(c.DeliveryBackOff, duration)
 		}
-		c.DeliveryBackOff = append(c.DeliveryBackOff, duration)
 	}
-	return nil
+	c.applyDefault()
+	return c, nil
+}
+
+// applyDefault puts the default value in each field that is zero or negative.
+// Each Config gets its own copy of the default DeliveryBackOff.
+func (c *Config) applyDefault() {
+	if c.MaxHops == 0 {
+		c.MaxHops = defaultMaxHops
+	}
+	if c.PublishTimeout <= 0 {
+		c.PublishTimeout = defaultPublishTimeout
+	}
+	if c.InboxWorkers <= 0 {
+		c.InboxWorkers = defaultInboxWorkers
+	}
+	if len(c.DeliveryBackOff) == 0 {
+		c.DeliveryBackOff = append([]time.Duration(nil), defaultDeliveryBackoff...)
+	}
 }

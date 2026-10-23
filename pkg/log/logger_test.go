@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package log
@@ -19,12 +8,11 @@ package log
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -34,10 +22,10 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// readLogLines reads path and unmarshals every non-empty line as a JSON log
-// entry. It fails the test immediately if the file can't be read or a line
-// isn't valid JSON, since every entry produced by the zap JSON encoder must
-// parse.
+// readLogLines reads path and decodes each line that is not empty as a JSON
+// log entry. It fails the test at once if it cannot read the file, or if a
+// line is not valid JSON. Each entry from the zap JSON encoder must parse,
+// and the drop notice of the sink must also parse.
 func readLogLines(t *testing.T, path string) []map[string]any {
 	t.Helper()
 
@@ -60,88 +48,65 @@ func readLogLines(t *testing.T, path string) []map[string]any {
 	return entries
 }
 
-// newFileLogger is a small helper that builds a Logger writing to a fresh
-// file under t.TempDir(), and returns both the Logger and the log path.
-func newFileLogger(t *testing.T, cfg *FileConfig) (*Logger, func() error, string) {
+// newTestLogger makes a Logger that writes to a new file under t.TempDir()
+// and gives the Logger and the path of that file.
+//
+// Sampling is off unless the test asks for it. Most tests count entries, and
+// a sampler would remove some of a message that repeats.
+func newTestLogger(t *testing.T, cfg *Config) (*Logger, func() error, string) {
 	t.Helper()
 
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.log")
+	path := filepath.Join(t.TempDir(), "test.log")
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = f.Close() })
 
-	full := &FileConfig{
-		Filename:      path,
-		MaxSize:       cfg.MaxSize,
-		MaxBackups:    cfg.MaxBackups,
-		MaxAge:        cfg.MaxAge,
-		Compress:      cfg.Compress,
-		BufferSize:    cfg.BufferSize,
-		FlushInterval: cfg.FlushInterval,
+	var full Config
+	if cfg != nil {
+		full = *cfg
 	}
-	logger, closeFunc := NewLogger(full)
-	return logger, closeFunc, path
+	if cfg == nil || cfg.SampleFirst <= 0 {
+		full.DisableSampling = true
+	}
+
+	logger, closeFn, err := newLogger(&full, f, io.Discard, time.Now)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = closeFn() })
+	return logger, closeFn, path
 }
 
-func TestNewLogger_NilConfig_UsesStdout(t *testing.T) {
-	logger, closeFunc := NewLogger(nil)
+func TestNewLogger_NilConfig_WritesToStdout(t *testing.T) {
+	logger, closeFn, err := NewLogger(Config{})
+	require.NoError(t, err)
 	require.NotNil(t, logger)
 
-	assert.Nil(t, logger.lumberjack, "no lumberjack writer should be created when logging to stdout")
+	require.NotNil(t, logger.sink, "an async sink must always be created")
 	assert.Equal(t, zapcore.InfoLevel, logger.GetLevel(), "default level should be Info")
+	assert.Zero(t, logger.Dropped())
 
-	// Stdout is typically non-seekable in test environments, which Stop
-	// filters via isUnsyncable; either way Close must not surface an error
-	// for a completely unused logger.
-	assert.NoError(t, closeFunc())
+	assert.NoError(t, closeFn())
 }
 
-func TestErrorAndHigherFlushBufferedEntries(t *testing.T) {
-	for _, level := range []string{"dpanic", "panic", "fatal"} {
-		t.Run(level, func(t *testing.T) {
-			logger, closeLogger, path := newFileLogger(t, &FileConfig{
-				BufferSize:    64 * 1024,
-				FlushInterval: time.Hour,
-			})
-			t.Cleanup(func() { require.NoError(t, closeLogger()) })
-			logger.Info("before failure")
-			logger.Warn("last warning")
-
-			switch level {
-			case "error":
-				logger.Error("failure")
-			case "dpanic":
-				logger.DPanic("failure")
-			case "panic":
-				require.Panics(t, func() { logger.Panic("failure") })
-			case "fatal":
-				// Exercise Fatal's write path without terminating the test process.
-				logger.logger = logger.logger.WithOptions(zap.WithFatalHook(zapcore.WriteThenGoexit))
-				done := make(chan struct{})
-				go func() {
-					defer close(done)
-					logger.Fatal("failure")
-				}()
-				select {
-				case <-done:
-				case <-time.After(time.Second):
-					t.Fatal("Fatal did not finish")
-				}
-			}
-
-			// Inspect before Sync or close: the failure must flush its context.
-			entries := readLogLines(t, path)
-			require.Len(t, entries, 3)
-			require.Equal(t, "before failure", entries[0]["msg"])
-			require.Equal(t, "last warning", entries[1]["msg"])
-			require.Equal(t, level, entries[2]["level"])
-			require.Equal(t, "failure", entries[2]["msg"])
-		})
-	}
+func TestNewLogger_RejectsBufferSizeBelowMinimum(t *testing.T) {
+	logger, closeFn, err := NewLogger(Config{BufferSize: 1})
+	assert.ErrorIs(t, err, ErrBufferSizeTooSmall)
+	assert.Nil(t, logger)
+	assert.Nil(t, closeFn)
 }
 
-func TestNewLogger_FileConfig_WritesExpectedFields(t *testing.T) {
-	logger, closeFunc, path := newFileLogger(t, &FileConfig{MaxSize: 1})
-	require.NotNil(t, logger)
-	require.NotNil(t, logger.lumberjack, "a lumberjack writer should be created when a file is configured")
+func TestNewLogger_DoesNotMutateCallerConfig(t *testing.T) {
+	cfg := Config{}
+	_, closeFn, err := newLogger(&cfg, io.Discard, io.Discard, time.Now)
+	require.NoError(t, err)
+	defer func() { _ = closeFn() }()
+
+	cfgExpected := Config{}
+	cfgExpected.applyDefault()
+	assert.Equal(t, cfgExpected, cfg, "NewLogger must apply defaults to a copy")
+}
+
+func TestLogger_WritesExpectedFields(t *testing.T) {
+	logger, closeFn, path := newTestLogger(t, nil)
 
 	logger.Info("hello world", zap.String("key", "value"), zap.Int("count", 3))
 	require.NoError(t, logger.Sync())
@@ -157,31 +122,37 @@ func TestNewLogger_FileConfig_WritesExpectedFields(t *testing.T) {
 	assert.NotEmpty(t, entry["ts"], "ISO8601 timestamp should be present")
 	assert.NotEmpty(t, entry["caller"], "AddCaller should populate the caller field")
 
-	require.NoError(t, closeFunc())
+	require.NoError(t, closeFn())
 }
 
 func TestCallerSkip_ReportsCallSiteNotWrapper(t *testing.T) {
-	logger, closeFunc, path := newFileLogger(t, &FileConfig{})
+	logger, closeFn, path := newTestLogger(t, nil)
 
-	logger.Info("caller check") // the reported caller must point at this file, not logger.go
+	logger.Info("caller check") // The assertion below checks the number of this line.
 	require.NoError(t, logger.Sync())
-	require.NoError(t, closeFunc())
+	require.NoError(t, closeFn())
 
 	entries := readLogLines(t, path)
 	require.Len(t, entries, 1)
 
 	caller, ok := entries[0]["caller"].(string)
 	require.True(t, ok)
-	// AddCallerSkip(1) should skip past the Logger.Info wrapper method, so
-	// the reported caller is this test file, not logger.go.
-	assert.Truef(t, strings.Contains(caller, "logger_test.go"), "expected caller to point at the test file, got %q", caller)
-	assert.Falsef(t, strings.Contains(caller, "logger.go"), "caller should not point at the Logger wrapper itself, got %q", caller)
+	// AddCallerSkip(1) skips the Logger.Info wrapper method. Therefore, the
+	// reported caller is this test file, and not logger.go.
+	assert.Truef(
+		t,
+		strings.Contains(caller, "logger_test.go"),
+		"expected caller to point at the test file, got %q", caller,
+	)
+	assert.Falsef(
+		t,
+		strings.Contains(caller, "logger.go"),
+		"caller should not point at the Logger wrapper itself, got %q", caller,
+	)
 }
 
 func TestSetLevel_GetLevel(t *testing.T) {
-	logger, closeFunc := NewLogger(nil)
-	defer func() { _ = closeFunc() }()
-
+	logger, _, _ := newTestLogger(t, nil)
 	assert.Equal(t, zapcore.InfoLevel, logger.GetLevel())
 
 	logger.SetLevel(zapcore.DebugLevel)
@@ -192,7 +163,7 @@ func TestSetLevel_GetLevel(t *testing.T) {
 }
 
 func TestLogging_RespectsConfiguredLevel(t *testing.T) {
-	logger, closeFunc, path := newFileLogger(t, &FileConfig{})
+	logger, closeFn, path := newTestLogger(t, nil)
 	logger.SetLevel(zapcore.WarnLevel)
 
 	logger.Debug("debug msg")
@@ -201,7 +172,7 @@ func TestLogging_RespectsConfiguredLevel(t *testing.T) {
 	logger.Error("error msg")
 
 	require.NoError(t, logger.Sync())
-	require.NoError(t, closeFunc())
+	require.NoError(t, closeFn())
 
 	entries := readLogLines(t, path)
 	require.Len(t, entries, 2, "only Warn and Error should pass the Warn level filter")
@@ -209,13 +180,38 @@ func TestLogging_RespectsConfiguredLevel(t *testing.T) {
 	assert.Equal(t, "error", entries[1]["level"])
 }
 
+// TestLevelSplit_NoDuplicateEntries protects the split between the two
+// cores. The low enabler and the high enabler must not overlap. An overlap
+// would write each Error entry two times.
+func TestLevelSplit_NoDuplicateEntries(t *testing.T) {
+	logger, closeFn, path := newTestLogger(t, nil)
+	logger.SetLevel(zapcore.DebugLevel)
+
+	logger.Debug("d")
+	logger.Info("i")
+	logger.Warn("w")
+	logger.Error("e")
+
+	require.NoError(t, logger.Sync())
+	require.NoError(t, closeFn())
+
+	entries := readLogLines(t, path)
+	require.Len(t, entries, 4, "each entry must be written exactly once")
+
+	levels := make([]string, len(entries))
+	for i, e := range entries {
+		levels[i] = e["level"].(string)
+	}
+	assert.Equal(t, []string{"debug", "info", "warn", "error"}, levels)
+}
+
 func TestSync_FlushesWithoutStoppingLogger(t *testing.T) {
-	logger, closeFunc, path := newFileLogger(t, &FileConfig{})
+	logger, closeFn, path := newTestLogger(t, nil)
 
 	logger.Info("first")
 	require.NoError(t, logger.Sync())
 
-	// The logger must still be usable after Sync, unlike after Close.
+	// The Logger stays usable after Sync. It is not usable after closeFn.
 	logger.Info("second")
 	require.NoError(t, logger.Sync())
 
@@ -224,38 +220,38 @@ func TestSync_FlushesWithoutStoppingLogger(t *testing.T) {
 	assert.Equal(t, "first", entries[0]["msg"])
 	assert.Equal(t, "second", entries[1]["msg"])
 
-	require.NoError(t, closeFunc())
+	require.NoError(t, closeFn())
 }
 
-func TestClose_FlushesBufferedEntriesEvenWithoutExplicitSync(t *testing.T) {
-	// Use a large flush interval and a large buffer so nothing would reach
-	// disk on its own before Close runs; this isolates Close's own flush
-	// behavior from the background flush loop.
-	logger, closeFunc, path := newFileLogger(t, &FileConfig{
+func TestClose_FlushesQueuedEntriesWithoutExplicitSync(t *testing.T) {
+	// The flush interval is far longer than the test. Therefore, no entry
+	// reaches the file by itself, and the test isolates the drain of closeFn
+	// from the background flush loop.
+	logger, closeFn, path := newTestLogger(t, &Config{
 		BufferSize:    64 * 1024,
 		FlushInterval: time.Hour,
 	})
 
-	logger.Info("buffered before close")
-	require.NoError(t, closeFunc())
+	logger.Info("queued before close")
+	require.NoError(t, closeFn())
 
 	entries := readLogLines(t, path)
 	require.Len(t, entries, 1)
-	assert.Equal(t, "buffered before close", entries[0]["msg"])
+	assert.Equal(t, "queued before close", entries[0]["msg"])
 }
 
 func TestClose_IsIdempotent(t *testing.T) {
-	logger, closeFunc, _ := newFileLogger(t, &FileConfig{})
+	logger, closeFn, _ := newTestLogger(t, nil)
 	logger.Info("one entry")
 
-	err1 := closeFunc()
-	err2 := closeFunc()
+	err1 := closeFn()
+	err2 := closeFn()
 	assert.NoError(t, err1)
-	assert.Equal(t, err1, err2, "repeated Close calls must return the same result")
+	assert.Equal(t, err1, err2, "repeated close calls must return the same result")
 }
 
 func TestClose_IsSafeForConcurrentUse(t *testing.T) {
-	logger, closeFunc, _ := newFileLogger(t, &FileConfig{})
+	logger, closeFn, _ := newTestLogger(t, nil)
 	logger.Info("one entry")
 
 	const goroutines = 20
@@ -266,21 +262,25 @@ func TestClose_IsSafeForConcurrentUse(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			errs[idx] = closeFunc()
+			errs[idx] = closeFn()
 		}(i)
 	}
 	wg.Wait()
 
 	for i := 1; i < goroutines; i++ {
-		assert.Equal(t, errs[0], errs[i], "all concurrent Close calls must observe the same result")
+		assert.Equal(t, errs[0], errs[i], "all concurrent close calls must observe the same result")
 	}
 }
 
 func TestConcurrentLogging_NoRace(t *testing.T) {
-	logger, closeFunc, path := newFileLogger(t, &FileConfig{})
+	const (
+		goroutines   = 8
+		perGoroutine = 50
+	)
 
-	const goroutines = 8
-	const perGoroutine = 50
+	// The queue must hold each entry. Therefore, this test measures
+	// correctness, and not the drop path. The drop path has its own tests.
+	logger, closeFn, path := newTestLogger(t, &Config{QueueSize: goroutines * perGoroutine * 2})
 
 	var wg sync.WaitGroup
 	for i := range goroutines {
@@ -298,82 +298,51 @@ func TestConcurrentLogging_NoRace(t *testing.T) {
 	wg.Wait()
 
 	require.NoError(t, logger.Sync())
-	require.NoError(t, closeFunc())
+	require.NoError(t, closeFn())
 
+	assert.Zero(t, logger.Dropped())
 	entries := readLogLines(t, path)
 	assert.Len(t, entries, goroutines*perGoroutine)
 }
 
-func TestNewLogger_BufferDefaults_PassedThroughUnset(t *testing.T) {
-	logger, closeFunc, _ := newFileLogger(t, &FileConfig{})
-	defer func() { _ = closeFunc() }()
+func TestComponent_TagsEntriesAndDropsCaller(t *testing.T) {
+	logger, closeFn, path := newTestLogger(t, nil)
 
-	// NewLogger does not itself substitute 256kB/30s; it passes the zero
-	// values through and zapcore.BufferedWriteSyncer applies its own
-	// defaults lazily on first write.
-	assert.Equal(t, 0, logger.bufferedSyncer.Size)
-	assert.Equal(t, time.Duration(0), logger.bufferedSyncer.FlushInterval)
-}
-
-func TestNewLogger_BufferConfig_PassedThroughWhenSet(t *testing.T) {
-	logger, closeFunc, _ := newFileLogger(t, &FileConfig{
-		BufferSize:    4096,
-		FlushInterval: 5 * time.Second,
-	})
-	defer func() { _ = closeFunc() }()
-
-	assert.Equal(t, 4096, logger.bufferedSyncer.Size)
-	assert.Equal(t, 5*time.Second, logger.bufferedSyncer.FlushInterval)
-}
-
-func TestNewLogger_LumberjackConfig_PassedThrough(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "app.log")
-
-	cfg := &FileConfig{
-		Filename:   path,
-		MaxSize:    7,
-		MaxBackups: 3,
-		MaxAge:     14,
-		Compress:   true,
-	}
-	logger, closeFunc := NewLogger(cfg)
-	defer func() { _ = closeFunc() }()
-
-	require.NotNil(t, logger.lumberjack)
-	assert.Equal(t, path, logger.lumberjack.Filename)
-	assert.Equal(t, 7, logger.lumberjack.MaxSize)
-	assert.Equal(t, 3, logger.lumberjack.MaxBackups)
-	assert.Equal(t, 14, logger.lumberjack.MaxAge)
-	assert.True(t, logger.lumberjack.Compress)
-}
-
-func TestIsUnsyncable(t *testing.T) {
-	assert.True(t, isUnsyncable(syscall.ENOTTY))
-	assert.True(t, isUnsyncable(syscall.EINVAL))
-	assert.True(t, isUnsyncable(errors.Join(errors.New("wrapped"), syscall.ENOTTY)))
-	assert.False(t, isUnsyncable(nil))
-	assert.False(t, isUnsyncable(errors.New("some other error")))
-}
-
-func TestLevelMethods_AllWriteAtCorrectLevel(t *testing.T) {
-	logger, closeFunc, path := newFileLogger(t, &FileConfig{})
-	logger.SetLevel(zapcore.DebugLevel)
-
-	logger.Debug("d")
-	logger.Info("i")
-	logger.Warn("w")
-	logger.Error("e")
-
+	logger.Component("redis").Warn("driver said something")
 	require.NoError(t, logger.Sync())
-	require.NoError(t, closeFunc())
+	require.NoError(t, closeFn())
 
 	entries := readLogLines(t, path)
-	require.Len(t, entries, 4)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "redis", entries[0]["component"])
+	assert.NotContains(t, entries[0], "caller", "a component logger must not report a caller")
+}
 
-	levels := make([]string, len(entries))
-	for i, e := range entries {
-		levels[i] = e["level"].(string)
-	}
-	assert.Equal(t, []string{"debug", "info", "warn", "error"}, levels)
+// TestComponent_SharesShutdown checks that a derived Logger does not get its
+// own sync.Once. A close through either handle must stop the shared sink one
+// time only.
+func TestComponent_SharesShutdown(t *testing.T) {
+	logger, closeFn, path := newTestLogger(t, nil)
+	component := logger.Component("redis")
+
+	logger.Info("root")
+	component.Info("derived")
+
+	require.NoError(t, closeFn())
+	require.NoError(t, component.close(), "closing a component must reuse the first result")
+
+	entries := readLogLines(t, path)
+	require.Len(t, entries, 2)
+}
+
+func TestWith_SharesSink(t *testing.T) {
+	logger, closeFn, path := newTestLogger(t, nil)
+
+	logger.With(zap.String("request_id", "abc")).Info("tagged")
+	require.NoError(t, logger.Sync())
+	require.NoError(t, closeFn())
+
+	entries := readLogLines(t, path)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "abc", entries[0]["request_id"])
 }

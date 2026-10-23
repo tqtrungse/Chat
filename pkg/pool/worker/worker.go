@@ -1,27 +1,17 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package worker
 
 import (
-	"log"
 	"math/rand/v2"
 	"runtime/debug"
 
 	"xxx/pkg/hash"
+
+	"go.uber.org/zap"
 )
 
 // Task is a unit of work. ctx lets a running task spawn follow-up work:
@@ -98,10 +88,22 @@ func (w *worker) exec(task Task) {
 	defer w.pool.tasksWg.Done()
 	defer func() {
 		if r := recover(); r != nil {
-			if panicHandler := w.pool.panicHandler; panicHandler != nil {
+			// A nil logger must not panic here: that second panic would
+			// escape the recover and kill the worker this defer protects.
+			panicHandler := w.pool.panicHandler
+			if panicHandler != nil {
 				panicHandler(w.id, r, debug.Stack())
-			} else {
-				log.Printf("worker pool: worker %d: task panicked: %v\n%s", w.id, r, debug.Stack())
+				return
+			}
+
+			logger := w.pool.logger
+			if logger != nil {
+				logger.Error(
+					"task panicked",
+					zap.Int("workerID", w.id),
+					zap.Any("panic", r),
+					zap.ByteString("stack", debug.Stack()),
+				)
 			}
 		}
 	}()

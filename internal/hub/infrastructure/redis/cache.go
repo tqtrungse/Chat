@@ -1,23 +1,13 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package redis
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -31,7 +21,7 @@ import (
 
 	"xxx/internal/hub/core/presence"
 	"xxx/internal/hub/domain/message"
-	shareddevice "xxx/internal/shared/device"
+	"xxx/internal/shared/device"
 
 	"xxx/pkg/bit"
 	"xxx/pkg/bs"
@@ -52,36 +42,33 @@ const (
 	hubHeartbeatPrefix = "hub:heartbeat:"
 	hubDevicesPrefix   = "hub:devices:"
 
-	// devicesPrefix + bucket index is the key of one shard of the device
-	// registry, e.g. "devices:0", "devices:1", ... "devices:{N-1}". Splitting
-	// the single global "devices" hash into many bucket hashes keeps each
-	// one comfortably under Redis's hash-max-listpack-entries threshold, so
-	// Redis keeps using its compact listpack encoding (far less per-field
-	// overhead) instead of falling back to the much heavier hashtable
-	// encoding once a hash grows past that threshold. See DeviceBucketCount
-	// in Config for how to size N.
+	// devicesPrefix plus a bucket index is the key of one shard of the
+	// device registry, for example "devices:0", "devices:1", up to
+	// "devices:{N-1}". The code splits the one global "devices" hash into
+	// many bucket hashes. This keeps each hash under the Redis
+	// hash-max-listpack-entries limit. Redis then keeps the compact
+	// listpack encoding, which has far less overhead per field. Without
+	// the split, a hash above that limit uses the heavier hashtable
+	// encoding instead. See DeviceBucketCount in Config for the size of N.
 	devicesPrefix = "devices:"
 
 	pendingBucketsPrefix = "pending_buckets:"
 
-	defaultDeviceBucketCount = uint16(4096)
-	defaultReapBatchSize     = uint16(500)
-	defaultHeartbeatInterval = 3 * time.Second
-	defaultHeartbeatTTL      = 10 * time.Second
-	reapLockTTL              = 30 * time.Second
+	reapLockTTL = 30 * time.Second
 )
 
 type Callbacks struct {
 	OnHubDeleted    func(hubID uint64)
-	OnDeviceDeleted func(hubID uint64, deviceID shareddevice.ID)
+	OnDeviceDeleted func(hubID uint64, deviceID device.ID)
 
-	// OnSelfReaped is called if this hub detects it may have been reaped by
-	// another instance while disconnected from cache service for longer than
-	// HeartbeatTTL (e.g. during a network partition, while its own TCP
-	// clients were still alive). The cache layer only detects and reports
-	// this; deciding what to do — force-disconnect all local TCP clients so
-	// they reconnect to a live hub, exit the process, or re-register from
-	// scratch — is an application-level decision.
+	// OnSelfReaped runs when this hub detects that another instance may
+	// have reaped it. This can happen during a network partition, when
+	// this hub loses contact with the cache for longer than
+	// HeartbeatTTL, while its own TCP clients stay connected. The cache
+	// layer only detects and reports this event. The application must
+	// decide the response: disconnect all local TCP clients so they
+	// reconnect to a live hub, stop the process, or register the hub
+	// again from scratch.
 	OnSelfReaped func()
 }
 
@@ -91,7 +78,10 @@ type subscribers struct {
 	expired   *redis.PubSub
 }
 
-type cache struct {
+// Cache owns the Redis commands, the subscriptions, and the hub heartbeat
+// lifecycle. Set the callbacks before Start. The callbacks do not change
+// after that, while the cache handles events.
+type Cache struct {
 	rdb                        *redis.Client
 	logger                     *log.Logger
 	pool                       *workerpool.Pool
@@ -109,67 +99,37 @@ type cache struct {
 	running                    atomic.Bool
 	closeOnce                  sync.Once
 	closeErr                   error
-	setCbOnce                  atomic.Bool
+	lifecycleMu                sync.Mutex
+	callbacksSet               bool
+	closed                     bool
 	verifyExpiredNotifications bool
 }
 
-// NewCache creates a Redis-backed cache for the specified hub and applies
-// default values for optional timing, reaping, and device-bucket settings.
-// The returned cache is not started until startFn is called.
-//
-// startFn initializes the Redis connection, subscribes to required Pub/Sub
-// channels, registers the hub, and starts the background event handler.
-//
-// startFn is safe to call concurrently and more than once: only one call can
-// be in flight or have succeeded at a time. If a call fails, the guard is
-// released so a later retry can still succeed; once a call succeeds,
-// further calls return an error instead of leaking subscribers or starting
-// a second background event handler.
-//
-// closeFn closes Redis Pub/Sub subscriptions, waits for the background event
-// handler to exit, and then closes the Redis client.
-//
-// Safe to call even if start failed or was never called — it only waits on
-// c.done if the background event handler was actually launched, so it
-// never hangs waiting for a signal that would never come. Safe to call more
-// than once, concurrently or not; only the first call does anything.
+// NewCache creates a Redis-backed cache. The cache does not start yet. Set
+// any callbacks before Start. Close is safe before Start, after a failed
+// Start, and on repeated calls.
 func NewCache(
 	hubID uint64,
 	cfg Config,
 	logger *log.Logger,
 	pool *workerpool.Pool,
-) (
-	c presence.DistributedCache,
-	startFn func(rootCtx context.Context) error,
-	closeFn func() error,
-	setCbFn func(callbacks Callbacks) bool,
-) {
+) *Cache {
+	cfg.applyDefault()
+
 	rdb := redis.NewClient(&redis.Options{
-		Addr:           cfg.Addr,
-		Password:       cfg.Password,
-		DB:             int(cfg.DB),
-		PoolSize:       int(cfg.PoolSize),
-		MaxIdleConns:   int(cfg.MaxIdleConns),
-		MaxActiveConns: int(cfg.MaxActiveConns),
+		Dialer:           newDialer(&cfg),
+		Addr:             cfg.Addr,
+		Password:         cfg.Password,
+		ReadTimeout:      cfg.ReadTimeout,
+		WriteTimeout:     cfg.WriteTimeout,
+		DB:               int(cfg.DB),
+		PoolSize:         int(cfg.PoolSize),
+		MaxIdleConns:     int(cfg.MaxIdleConns),
+		MaxActiveConns:   int(cfg.MaxActiveConns),
+		PipelinePoolSize: cfg.PipelinePoolSize,
 	})
 
-	if cfg.HeartbeatInterval <= 0 {
-		cfg.HeartbeatInterval = defaultHeartbeatInterval
-	}
-
-	if cfg.HeartbeatTTL <= 0 {
-		cfg.HeartbeatTTL = defaultHeartbeatTTL
-	}
-
-	if cfg.ReapBatchSize <= 0 {
-		cfg.ReapBatchSize = defaultReapBatchSize
-	}
-
-	if cfg.DeviceBucketCount == 0 {
-		cfg.DeviceBucketCount = defaultDeviceBucketCount
-	}
-
-	cc := &cache{
+	cc := &Cache{
 		rdb:                        rdb,
 		logger:                     logger,
 		pool:                       pool,
@@ -181,32 +141,35 @@ func NewCache(
 		reapBatchSize:              cfg.ReapBatchSize,
 		deviceBucketCount:          cfg.DeviceBucketCount,
 		verifyExpiredNotifications: cfg.VerifyExpiredNotifications,
+		callbacks: Callbacks{
+			OnHubDeleted:    func(uint64) {},
+			OnDeviceDeleted: func(uint64, device.ID) {},
+			OnSelfReaped:    func() {},
+		},
 	}
-	startFn = cc.start
-	closeFn = cc.close
-	setCbFn = cc.setCallback
-	return cc, startFn, closeFn, setCbFn
+	return cc
 }
 
-// ReapHub removes the specified hub and reaps the devices still associated
-// with it. The distributed reap lock ensures that concurrent cache instances
-// do not reap the same hub at the same time.
-func (c *cache) ReapHub(ctx context.Context) error {
+// ReapHub removes the hub and reaps the devices still linked to it. The
+// distributed reap lock ensures that concurrent cache instances do not
+// reap the same hub at the same time.
+func (c *Cache) ReapHub(ctx context.Context) error {
 	return c.reapHub(ctx, c.hubID)
 }
 
-// ListHubsByDevices returns the hub ID currently owning each device ID.
-// The returned slice preserves the same order as deviceIDs; a zero value
-// indicates that a device has no registered hub.
-func (c *cache) ListHubsByDevices(
+// ListHubsByDevices returns the hub ID that owns each device ID now. The
+// result keeps the same order as deviceIDs. A zero value means that the
+// device has no registered hub.
+func (c *Cache) ListHubsByDevices(
 	ctx context.Context,
-	deviceIDs []shareddevice.ID,
+	deviceIDs []device.ID,
 ) ([]uint64, error) {
 	if len(deviceIDs) == 0 {
 		return []uint64{}, nil
 	}
 
-	// bucket -> indices into deviceIDs/result that fall in that bucket.
+	// byBucket maps a bucket to the indices into deviceIDs and result
+	// for that bucket.
 	byBucket := make(map[uint32][]int)
 	for i, deviceID := range deviceIDs {
 		bucket := c.bucketFor(deviceID.Uint64())
@@ -215,34 +178,38 @@ func (c *cache) ListHubsByDevices(
 
 	var (
 		pipe      = c.rdb.Pipeline()
-		cmds      = make(map[uint32]*redis.SliceCmd, len(byBucket))
+		cmds      = make(map[uint32]*redis.Cmd, len(byBucket))
 		arrKeys   = make([][]byte, 0, len(byBucket))
-		arrFields = make([][]string, 0, len(byBucket))
+		arrFields = make([][]byte, 0, len(deviceIDs))
 	)
 
 	for bucket, idxs := range byBucket {
-		fields := make([]string, len(idxs))
-		for j, idx := range idxs {
-			fields[j] = bs.BytesToString(bs.U64ToBytes(deviceIDs[idx].Uint64()))
-		}
 		bucketKey := bs.Concat(devicesPrefix, uint64(bucket))
 		arrKeys = append(arrKeys, bucketKey)
-		arrFields = append(arrFields, fields)
-		cmds[bucket] = pipe.HMGet(ctx, bs.BytesToString(bucketKey), fields...)
+
+		// HMGET takes its fields as separate arguments. The code
+		// flattens the pooled field buffers into args. It does not pass
+		// them as one slice.
+		args := make([]any, 0, 2+len(idxs))
+		args = append(args, "hmget", bucketKey)
+		for _, idx := range idxs {
+			field := bs.U64ToBytes(deviceIDs[idx].Uint64())
+			arrFields = append(arrFields, field)
+			args = append(args, field)
+		}
+		cmds[bucket] = pipe.Do(ctx, args...)
 	}
 
 	_, err := pipe.Exec(ctx)
-
-	// cleanup.
-	for _, key := range arrKeys {
-		slicepool.Put(key)
-	}
-	for _, fields := range arrFields {
-		for _, field := range fields {
-			slicepool.Put(bs.StringToBytes(field))
+	defer func() {
+		// Release the pooled buffers.
+		for _, key := range arrKeys {
+			slicepool.Put(key)
 		}
-	}
-
+		for _, field := range arrFields {
+			slicepool.Put(field)
+		}
+	}()
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +217,7 @@ func (c *cache) ListHubsByDevices(
 	result := make([]uint64, len(deviceIDs))
 	for bucket, idxs := range byBucket {
 		var values []any
-		values, err = cmds[bucket].Result()
+		values, err = cmds[bucket].Slice()
 		if err != nil {
 			return nil, err
 		}
@@ -263,81 +230,92 @@ func (c *cache) ListHubsByDevices(
 	return result, nil
 }
 
-// IsInfraError reports whether err indicates a problem with
-// the Redis connection, node, or cluster itself — the kind of failure
-// RedisBreaker should trip on — as opposed to a problem with a particular
-// command (bad arguments, wrong type, no permission, key not found, and
-// so on), which will keep failing regardless of whether Redis is healthy
-// and shouldn't cost every other caller a fail-fast.
+// IsInfraError reports whether err shows a problem with the Redis
+// connection, the node, or the cluster itself. RedisBreaker must trip on
+// this kind of failure.
 //
-// Only exported github.com/redis/go-redis/v9 API is used here — the typed
-// Is*Error helpers and sentinel vars — so this keeps working across
-// go-redis versions without reaching into its internal packages.
-func (c *cache) IsInfraError(err error) bool {
+// A command problem is different: bad arguments, wrong type, no
+// permission, a missing key, and so on. This kind of error keeps
+// happening even when Redis is healthy. It must not cause a fail-fast for
+// every other caller.
+//
+// The function uses only the exported API of
+// github.com/redis/go-redis/v9: the typed Is*Error helpers and the
+// sentinel variables. This way, the function keeps working across
+// go-redis versions. It does not reach into the internal packages of
+// go-redis.
+func (c *Cache) IsInfraError(err error) bool {
 	if err == nil {
 		return false
 	}
 
 	switch {
-	// The caller gave up; that says nothing about Redis's health.
+	// The caller canceled the request. This says nothing about the
+	// health of Redis.
 	case errors.Is(err, context.Canceled):
 		return false
 
-	// The deadline reached all the way down to the Redis call without an
-	// answer. This assumes the ctx passed into the guarded call (see cb.circuitBreaker.Execute)
-	// is scoped specifically to that Redis call ...
-	// A recovered panic bypasses this function entirely (see cb.New's IsExcluded)
-	// and always counts as a failure.
+	// The deadline passed before Redis answered the call. This logic
+	// assumes that the ctx passed into the guarded call (see
+	// cb.circuitBreaker.Execute) applies only to that Redis call. A
+	// recovered panic skips this function entirely (see cb.New's
+	// IsExcluded). A recovered panic always counts as a failure.
 	case errors.Is(err, context.DeadlineExceeded):
 		return true
 
-	// Client lifecycle: the client itself was shut down. Arguably this is
-	// caller-side state rather than a Redis health signal (same tension
-	// as the pool errors below), but unlike pool pressure it means
-	// literally nothing can succeed until the process reconstructs a
-	// client, so it stays here for now.
+	// This is the client lifecycle case: the client itself shut down.
+	// This is caller-side state, not a true signal of Redis health, in
+	// the same way as the pool errors below. But unlike pool pressure,
+	// no call can succeed until the process builds a new client. For
+	// this reason, the function classifies this as an infra error for
+	// now.
 	case errors.Is(err, redis.ErrClosed):
 		return true
 
-	// Server/cluster-reported errors describing the server itself as
-	// unavailable, overloaded, or mid-failover — not this command being
-	// malformed:
-	//   - ClusterDown / MasterDown / Loading / NoReplicas: the
-	//     node/cluster isn't in a state to serve requests right now.
-	//   - TryAgain: the cluster asked us to retry (typically mid-reshard).
-	//   - MaxClients / OOM: the server is out of capacity.
-	//   - ReadOnly: usually means a failover just happened and the
-	//     client's routing table is stale. Kept here, though the same
-	//     "it's just cluster protocol" reasoning that excludes Moved/Ask
-	//     below applies partially to this too — worth your own call if
-	//     you want full consistency.
-	//   - Auth: a client that can't authenticate can't do anything else either,
-	//     so it is classified as infra here.
+	// These are server or cluster errors. They report that the server
+	// itself is unavailable, overloaded, or mid-failover. They do not
+	// report a malformed command.
+	//   - ClusterDown / MasterDown / Loading / NoReplicas: the node or
+	//     the cluster cannot serve requests right now.
+	//   - TryAgain: the cluster asks the client to retry. This usually
+	//     happens mid-reshard.
+	//   - MaxClients / OOM: the server has no more capacity.
+	//   - ReadOnly: a failover likely just happened, and the client's
+	//     routing table is stale. The function keeps this case here.
+	//     The same "this is only cluster protocol" reasoning that
+	//     excludes Moved and Ask below applies partially here too. You
+	//     decide whether to change this for full consistency.
+	//   - Auth: a client that cannot authenticate cannot do anything
+	//     else either. For this reason, the function classifies it as
+	//     an infra error.
 	//
-	// Deliberately NOT here: Moved / Ask. These are normal Redis Cluster
-	// routing protocol, not unhealthiness — a ClusterClient absorbs them
-	// transparently under ordinary operation (slot migration, resharding)
-	// by updating its slot table and retrying. If one leaks out to the
-	// caller, it's more likely a MaxRedirects budget hit during a routine
-	// reshard, or a plain (non-cluster-aware) Client pointed at a cluster
-	// node — a configuration mismatch, not "the cluster is down" the way
-	// ClusterDown/MasterDown explicitly are.
+	// The function does NOT classify Moved or Ask as infra errors. These
+	// are normal Redis Cluster routing protocol, not signs of bad
+	// health. A ClusterClient absorbs them during normal operation, such
+	// as slot migration or resharding: it updates its slot table and
+	// retries. If one of these errors reaches the caller, the likely
+	// cause is a MaxRedirects budget hit during a routine reshard.
+	// Another likely cause is a plain, non-cluster-aware Client pointed
+	// at a cluster node. Both causes are configuration mismatches. They
+	// do not mean that the cluster is down, the way ClusterDown and
+	// MasterDown explicitly do.
 	//
-	// Deliberately NOT infra: redis.ErrPoolExhausted / redis.ErrPoolTimeout
-	// reflect this client's configured capacity (MaxActiveConns / PoolSize
-	// / PoolTimeout) versus current concurrent demand on THIS process, not
-	// Redis's health. ErrPoolExhausted specifically only fires when an
-	// explicit MaxActiveConns ceiling is configured and hit — a pure
-	// client-side capacity limit (see internal/pool/pool.go: newConn).
-	// ErrPoolTimeout is genuinely more ambiguous — it can also happen
-	// because Redis is slow enough that connections are held checked-out
-	// longer than usual — but tripping the breaker doesn't fix either
-	// cause, and genuine Redis-side slowness is still caught below via
-	// context.DeadlineExceeded and network errors once a connection
-	// actually reaches Redis. If your PoolSize is sized generously
-	// relative to real concurrency, you may want ErrPoolTimeout back in
-	// the infra bucket — that's a call about your own pool tuning, not
-	// something this function can know on its own.
+	// The function does NOT classify redis.ErrPoolExhausted or
+	// redis.ErrPoolTimeout as infra errors. These errors reflect this
+	// client's configured capacity (MaxActiveConns, PoolSize,
+	// PoolTimeout) against the current demand on this process. They do
+	// not reflect the health of Redis. ErrPoolExhausted fires only when
+	// the client configures an explicit MaxActiveConns ceiling and hits
+	// it. This is a pure client-side capacity limit (see
+	// internal/pool/pool.go: newConn). ErrPoolTimeout is more ambiguous.
+	// It can also happen because Redis is slow. When Redis is slow,
+	// connections stay checked out longer than usual. But tripping the
+	// breaker does not fix either cause. Genuine Redis-side slowness
+	// still triggers context.DeadlineExceeded or a network error below,
+	// once a connection reaches Redis. If you size PoolSize generously
+	// against real concurrency, you can add ErrPoolTimeout back to the
+	// infra bucket. That choice depends on your own pool tuning. This
+	// function cannot know that choice on its own.
 	case redis.IsClusterDownError(err),
 		redis.IsTryAgainError(err),
 		redis.IsMasterDownError(err),
@@ -350,10 +328,10 @@ func (c *cache) IsInfraError(err error) bool {
 		return true
 	}
 
-	// Transport-level failures — refused/reset connections, DNS
-	// failures, dial timeouts, or the connection dying mid-read/write.
-	// net.Error covers *net.OpError and *net.DNSError, which is how
-	// go-redis surfaces essentially all dial/read/write failures.
+	// These are transport-level failures: refused or reset connections,
+	// DNS failures, dial timeouts, or a connection that dies mid-read or
+	// mid-write. net.Error covers *net.OpError and *net.DNSError. This
+	// is how go-redis reports almost all dial, read, and write failures.
 	if _, ok := errors.AsType[net.Error](err); ok {
 		return true
 	}
@@ -361,32 +339,39 @@ func (c *cache) IsInfraError(err error) bool {
 		return true
 	}
 
-	// Everything else — redis.Nil, redis.TxFailedErr,
-	// IsPermissionError/NOPERM, IsExecAbortError, redis.ErrCrossSlot,
-	// redis.ErrNoScript, WRONGTYPE, syntax errors, Moved/Ask (see above),
-	// and anything unrecognized — is a per-command or business signal, not
-	// infrastructure. A recovered panic bypasses this function entirely
-	// (see cb.New's IsExcluded) and always counts as a failure.
+	// Everything else is a per-command or business signal, not an infra
+	// error: redis.Nil, redis.TxFailedErr, IsPermissionError/NOPERM,
+	// IsExecAbortError, redis.ErrCrossSlot, redis.ErrNoScript,
+	// WRONGTYPE, syntax errors, Moved/Ask (see above), and anything
+	// unrecognized. A recovered panic skips this function entirely (see
+	// cb.New's IsExcluded). A recovered panic always counts as a
+	// failure.
 	return false
 }
 
-// BatchAddDevices registers multiple devices as owned by this hub.
-// Devices are grouped by bucket and updated through the corresponding Lua
-// script so the device registry and this hub's device set remain consistent.
-func (c *cache) BatchAddDevices(
+// BatchAddDevices registers multiple devices as owned by this hub. The
+// function groups devices by bucket and updates them through the
+// matching Lua script. This keeps the device registry and this hub's
+// device set consistent. The function rejects inputs above
+// presence.MaxBatchSize before it sends any Redis command.
+func (c *Cache) BatchAddDevices(
 	ctx context.Context,
-	deviceIDs []shareddevice.ID,
-) (map[shareddevice.ID][]message.Date, error) {
+	deviceIDs []device.ID,
+) (map[device.ID][]message.Date, error) {
 	if len(deviceIDs) == 0 {
 		return nil, nil
+	}
+
+	if len(deviceIDs) > presence.MaxBatchSize {
+		return nil, ErrBatchTooLarge
 	}
 
 	var (
 		hubDeviceKey = bs.Concat(hubDevicesPrefix, c.hubID)
 		bHubID       = bs.U64ToBytes(c.hubID)
-		byBucket     = make(map[uint32][]int) // bucket -> indices to deviceIDs
+		byBucket     = make(map[uint32][]int) // byBucket maps a bucket to the indices into deviceIDs.
 		order        = make([]uint32, 0)
-		flattened    = make([]shareddevice.ID, 0, len(deviceIDs)) // The device order after flattening follows the bucket pattern, matching the ARGV.
+		flattened    = make([]device.ID, 0, len(deviceIDs)) // The order of devices in flattened matches the bucket pattern in ARGV.
 	)
 
 	for i, deviceID := range deviceIDs {
@@ -398,21 +383,24 @@ func (c *cache) BatchAddDevices(
 	}
 
 	var (
-		i    = 1
-		keys = make([]string, 1+len(order)+len(deviceIDs)) // +len(deviceIDs) for pending_buckets keys
-		args = make([]any, 2+len(order)+len(deviceIDs))
+		i       = 1
+		keyBufs = make([][]byte, 1+len(order)+len(deviceIDs)) // +len(deviceIDs) for pending_buckets keys
+		keys    = make([]string, 1+len(order)+len(deviceIDs)) // +len(deviceIDs) for pending_buckets keys
+		args    = make([]any, 2+len(order)+len(deviceIDs))
 	)
 
 	keys[0] = bs.BytesToString(hubDeviceKey)
+	keyBufs[0] = hubDeviceKey
 	for _, b := range order {
-		keys[i] = bs.BytesToString(bs.Concat(devicesPrefix, uint64(b)))
+		keyBufs[i] = bs.Concat(devicesPrefix, uint64(b))
+		keys[i] = bs.BytesToString(keyBufs[i])
 		i += 1
 	}
 
 	args[0] = bHubID
 	args[1] = len(order)
 	i = 2
-	pendingKeyIdx := 1 + len(order) // right after block devices:{bucket} keys
+	pendingKeyIdx := 1 + len(order) // pendingKeyIdx starts right after the devices:{bucket} keys.
 
 	for _, b := range order {
 		idxs := byBucket[b]
@@ -424,7 +412,8 @@ func (c *cache) BatchAddDevices(
 			args[i] = bs.U64ToBytes(deviceID.Uint64())
 			i += 1
 
-			keys[pendingKeyIdx] = bs.BytesToString(bs.Concat(pendingBucketsPrefix, deviceID.Uint64()))
+			keyBufs[pendingKeyIdx] = bs.Concat(pendingBucketsPrefix, deviceID.Uint64())
+			keys[pendingKeyIdx] = bs.BytesToString(keyBufs[pendingKeyIdx])
 			pendingKeyIdx += 1
 
 			flattened = append(flattened, deviceID)
@@ -433,11 +422,13 @@ func (c *cache) BatchAddDevices(
 
 	resp, err := batchAddDevicesScript.Run(ctx, c.rdb, keys, args...).Slice()
 
-	// cleanup.
+	// Release the pooled buffers.
 	slicepool.Put(bHubID)
-	for _, key := range keys {
-		slicepool.Put(bs.StringToBytes(key))
+	for _, key := range keyBufs {
+		slicepool.Put(key)
 	}
+	// Every string in keys views storage that now belongs to the pool.
+	keys = nil
 	for i = 2; i < len(args); i += 1 {
 		switch arg := args[i].(type) {
 		case []byte:
@@ -457,10 +448,11 @@ func (c *cache) BatchAddDevices(
 		return nil, fmt.Errorf("batchAddDevices: pending count mismatch: got %d, want %d", len(pendingRaw), len(flattened))
 	}
 
-	pending := make(map[shareddevice.ID][]message.Date, len(pendingRaw))
+	pending := make(map[device.ID][]message.Date, len(pendingRaw))
 	for idx, p := range pendingRaw {
-		// Use flattened[idx] instead of decoding the deviceID the script returns —
-		// The order Lua returns ensures a match with the Go flatten order.
+		// The code uses flattened[idx] instead of the deviceID the
+		// script returns. Lua returns items in the same order as the Go
+		// flatten order, so the two match.
 		deviceID := flattened[idx]
 		datesRaw, ok := p.([]any)
 		if !ok {
@@ -491,30 +483,35 @@ func (c *cache) BatchAddDevices(
 	return pending, nil
 }
 
-// BatchDelDevices deletes deviceIDs from the registry, but only those still
-// owned by this hub — a device may already have been re-claimed by a
-// different hub via batchAddDevices in the meantime, in which case it's
-// silently left alone (same "not owned -> no-op" semantics the old
-// single-device DelDevice had; the return value doesn't distinguish "all
-// deleted" from "some were already owned elsewhere", matching how
-// batchAddDevices also discards its Lua script's changed count).
+// BatchDelDevices deletes deviceIDs from the registry, but only the
+// devices still owned by this hub. A different hub may already have
+// re-claimed a device through batchAddDevices in the meantime. In that
+// case, the function leaves the device alone and reports no error. This
+// matches the old "not owned, so no-op" behavior of the single-device
+// DelDevice. The return value does not distinguish "all devices deleted"
+// from "some devices were already owned elsewhere", in the same way that
+// batchAddDevices also discards its Lua script's changed count.
 //
-// One Lua call handles every bucket present in deviceIDs (unlike what the
-// name might suggest, buckets are not split into separate calls); see
-// batchDelDeviceScript for why the PUBLISH payload is precomputed here
-// rather than built in Lua.
-func (c *cache) BatchDelDevices(
+// One Lua call handles every bucket present in deviceIDs. The name does
+// not split the call by bucket. See batchDelDeviceScript for the reason
+// the PUBLISH payload is precomputed here, instead of built in Lua. The
+// function rejects inputs above presence.MaxBatchSize before it sends
+// any Redis command.
+func (c *Cache) BatchDelDevices(
 	ctx context.Context,
-	deviceIDs []shareddevice.ID,
+	deviceIDs []device.ID,
 ) error {
 	if len(deviceIDs) == 0 {
 		return nil
+	}
+	if len(deviceIDs) > presence.MaxBatchSize {
+		return ErrBatchTooLarge
 	}
 
 	var (
 		hubDeviceKey = bs.Concat(hubDevicesPrefix, c.hubID)
 		bHubID       = bs.U64ToBytes(c.hubID)
-		byBucket     = make(map[uint32][]int) // bucket -> indices into deviceIDs
+		byBucket     = make(map[uint32][]int) // byBucket maps a bucket to the indices into deviceIDs.
 		order        = make([]uint32, 0)
 	)
 
@@ -527,22 +524,30 @@ func (c *cache) BatchDelDevices(
 	}
 
 	var (
-		i    = 2
-		keys = make([]string, 2+len(order))
-		args = make([]any, 2+len(order)+2*len(deviceIDs))
+		i       = 2
+		keyBufs = make([][]byte, 2+len(order))
+		keys    = make([]string, 2+len(order))
+		args    = make([]any, 2+len(order)+2*len(deviceIDs))
 	)
 
+	// keyBufs[0] stays nil, because keys[0] is a string constant, not
+	// pool storage. Put ignores a nil slice. So the cleanup loop can run
+	// over the whole slice. It needs no start index that you must keep
+	// in sync by hand.
 	keys[0] = eventDelDevice
 	keys[1] = bs.BytesToString(hubDeviceKey)
+	keyBufs[1] = hubDeviceKey
 	for _, b := range order {
-		keys[i] = bs.BytesToString(bs.Concat(devicesPrefix, uint64(b)))
+		keyBufs[i] = bs.Concat(devicesPrefix, uint64(b))
+		keys[i] = bs.BytesToString(keyBufs[i])
 		i += 1
 	}
 
-	// Precompute every device's PUBLISH payload up front — see
-	// batchDelDeviceScript's comment for why this can't safely be built in
-	// Lua (deviceID can exceed 2^53, where Lua's float-backed numbers start
-	// losing integer precision).
+	// The code precomputes every device's PUBLISH payload before the
+	// Lua call. See the comment on batchDelDeviceScript for the reason:
+	// it is not safe to build the payload in Lua. deviceID can exceed
+	// 2^53, where Lua's float-backed numbers start to lose integer
+	// precision.
 	payloads := make([][]byte, len(deviceIDs))
 	for idx, id := range deviceIDs {
 		buf := slicepool.Get(16)
@@ -567,20 +572,22 @@ func (c *cache) BatchDelDevices(
 
 	err := batchDelDeviceScript.Run(ctx, c.rdb, keys, args...).Err()
 
-	// cleanup.
+	// Release the pooled buffers.
 	slicepool.Put(bHubID)
-	slicepool.Put(hubDeviceKey)
-	for idx := 2; idx < len(keys); idx += 1 {
-		slicepool.Put(bs.StringToBytes(keys[idx]))
+	for _, key := range keyBufs {
+		slicepool.Put(key)
 	}
-	// Every deviceID-bytes AND payload slot in args is a []byte from
-	// slicepool; every count slot is a plain int. A type switch over every
-	// index — not a step-by-2 position assumption — is what correctly
-	// frees both without double-freeing or leaking: the count slot for
-	// bucket 2+ does NOT sit at a fixed parity relative to the deviceID/
-	// payload pairs, since each bucket's own count slot shifts everything
-	// after it by one position whenever that bucket holds an odd number
-	// of devices. Mirrors BatchAddDevices's cleanup above for the same
+	// Every string in keys views storage that the pool now owns.
+	keys = nil
+	// Every deviceID-bytes slot and every payload slot in args is a
+	// []byte from slicepool. Every count slot is a plain int. A type
+	// switch over every index frees both kinds correctly, with no
+	// double free and no leak. The code does not assume a fixed
+	// step-by-2 position, because the count slot for bucket 2 and later
+	// does not sit at a fixed parity relative to the deviceID/payload
+	// pairs. Each bucket's own count slot shifts everything after it by
+	// one position whenever that bucket holds an odd number of devices.
+	// This mirrors the cleanup in BatchAddDevices above, for the same
 	// reason.
 	for idx := 2; idx < len(args); idx += 1 {
 		switch arg := args[idx].(type) {
@@ -592,13 +599,23 @@ func (c *cache) BatchDelDevices(
 	return err
 }
 
-func (c *cache) start(rootCtx context.Context) error {
-	if !c.starting.CompareAndSwap(false, true) {
-		return errors.New("cache: start already called")
+// Start subscribes to events, registers the hub lease, and starts event
+// handling. Only one start attempt can run at a time. A successful Start
+// call cannot run again.
+func (c *Cache) Start(rootCtx context.Context) error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if c.closed {
+		return ErrCacheClosed
 	}
 
-	// Track every PubSub connection opened below so we can close them on
-	// any failure path instead of leaking them if a later step errors out.
+	if !c.starting.CompareAndSwap(false, true) {
+		return ErrCacheStarted
+	}
+
+	// The code tracks every PubSub connection that it opens below. This
+	// lets it close each connection on any failure path. Without this
+	// list, a later step that fails would leak the open connections.
 	var opened []*redis.PubSub
 	started := false
 	defer func() {
@@ -606,7 +623,7 @@ func (c *cache) start(rootCtx context.Context) error {
 			for _, sub := range opened {
 				_ = sub.Close()
 			}
-			// Allow a retry after a failed start attempt.
+			// This allows a retry after a failed start attempt.
 			c.starting.Store(false)
 		}
 	}()
@@ -634,8 +651,9 @@ func (c *cache) start(rootCtx context.Context) error {
 	}
 
 	if c.verifyExpiredNotifications {
-		// If we host Redis, just set `notify-keyspace-events Ex` in config file.
-		// Otherwise, we must configure it through the management interface or the Redis provider's API.
+		// If you host Redis yourself, set `notify-keyspace-events Ex`
+		// in the config file. If not, you must configure it through
+		// the management interface or the API of the Redis provider.
 		if err = c.verifyTurnOnExpiredNotifications(rootCtx); err != nil {
 			return err
 		}
@@ -648,12 +666,14 @@ func (c *cache) start(rootCtx context.Context) error {
 		return err
 	}
 
-	// Publish the heartbeat before registering in "hubs", not after: if
-	// addHub below fails, an orphaned heartbeat key with no "hubs" entry is
-	// harmless and self-expires via TTL. The reverse order can leave a
-	// "hubs" entry with no lease behind it at all if the Set fails after —
-	// which never self-heals, since a key that was never created can never
-	// emit an expired event for onExpiredKeyEvent to react to.
+	// The code publishes the heartbeat before it registers the hub in
+	// "hubs", not after. If addHub below fails, the result is an
+	// orphaned heartbeat key with no entry in "hubs". This is harmless,
+	// because the key expires on its own through its TTL. The reverse
+	// order carries a risk: if Set fails after addHub, a "hubs" entry is
+	// left with no lease behind it. This state never heals itself,
+	// because a key that the code never created can never emit an
+	// expired event for onExpiredKeyEvent to react to.
 	hubHeartbeatKey := bs.Concat(hubHeartbeatPrefix, c.hubID)
 	defer slicepool.Put(hubHeartbeatKey)
 
@@ -679,7 +699,14 @@ func (c *cache) start(rootCtx context.Context) error {
 	return err
 }
 
-func (c *cache) close() error {
+// Close stops the subscriptions and the event handling, then closes the
+// Redis client. Close waits for an in-flight Start call. Close is safe to
+// call again and again, and safe to call before Start.
+func (c *Cache) Close() error {
+	c.lifecycleMu.Lock()
+	c.closed = true
+	c.lifecycleMu.Unlock()
+
 	c.closeOnce.Do(func() {
 		if c.subscribers.delHub != nil {
 			if err := c.subscribers.delHub.Close(); err != nil {
@@ -706,32 +733,73 @@ func (c *cache) close() error {
 	return c.closeErr
 }
 
-func (c *cache) setCallback(cb Callbacks) bool {
-	if c.setCbOnce.Swap(true) {
-		return true
+// SetCallbacks installs optional event callbacks one time, before Start.
+// A nil callback acts as a no-op. SetCallbacks returns an error if the
+// cache already has callbacks, already started, or already closed.
+func (c *Cache) SetCallbacks(cb Callbacks) error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if c.closed {
+		return ErrCacheClosed
+	}
+	if c.starting.Load() {
+		return ErrCallbacksAfterStart
+	}
+	if c.callbacksSet {
+		return ErrCallbacksAlreadySet
+	}
+	if cb.OnHubDeleted == nil {
+		cb.OnHubDeleted = func(uint64) {}
+	}
+	if cb.OnDeviceDeleted == nil {
+		cb.OnDeviceDeleted = func(uint64, device.ID) {}
+	}
+	if cb.OnSelfReaped == nil {
+		cb.OnSelfReaped = func() {}
 	}
 	c.callbacks = cb
-	return false
+	c.callbacksSet = true
+	return nil
 }
 
-// addHub registers this hub in the global hub registry with no expiration.
-// The hub's liveness is tracked separately by its heartbeat key.
-func (c *cache) addHub(ctx context.Context) error {
+// newDialer returns a function. The function serves as the default
+// dialer when Options.Dialer specifies none.
+func newDialer(cfg *Config) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		netDialer := &net.Dialer{
+			Timeout: cfg.DialTimeout,
+			KeepAliveConfig: net.KeepAliveConfig{
+				Idle:     cfg.DialIdle,
+				Interval: cfg.DialInterval,
+				Count:    cfg.DialKeepCount,
+			},
+		}
+		if cfg.TLSConfig == nil {
+			return netDialer.DialContext(ctx, network, addr)
+		}
+		return tls.DialWithDialer(netDialer, network, addr, cfg.TLSConfig)
+	}
+}
+
+// addHub registers this hub in the global hub registry, with no
+// expiration. A separate heartbeat key tracks the liveness of the hub.
+func (c *Cache) addHub(ctx context.Context) error {
 	bHubID := bs.U64ToBytes(c.hubID)
 	defer slicepool.Put(bHubID)
 	return c.rdb.SAdd(ctx, hubsKey, bHubID).Err()
 }
 
 // reapHub removes a hub from the "hubs" set, announces its departure, and
-// drains its device set in bounded batches so a hub owning many devices
-// doesn't block Redis for too long in one shot: each batch is SRandMemberN'd from
-// "hub:devices:<hubID>" in Go, grouped by bucket, then deleted from the
-// matching "devices:{bucket}" hash via one Lua call per bucket group. It
-// backs both graceful shutdown and crash detection (via
-// handleEvents), and is safe to call concurrently from multiple hub
-// instances: only one of them wins the reap lock and actually does the work,
-// the rest return immediately.
-func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
+// drains its device set in bounded batches. This way, a hub that owns
+// many devices does not block Redis for too long in one call. For each
+// batch, the code runs SRandMemberN on "hub:devices:<hubID>" in Go,
+// groups the result by bucket, then deletes each group from the matching
+// "devices:{bucket}" hash through one Lua call per bucket group. reapHub
+// backs both a graceful shutdown and crash detection, through
+// handleEvents. reapHub is safe to call at the same time from multiple
+// hub instances: only one instance wins the reap lock and does the work.
+// The other instances return right away.
+func (c *Cache) reapHub(ctx context.Context, hubID uint64) error {
 	var (
 		bHubID         = bs.U64ToBytes(hubID)
 		reapHubLockKey = bs.Concat(hubReapLockPrefix, hubID)
@@ -783,10 +851,11 @@ func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
 
 	hubDeviceKey := bs.Concat(hubDevicesPrefix, hubID)
 	for {
-		// SRANDMEMBER: read without deleting. Deletion (both from hub set and
-		// devices hash) only occurs after the corresponding HDEL has finished running
-		// in Lua — if there is a crash/error halfway through, the member is still intact
-		// in hub:devices:<hubID> so that the next reap can pick it up automatically.
+		// SRANDMEMBER reads a member without deleting it. Deletion from
+		// both the hub set and the devices hash happens only after the
+		// matching HDEL finishes in Lua. If a crash or an error happens
+		// halfway through, the member stays intact in
+		// hub:devices:<hubID>, so the next reap picks it up again.
 		popped, popErr := c.rdb.SRandMemberN(
 			ctx,
 			bs.BytesToString(hubDeviceKey),
@@ -804,8 +873,9 @@ func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
 		for _, deviceIDStr := range popped {
 			id, parseErr := strconv.ParseUint(deviceIDStr, 10, 64)
 			if parseErr != nil {
-				// Shouldn't happen; skip a malformed member defensively
-				// rather than failing the whole reap over it.
+				// The code does not expect this case. It skips a
+				// malformed member instead of failing the whole reap
+				// over it.
 				continue
 			}
 			bucket := uint32(c.bucketFor(id))
@@ -839,7 +909,8 @@ func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
 		}
 
 		if uint16(len(popped)) < c.reapBatchSize {
-			// Fewer than requested — the set is (about to be) drained.
+			// The batch holds fewer members than requested. The set is
+			// empty or almost empty.
 			break
 		}
 	}
@@ -856,19 +927,22 @@ func (c *cache) reapHub(ctx context.Context, hubID uint64) error {
 	return err
 }
 
-// checkSelfReaped verifies this hub is still present in "hubs" after a gap
-// long enough that another instance could have reaped it as crashed. If it's
-// gone, this re-registers the hub entry itself (log and continue. Don't return
-// early on this error — the app still needs the OnSelfReaped callback below),
-// and always notifies the app via OnSelfReaped regardless of whether that
-// re-registration succeeded. The app still needs to know: it may believe it
-// owns TCP connections / devices that were reassigned to a live hub while
-// this hub was partitioned, and needs to reconcile that itself (e.g.
-// force-disconnect local clients so they reconnect fresh and get correctly
-// re-assigned) — this function does not attempt that reconciliation.
-func (c *cache) checkSelfReaped(ctx context.Context) {
+// checkSelfReaped checks that this hub is still present in "hubs". It
+// runs this check after a gap long enough for another instance to have
+// reaped this hub as crashed. If the hub entry is gone, checkSelfReaped
+// re-registers it. If re-registration fails, checkSelfReaped logs the
+// error and continues; it does not return early, because the application
+// still needs the OnSelfReaped callback below. checkSelfReaped always
+// calls OnSelfReaped, whether or not re-registration succeeded. The
+// application still needs to know about the gap: the application may
+// believe that it owns TCP connections or devices that were reassigned
+// to a live hub while this hub was partitioned. The application must
+// reconcile that state itself, for example by force-disconnecting local
+// clients so they reconnect and get reassigned correctly.
+// checkSelfReaped does not perform that reconciliation.
+func (c *Cache) checkSelfReaped(ctx context.Context) {
 	if !c.selfReapChecking.CompareAndSwap(false, true) {
-		return // there is anyone is already running; skipping this one.
+		return // Another check is already running. This call skips itself.
 	}
 	defer c.selfReapChecking.Store(false)
 
@@ -890,18 +964,19 @@ func (c *cache) checkSelfReaped(ctx context.Context) {
 	}
 
 	if err = c.addHub(ctx); err != nil {
-		// Best-effort: log and continue. Don't return early on this error —
-		// the app still needs the OnSelfReaped callback below.
+		// This is a best-effort call. The code logs the error and
+		// continues. It does not return early, because the application
+		// still needs the OnSelfReaped callback below.
 		c.logger.Warn("failed to re-register hub after a possible self-reap", zap.Error(err))
 	}
 
 	c.callbacks.OnSelfReaped()
 }
 
-// verifyTurnOnExpiredNotifications check Redis turn on emit keyEvent
-// notifications for expired keys, which handleEvents relies on to
-// detect a crashed hub's expired heartbeat lease.
-func (c *cache) verifyTurnOnExpiredNotifications(ctx context.Context) error {
+// verifyTurnOnExpiredNotifications checks that Redis emits keyevent
+// notifications for expired keys. handleEvents relies on these
+// notifications to detect a crashed hub's expired heartbeat lease.
+func (c *Cache) verifyTurnOnExpiredNotifications(ctx context.Context) error {
 	verify, err := c.rdb.ConfigGet(ctx, "notify-keyspace-events").Result()
 	if err != nil {
 		return err
@@ -916,18 +991,21 @@ func (c *cache) verifyTurnOnExpiredNotifications(ctx context.Context) error {
 	return nil
 }
 
-// handleEvents runs the cache background loop. It refreshes the hub
-// heartbeat and processes hub/device deletion and heartbeat-expiration events
-// until the context is canceled or a subscription is closed.
-func (c *cache) handleEvents(ctx context.Context) {
+// handleEvents runs the background loop of the cache. It refreshes the
+// hub heartbeat. It also processes hub deletion events, device deletion
+// events, and heartbeat-expiration events. It runs until the context
+// cancels or a subscription closes.
+func (c *Cache) handleEvents(ctx context.Context) {
 	var (
 		ticker          = time.NewTicker(c.heartbeatInterval)
 		hubHeartbeatKey = bs.Concat(hubHeartbeatPrefix, c.hubID)
 
-		// go-redis gives no explicit "reconnected" event — the pool retries and
-		// reconnects transparently under the hood. We only ever observe pass/fail
-		// results from each Set call, so we infer a partition by tracking how
-		// long it's been since our last *confirmed* heartbeat write.
+		// go-redis gives no explicit "reconnected" event. The pool
+		// retries and reconnects on its own, without exposing that to
+		// the caller. The code only observes a pass or fail result from
+		// each Set call. For this reason, the code infers a partition
+		// by tracking the time since the last confirmed heartbeat
+		// write.
 		lastSuccess = time.Now()
 	)
 
@@ -949,17 +1027,19 @@ func (c *cache) handleEvents(ctx context.Context) {
 			).Err()
 
 			if err != nil {
-				// Hook up c.logger here if you want visibility into
-				// repeated failures. Deliberately don't touch lastSuccess:
-				// the gap keeps growing across ticks until a writing succeeds.
+				// You can connect c.logger here for visibility into
+				// repeated failures. The code does not touch
+				// lastSuccess here on purpose. The gap keeps growing
+				// across ticks until a write succeeds.
 				continue
 			}
 
-			// We just went from "couldn't confirm the lease" to "confirmed
-			// it". If the gap since our last confirmed write is at least
-			// the TTL, Redis could have expired our lease in the meantime —
-			// the same condition another hub's crash detector relies on to
-			// reap us. Verify before assuming the worst.
+			// The write just moved from "not confirmed" to "confirmed".
+			// If the gap since the last confirmed write is at least the
+			// TTL, Redis may have expired this hub's lease in the
+			// meantime. Another hub's crash detector relies on the
+			// same condition to reap this hub. The code verifies this
+			// before it assumes the worst.
 			if time.Since(lastSuccess) >= c.heartbeatTTL {
 				_ = c.pool.Submit(func(_ *workerpool.Context) {
 					c.checkSelfReaped(ctx)
@@ -982,7 +1062,7 @@ func (c *cache) handleEvents(ctx context.Context) {
 			if hubID != c.hubID {
 				c.callbacks.OnDeviceDeleted(
 					hubID,
-					shareddevice.ID(binary.LittleEndian.Uint64(buf[:8])),
+					device.ID(binary.LittleEndian.Uint64(buf[:8])),
 				)
 			}
 
@@ -1019,13 +1099,13 @@ func (c *cache) handleEvents(ctx context.Context) {
 }
 
 // bucketFor returns the registry bucket for the given device ID.
-func (c *cache) bucketFor(id uint64) uint32 {
+func (c *Cache) bucketFor(id uint64) uint32 {
 	return uint32(bit.Mix64(id) % uint64(c.deviceBucketCount))
 }
 
 // subscribe creates a Redis Pub/Sub subscription and waits until Redis
 // acknowledges the subscription before returning it.
-func (c *cache) subscribe(ctx context.Context, channel string) (*redis.PubSub, error) {
+func (c *Cache) subscribe(ctx context.Context, channel string) (*redis.PubSub, error) {
 	sub := c.rdb.Subscribe(ctx, channel)
 	if _, err := sub.Receive(ctx); err != nil {
 		_ = sub.Close()

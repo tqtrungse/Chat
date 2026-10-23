@@ -14,8 +14,8 @@ import (
 	reflect "reflect"
 	time "time"
 	connection "xxx/internal/hub/core/connection"
+	transport "xxx/internal/hub/core/transport"
 	device "xxx/internal/shared/device"
-	session "xxx/internal/shared/session"
 	ticket "xxx/internal/shared/ticket"
 	nio "xxx/pkg/nio"
 
@@ -47,31 +47,31 @@ func (m *MockConnManager) EXPECT() *MockConnManagerMockRecorder {
 }
 
 // ActivateConn mocks base method.
-func (m *MockConnManager) ActivateConn(ctx context.Context, id device.ID, keys *session.Keys, conn nio.Conn, callback func(device.ID)) error {
+func (m *MockConnManager) ActivateConn(ctx context.Context, id device.ID, ch transport.Channel, conn nio.Conn, cleanup func(), callback func(error)) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ActivateConn", ctx, id, keys, conn, callback)
+	ret := m.ctrl.Call(m, "ActivateConn", ctx, id, ch, conn, cleanup, callback)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // ActivateConn indicates an expected call of ActivateConn.
-func (mr *MockConnManagerMockRecorder) ActivateConn(ctx, id, keys, conn, callback any) *gomock.Call {
+func (mr *MockConnManagerMockRecorder) ActivateConn(ctx, id, ch, conn, cleanup, callback any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ActivateConn", reflect.TypeOf((*MockConnManager)(nil).ActivateConn), ctx, id, keys, conn, callback)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ActivateConn", reflect.TypeOf((*MockConnManager)(nil).ActivateConn), ctx, id, ch, conn, cleanup, callback)
 }
 
-// AsyncSendConn mocks base method.
-func (m *MockConnManager) AsyncSendConn(secure bool, conn nio.Conn, data connection.SendData) error {
+// CompleteActivation mocks base method.
+func (m *MockConnManager) CompleteActivation(conn nio.Conn, data connection.SendData) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AsyncSendConn", secure, conn, data)
+	ret := m.ctrl.Call(m, "CompleteActivation", conn, data)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// AsyncSendConn indicates an expected call of AsyncSendConn.
-func (mr *MockConnManagerMockRecorder) AsyncSendConn(secure, conn, data any) *gomock.Call {
+// CompleteActivation indicates an expected call of CompleteActivation.
+func (mr *MockConnManagerMockRecorder) CompleteActivation(conn, data any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AsyncSendConn", reflect.TypeOf((*MockConnManager)(nil).AsyncSendConn), secure, conn, data)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CompleteActivation", reflect.TypeOf((*MockConnManager)(nil).CompleteActivation), conn, data)
 }
 
 // CurConns mocks base method.
@@ -165,30 +165,68 @@ func (m *MockActivationService) EXPECT() *MockActivationServiceMockRecorder {
 }
 
 // CheckExpiry mocks base method.
-func (m *MockActivationService) CheckExpiry(arg0 *ticket.Ticket, now time.Time) error {
+func (m *MockActivationService) CheckExpiry(meta *ticket.Info, now time.Time) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CheckExpiry", arg0, now)
+	ret := m.ctrl.Call(m, "CheckExpiry", meta, now)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // CheckExpiry indicates an expected call of CheckExpiry.
-func (mr *MockActivationServiceMockRecorder) CheckExpiry(arg0, now any) *gomock.Call {
+func (mr *MockActivationServiceMockRecorder) CheckExpiry(meta, now any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckExpiry", reflect.TypeOf((*MockActivationService)(nil).CheckExpiry), arg0, now)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckExpiry", reflect.TypeOf((*MockActivationService)(nil).CheckExpiry), meta, now)
 }
 
-// Prepare mocks base method.
-func (m *MockActivationService) Prepare(token, arg1, sign []byte) (*ticket.Ticket, error) {
+// VerifyAuthorization mocks base method.
+func (m *MockActivationService) VerifyAuthorization(raw, signature, binding, challenge []byte, hub transport.Identity) (*ticket.Info, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Prepare", token, arg1, sign)
-	ret0, _ := ret[0].(*ticket.Ticket)
+	ret := m.ctrl.Call(m, "VerifyAuthorization", raw, signature, binding, challenge, hub)
+	ret0, _ := ret[0].(*ticket.Info)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// Prepare indicates an expected call of Prepare.
-func (mr *MockActivationServiceMockRecorder) Prepare(token, arg1, sign any) *gomock.Call {
+// VerifyAuthorization indicates an expected call of VerifyAuthorization.
+func (mr *MockActivationServiceMockRecorder) VerifyAuthorization(raw, signature, binding, challenge, hub any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Prepare", reflect.TypeOf((*MockActivationService)(nil).Prepare), token, arg1, sign)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "VerifyAuthorization", reflect.TypeOf((*MockActivationService)(nil).VerifyAuthorization), raw, signature, binding, challenge, hub)
+}
+
+// MockAuthorizationExecutor is a mock of AuthorizationExecutor interface.
+type MockAuthorizationExecutor struct {
+	ctrl     *gomock.Controller
+	recorder *MockAuthorizationExecutorMockRecorder
+	isgomock struct{}
+}
+
+// MockAuthorizationExecutorMockRecorder is the mock recorder for MockAuthorizationExecutor.
+type MockAuthorizationExecutorMockRecorder struct {
+	mock *MockAuthorizationExecutor
+}
+
+// NewMockAuthorizationExecutor creates a new mock instance.
+func NewMockAuthorizationExecutor(ctrl *gomock.Controller) *MockAuthorizationExecutor {
+	mock := &MockAuthorizationExecutor{ctrl: ctrl}
+	mock.recorder = &MockAuthorizationExecutorMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockAuthorizationExecutor) EXPECT() *MockAuthorizationExecutorMockRecorder {
+	return m.recorder
+}
+
+// Submit mocks base method.
+func (m *MockAuthorizationExecutor) Submit(job func()) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Submit", job)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Submit indicates an expected call of Submit.
+func (mr *MockAuthorizationExecutorMockRecorder) Submit(job any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Submit", reflect.TypeOf((*MockAuthorizationExecutor)(nil).Submit), job)
 }

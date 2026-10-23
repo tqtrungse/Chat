@@ -1,0 +1,29 @@
+# Internal stable identities for StatefulSet replicas.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hub-internal
+spec:
+  clusterIP: None
+  selector:
+    app: hub
+  ports:
+    - name: tcp
+      port: 3008
+      targetPort: tcp
+      protocol: TCP
+---
+# TCP forwarding only. Provider-specific leastconn configuration is separate.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hub-public
+spec:
+  type: LoadBalancer
+  selector:
+    app: hub
+  ports:
+    - name: tcp
+      port: 9000
+      targetPort: tcp
+      protocol: TCP

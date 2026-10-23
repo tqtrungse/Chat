@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package bs
@@ -28,7 +17,8 @@ import (
 // The returned slice is allocated from slicePool and must be returned to the
 // pool by the caller when it is no longer needed.
 func Concat(prefix string, value uint64) []byte {
-	buf := slicepool.Get(len(prefix) + 20)
+	n := digitCount(value)
+	buf := slicepool.Get(len(prefix) + n)
 	buf = buf[:0]
 	buf = append(buf, prefix...)
 	buf = strconv.AppendUint(buf, value, 10)
@@ -41,8 +31,54 @@ func Concat(prefix string, value uint64) []byte {
 // The returned slice is allocated from slicePool and must be returned to the
 // pool by the caller when it is no longer needed.
 func U64ToBytes(value uint64) []byte {
-	buf := slicepool.Get(20)
+	n := digitCount(value)
+	buf := slicepool.Get(n)
 	buf = buf[:0]
 	buf = strconv.AppendUint(buf, value, 10)
 	return buf
+}
+
+func digitCount(v uint64) int {
+	switch {
+	case v < 10:
+		return 1
+	case v < 100:
+		return 2
+	case v < 1000:
+		return 3
+	case v < 10000:
+		return 4
+	case v < 100000:
+		return 5
+	case v < 1000000:
+		return 6
+	case v < 10000000:
+		return 7
+	case v < 100000000:
+		return 8
+	case v < 1000000000:
+		return 9
+	case v < 10000000000:
+		return 10
+	case v < 100000000000:
+		return 11
+	case v < 1000000000000:
+		return 12
+	case v < 10000000000000:
+		return 13
+	case v < 100000000000000:
+		return 14
+	case v < 1000000000000000:
+		return 15
+	case v < 10000000000000000:
+		return 16
+	case v < 100000000000000000:
+		return 17
+	case v < 1000000000000000000:
+		return 18
+	case v < 10000000000000000000:
+		return 19
+	default:
+		return 20
+	}
 }

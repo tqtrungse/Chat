@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package redis
@@ -19,8 +8,9 @@ package redis
 import "github.com/redis/go-redis/v9"
 
 var (
-	// deleteHubScript removes a hub from the hubs set and announces it.
-	// Reused for hub de-registration, both graceful stop and crash reap.
+	// deleteHubScript removes a hub from the hubs set and announces the
+	// removal. The code reuses this script for hub de-registration,
+	// both for a graceful stop and for a crash reap.
 	//
 	// KEYS[1] = hubs set
 	//
@@ -47,21 +37,23 @@ var (
 		return deleted
 	`)
 
-	// batchAddDevicesScript atomically registers devices to a hub and returns
-	// the dates on which each device received messages while it was offline.
+	// batchAddDevicesScript registers devices to a hub, as one atomic
+	// step. It also returns the dates on which each device received
+	// messages while the device was offline.
 	//
-	// It keeps the following state consistent:
+	// The script keeps the following state consistent:
 	//   - devices:{bucket}: device -> owning hub
 	//   - hub:devices:<hubID>: set of devices owned by the hub
 	//
-	// If a device previously belonged to another hub, it is removed from the
-	// previous hub's device set.
+	// If a device belonged to another hub before, the script removes
+	// the device from that hub's device set.
 	//
 	// KEYS[1]                  = hub:devices:<hubID>
 	// KEYS[2..N+1]             = devices:{bucket}
 	//
-	// KEYS[N+2..N+1+numDevices] = pending_buckets:<deviceID>, one per device,
-	//                             in the SAME order devices appear across ARGV
+	// KEYS[N+2..N+1+numDevices] = pending_buckets:<deviceID>, one per
+	//                             device, in the SAME order the devices
+	//                             appear across ARGV
 	//
 	// ARGV[1]                  = hubID
 	// ARGV[2]                  = numBuckets (N)
@@ -111,26 +103,29 @@ var (
 		return {changed, pending}
 	`)
 
-	// batchDelDeviceScript deletes devices from their owning
-	// "devices:{bucket}" hash and the caller's "hub:devices:<hubID>" set,
-	// but only for devices still owned by the given hubID (a device may
-	// have already been re-claimed by a different hub via
-	// batchAddDevicesScript in the meantime, in which case it's left
-	// alone). Announces each successful deletion individually, in the same
-	// 16-byte wire format the single-device version used, so
-	// onDelDeviceEvent needs no changes.
+	// batchDelDeviceScript deletes devices from the owning
+	// "devices:{bucket}" hash and from the caller's
+	// "hub:devices:<hubID>" set. The script deletes only the devices
+	// still owned by the given hubID. A different hub may have already
+	// re-claimed a device through batchAddDevicesScript in the
+	// meantime; in that case, the script leaves the device alone. The
+	// script announces each successful deletion on its own, in the same
+	// 16-byte wire format that the single-device version used. For this
+	// reason, onDelDeviceEvent needs no change.
 	//
-	// The PUBLISH payload for each device is precomputed in Go and passed
-	// straight through as an opaque ARGV blob rather than built here in
-	// Lua: deviceID is a full uint64, and Lua 5.1's numbers are
-	// double-precision floats, which start losing integer precision above
-	// 2^53 — packing it here would silently corrupt large device IDs.
+	// Go precomputes the PUBLISH payload for each device. The payload
+	// passes through as an opaque ARGV blob; the script does not build
+	// it in Lua. deviceID is a full uint64. Lua 5.1 numbers are
+	// double-precision floats, and they start to lose integer precision
+	// above 2^53. Packing deviceID in Lua would silently corrupt large
+	// device IDs.
 	//
 	// KEYS[1]      = eventDelDevice channel
 	//
 	// KEYS[2]      = hub:devices:<hubID>
 	//
-	// KEYS[3..]    = devices:{bucket} for each distinct bucket present in ARGV
+	// KEYS[3..]    = devices:{bucket} for each distinct bucket present
+	//                in ARGV
 	//
 	// ARGV[1]      = hubID (expected owner, string)
 	//
@@ -139,11 +134,11 @@ var (
 	// ARGV[3..]    = alternating in the correct order KEYS[3..N+2]:
 	//                [count bucket 1, deviceID, payload, deviceID, payload, ...,
 	//                 count bucket 2, deviceID, payload, ...]
-	//                deviceID is the decimal-string hash field; payload is
-	//                the precomputed 16-byte (deviceID+hubID) PUBLISH
+	//                deviceID is the decimal-string hash field. payload
+	//                is the precomputed 16-byte (deviceID+hubID) PUBLISH
 	//                payload for that device.
 	//
-	// Returns the number of devices actually deleted.
+	// Returns the number of devices that the script actually deleted.
 	batchDelDeviceScript = redis.NewScript(`
 		local hubID = ARGV[1]
 		local numBuckets = tonumber(ARGV[2])
@@ -177,18 +172,21 @@ var (
 		return removed
 	`)
 
-	// reapDevicesInBucketScript conditionally deletes a batch of devices
-	// from one "devices:{bucket}" hash, but only for those still owned by
-	// the given hubID (a device may have already been re-claimed by a live
-	// hub via batchAddDevicesScript in the meantime, in which case the
-	// mapping is left alone). The caller (reapHub) reads a batch from the
-	// hub's device set using SRANDMEMBER in Go, groups the results by bucket,
-	// then runs this once per bucket group.
+	// reapDevicesInBucketScript deletes a batch of devices from one
+	// "devices:{bucket}" hash, but only the devices still owned by the
+	// given hubID. A live hub may have already re-claimed a device
+	// through batchAddDevicesScript in the meantime; in that case, the
+	// script leaves the mapping alone. The caller, reapHub, reads a
+	// batch from the hub's device set with SRANDMEMBER in Go, groups
+	// the results by bucket, then runs this script once per bucket
+	// group.
 	//
-	// Each device is removed from the hub's set with SREM, regardless of its
-	// current owner. Selection does not remove members, so devices remain
-	// available for a later reap if processing fails before this script runs.
-	// Returns the number of device mappings actually deleted from the hash.
+	// The script removes each device from the hub's set with SREM,
+	// regardless of its current owner. SRANDMEMBER does not remove
+	// members on selection, so devices stay available for a later reap
+	// if processing fails before this script runs. Returns the number
+	// of device mappings that the script actually deleted from the
+	// hash.
 	//
 	// KEYS[1] = devices:{bucket}
 	//
@@ -196,8 +194,9 @@ var (
 	//
 	// ARGV[1] = hubID (string)
 	//
-	// ARGV[2..] = deviceIDs (all hashing into this bucket, selected from the
-	//             hub's device set without removing them)
+	// ARGV[2..] = deviceIDs. All device IDs hash into this bucket. The
+	//             caller selects them from the hub's device set without
+	//             removing them.
 	reapDevicesInBucketScript = redis.NewScript(`
 		local hubID = ARGV[1]
 		local removed = 0

@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package bootstrap
@@ -21,15 +10,18 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	iamhttp "xxx/internal/iam/adapter/http"
-	"xxx/internal/iam/application/keyexchange"
-	"xxx/internal/iam/infrastructure/crypto"
+	"xxx/internal/iam/application/connticket"
+	"xxx/internal/iam/core/rejection"
 	"xxx/internal/iam/infrastructure/mysql"
+	"xxx/internal/iam/infrastructure/ticketlimit"
 
 	"xxx/pkg/config"
 	"xxx/pkg/database/sql"
 	"xxx/pkg/log"
+	"xxx/pkg/reject"
 
 	"go.uber.org/zap"
 )
@@ -37,10 +29,15 @@ import (
 // Run constructs IAM's dependencies, starts its HTTPS API, and shuts it down
 // gracefully when ctx is canceled.
 func Run(ctx context.Context) (retErr error) {
-	logger, closeLogger := log.NewLogger(nil)
+	logger, closeLogger, err := log.NewLogger(log.DefaultConfig())
+	if err != nil {
+		return fmt.Errorf("failed to create logger: %w", err)
+	}
+
 	defer func() {
-		if err := closeLogger(); err != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("failed to close logger: %w", err))
+		closeErr := closeLogger()
+		if closeErr != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("failed to close logger: %w", closeErr))
 		}
 	}()
 
@@ -49,54 +46,74 @@ func Run(ctx context.Context) (retErr error) {
 		return fmt.Errorf("failed to load IAM config: %w", err)
 	}
 
-	cfgHttp := iamhttp.Config{}
-	cfgHttp.Load(loader)
-	if err = validateHTTPConfig(cfgHttp); err != nil {
+	cfgHttp, err := iamhttp.LoadConfig(loader)
+	if err != nil {
 		return err
 	}
 
-	var cfgDb sql.Config
-	cfgDb.Load(loader)
+	cfgDb, err := sql.LoadConfig(loader)
+	if err != nil {
+		return err
+	}
 
 	ticketSigner, err := loadTicketSigner(loader)
 	if err != nil {
 		return err
 	}
 
-	db := sql.NewMySql()
-	if err = db.Open(ctx, cfgDb); err != nil {
+	db := sql.NewMySql(logger)
+	closeDB, err := db.Open(ctx, cfgDb)
+	if err != nil {
 		return fmt.Errorf("failed to open MySQL: %w", err)
 	}
+
 	defer func() {
-		if err = db.Close(); err != nil {
-			logger.Error("failed to close MySQL", zap.Error(err))
-			retErr = errors.Join(retErr, fmt.Errorf("failed to close MySQL: %w", err))
+		closeErr := closeDB()
+		if closeErr != nil {
+			logger.Error("failed to close MySQL", zap.Error(closeErr))
+			retErr = errors.Join(retErr, fmt.Errorf("failed to close MySQL: %w", closeErr))
 		} else {
 			logger.Info("closed MySQL")
 		}
 		_ = logger.Sync()
 	}()
 
-	keyExchanger := keyexchange.New(
+	hub, err := loadHubEndpoint(loader)
+	if err != nil {
+		return err
+	}
+
+	ticketIssuer, err := connticket.New(
 		db,
-		crypto.NewHkdfDeriver(),
 		mysql.NewDeviceMetaReader(),
 		ticketSigner,
+		*hub,
 	)
+	if err != nil {
+		return err
+	}
+
+	rejections := reject.New[rejection.Reason](
+		logger,
+		5*time.Second,
+		rejection.Names(),
+	)
+
 	server, err := iamhttp.NewServer(
 		ctx,
 		cfgHttp,
 		logger,
-		keyExchanger,
+		rejections,
+		ticketIssuer,
+		ticketlimit.New(ticketlimit.LoadConfig(loader)),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to initialize IAM HTTP server: %w", err)
 	}
 
 	serverResult := make(chan error, 1)
-	go func() {
-		serverResult <- server.Run()
-	}()
+	go func() { serverResult <- server.Run() }()
+
 	logger.Info("IAM HTTP server started", zap.String("address", cfgHttp.Addr))
 	_ = logger.Sync()
 
@@ -113,21 +130,13 @@ func Run(ctx context.Context) (retErr error) {
 
 		shutdownErr := server.Shutdown()
 		serverErr := <-serverResult
+
 		if errors.Is(serverErr, http.ErrServerClosed) {
 			serverErr = nil
 		} else if serverErr != nil {
 			serverErr = fmt.Errorf("failed to run IAM HTTP server: %w", serverErr)
 		}
+
 		return errors.Join(shutdownErr, serverErr)
 	}
-}
-
-func validateHTTPConfig(cfg iamhttp.Config) error {
-	if cfg.Addr == "" {
-		return errors.New("HTTP_SERVER_ADDR is required")
-	}
-	if cfg.CertFile == "" || cfg.KeyFile == "" {
-		return errors.New("HTTP_SERVER_CERT_FILE and HTTP_SERVER_KEY_FILE are required; IAM serves HTTPS")
-	}
-	return nil
 }

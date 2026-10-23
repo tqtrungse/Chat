@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package worker
@@ -49,7 +38,9 @@ func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
 // failure is actionable instead of just "it timed out".
 func logSeenSummary(t *testing.T, seen []atomic.Int32, total int) {
 	t.Helper()
-	missing, dup := 0, 0
+
+	missing := 0
+	dup := 0
 	for i := range total {
 		switch c := seen[i].Load(); {
 		case c == 0:
@@ -57,6 +48,7 @@ func logSeenSummary(t *testing.T, seen []atomic.Int32, total int) {
 				t.Logf("missing task id=%d", i)
 			}
 			missing++
+
 		case c > 1:
 			if dup < 10 {
 				t.Logf("duplicated task id=%d count=%d", i, c)
@@ -92,9 +84,9 @@ func TestElastic_PopBatch_EmptyQueue(t *testing.T) {
 }
 
 func TestElastic_SPSC_PreservesFIFOOrder(t *testing.T) {
-	q := newElastic[int]()
 	const n = 10_000
 
+	q := newElastic[int]()
 	for i := range n {
 		q.Push(i)
 	}
@@ -136,9 +128,9 @@ func TestElastic_ExactSegmentBoundary(t *testing.T) {
 }
 
 func TestElastic_SpansMultipleSegments(t *testing.T) {
-	q := newElastic[int]()
 	const n = segmentSize*3 + 7 // forces growth across 4 segments, last one partial
 
+	q := newElastic[int]()
 	for i := range n {
 		q.Push(i)
 	}
@@ -172,7 +164,9 @@ func TestElastic_PopBatch_LargerThanAvailable(t *testing.T) {
 // ------------------------------------------------------------------
 
 func TestElastic_ReadZeroesSlotAfterPop(t *testing.T) {
-	type big struct{ n int }
+	type big struct {
+		n int
+	}
 	q := newElastic[*big]()
 	v := &big{n: 42}
 	q.Push(v)
@@ -202,11 +196,13 @@ func TestElastic_NoLossAtSegmentTransition_Regression(t *testing.T) {
 		totalTasks       = numProducers * tasksPerProducer
 	)
 
-	q := newElastic[int]()
-	seen := make([]atomic.Int32, totalTasks)
-	var uniqueCount atomic.Int64
-
-	var wgConsumers sync.WaitGroup
+	var (
+		q           = newElastic[int]()
+		seen        = make([]atomic.Int32, totalTasks)
+		uniqueCount atomic.Int64
+		wgConsumers sync.WaitGroup
+		wgProducers sync.WaitGroup
+	)
 	for range numConsumers {
 		wgConsumers.Go(func() {
 			for uniqueCount.Load() < totalTasks {
@@ -225,7 +221,6 @@ func TestElastic_NoLossAtSegmentTransition_Regression(t *testing.T) {
 		})
 	}
 
-	var wgProducers sync.WaitGroup
 	for i := range numProducers {
 		wgProducers.Add(1)
 		go func(pID int) {
@@ -254,13 +249,12 @@ func TestElastic_NoLossAtSegmentTransition_Regression(t *testing.T) {
 }
 
 func TestElastic_Stress(t *testing.T) {
-	q := newElastic[int]()
-
 	const numProducers = 12
 	const numConsumers = 12
 	const tasksPerProducer = 50_000
 	const totalTasks = numProducers * tasksPerProducer
 
+	q := newElastic[int]()
 	// seen[id] tracks how many times a given task ID was popped.
 	// Every entry must end up at exactly 1: 0 means lost, >1 means duplicated.
 	seen := make([]atomic.Int32, totalTasks)
@@ -369,7 +363,6 @@ func TestElastic_Stress(t *testing.T) {
 
 func TestElastic_PushBatch_Empty(t *testing.T) {
 	q := newElastic[int]()
-
 	q.PushBatch(nil)
 	q.PushBatch([]int{})
 
@@ -387,13 +380,14 @@ func TestElastic_PushBatch_Empty(t *testing.T) {
 }
 
 func TestElastic_PushBatch_PreservesOrder(t *testing.T) {
-	q := newElastic[int]()
 	const n = 10_000
 
 	items := make([]int, n)
 	for i := range items {
 		items[i] = i
 	}
+
+	q := newElastic[int]()
 	q.PushBatch(items)
 
 	got := make([]int, 0, n)
@@ -415,12 +409,12 @@ func TestElastic_PushBatch_PreservesOrder(t *testing.T) {
 // ---------------------------------
 
 func TestElastic_PushBatch_ExactSegmentBoundary(t *testing.T) {
-	q := newElastic[int]()
-
 	items := make([]int, segmentSize)
 	for i := range items {
 		items[i] = i
 	}
+
+	q := newElastic[int]()
 	q.PushBatch(items)
 
 	batch, ok := q.PopBatch(segmentSize)
@@ -434,13 +428,14 @@ func TestElastic_PushBatch_ExactSegmentBoundary(t *testing.T) {
 }
 
 func TestElastic_PushBatch_SpansMultipleSegments(t *testing.T) {
-	q := newElastic[int]()
 	const n = segmentSize*3 + 7 // one PushBatch call, forces tail growth across 4 segments, last one partial
 
 	items := make([]int, n)
 	for i := range items {
 		items[i] = i
 	}
+
+	q := newElastic[int]()
 	q.PushBatch(items)
 
 	total := 0
@@ -461,13 +456,14 @@ func TestElastic_PushBatch_SpansMultipleSegments(t *testing.T) {
 // internal loop making many consecutive growthTail calls within a
 // single invocation, not just across several Push calls.
 func TestElastic_PushBatch_SingleCallSpansManySegments(t *testing.T) {
-	q := newElastic[int]()
 	const n = segmentSize*10 + 13
 
 	items := make([]int, n)
 	for i := range items {
 		items[i] = i
 	}
+
+	q := newElastic[int]()
 	q.PushBatch(items)
 
 	got := make([]int, 0, n)
@@ -487,11 +483,11 @@ func TestElastic_PushBatch_SingleCallSpansManySegments(t *testing.T) {
 // sendIdx/segment growth correctly with each other, not just internally
 // consistent on their own.
 func TestElastic_PushBatch_MixedWithPush(t *testing.T) {
-	q := newElastic[int]()
-
-	next := 0
-	want := make([]int, 0, 200)
-
+	var (
+		q    = newElastic[int]()
+		next = 0
+		want = make([]int, 0, 200)
+	)
 	pushOne := func() {
 		q.Push(next)
 		want = append(want, next)
@@ -548,11 +544,16 @@ func TestElastic_PushBatch_ConcurrentProducers_NoLossOrDup(t *testing.T) {
 		maxBatchSize       = 200 // > segmentSize on purpose
 	)
 
-	q := newElastic[int]()
+	var (
+		nextID          = 0
+		q               = newElastic[int]()
+		rng             = rand.New(rand.NewSource(1))
+		producerBatches = make([][][]int, numProducers)
+		uniqueCount     atomic.Int64
+		wgConsumers     sync.WaitGroup
+		wgProducers     sync.WaitGroup
+	)
 
-	rng := rand.New(rand.NewSource(1))
-	producerBatches := make([][][]int, numProducers)
-	nextID := 0
 	for p := range numProducers {
 		for range batchesPerProducer {
 			size := rng.Intn(maxBatchSize) + 1
@@ -564,12 +565,11 @@ func TestElastic_PushBatch_ConcurrentProducers_NoLossOrDup(t *testing.T) {
 			producerBatches[p] = append(producerBatches[p], batch)
 		}
 	}
+
+	// totalTasks and seen must use the final nextID, so set them after the loop.
 	totalTasks := nextID
-
 	seen := make([]atomic.Int32, totalTasks)
-	var uniqueCount atomic.Int64
 
-	var wgConsumers sync.WaitGroup
 	for range numConsumers {
 		wgConsumers.Go(func() {
 			for uniqueCount.Load() < int64(totalTasks) {
@@ -586,7 +586,6 @@ func TestElastic_PushBatch_ConcurrentProducers_NoLossOrDup(t *testing.T) {
 		})
 	}
 
-	var wgProducers sync.WaitGroup
 	for p := range numProducers {
 		wgProducers.Add(1)
 		go func(batches [][]int) {
@@ -597,7 +596,8 @@ func TestElastic_PushBatch_ConcurrentProducers_NoLossOrDup(t *testing.T) {
 		}(producerBatches[p])
 	}
 	require.True(
-		t, waitWithTimeout(&wgProducers, 30*time.Second),
+		t,
+		waitWithTimeout(&wgProducers, 30*time.Second),
 		"producers did not finish within timeout — PushBatch appears to be stuck",
 	)
 
@@ -628,13 +628,16 @@ func TestElastic_PushBatch_ConcurrentProducers_NoLossOrDup(t *testing.T) {
 func TestElastic_PushBatch_SimultaneousGrowthTail_Regression(t *testing.T) {
 	const racers = 64
 
-	q := newElastic[int]()
+	var (
+		wg    sync.WaitGroup
+		q     = newElastic[int]()
+		start = make(chan struct{})
+	)
+
 	for i := range segmentSize - 1 {
 		q.Push(i)
 	}
 
-	var wg sync.WaitGroup
-	start := make(chan struct{})
 	for id := range racers {
 		wg.Add(1)
 		go func(id int) {
@@ -651,9 +654,11 @@ func TestElastic_PushBatch_SimultaneousGrowthTail_Regression(t *testing.T) {
 		"producers stuck — suspect a growthTail deadlock/livelock",
 	)
 
-	wantTotal := (segmentSize - 1) + racers // values [0, wantTotal) each exactly once
-	seen := make([]bool, wantTotal)
-	got := 0
+	var (
+		wantTotal = (segmentSize - 1) + racers // values [0, wantTotal) each exactly once
+		seen      = make([]bool, wantTotal)
+		got       = 0
+	)
 	for got < wantTotal {
 		batch, ok := q.PopBatch(37) // misaligned on purpose
 		require.Truef(t, ok, "drained early at %d/%d", got, wantTotal)
@@ -673,9 +678,11 @@ func TestElastic_PushBatch_SimultaneousGrowthTail_Regression(t *testing.T) {
 // ----------
 
 func BenchmarkElastic_SPSC(b *testing.B) {
-	q := newElastic[int]()
-	done := make(chan struct{})
-	start := make(chan struct{})
+	var (
+		q     = newElastic[int]()
+		done  = make(chan struct{})
+		start = make(chan struct{})
+	)
 
 	go func() {
 		<-start
@@ -700,11 +707,14 @@ func BenchmarkElastic_SPSC(b *testing.B) {
 
 func BenchmarkElastic_MPMC(b *testing.B) {
 	const producers = 4
-	q := newElastic[int]()
-	var produced atomic.Int64
-	var consumed atomic.Int64
-	start := make(chan struct{})
-	done := make(chan struct{})
+
+	var (
+		q        = newElastic[int]()
+		start    = make(chan struct{})
+		done     = make(chan struct{})
+		produced atomic.Int64
+		consumed atomic.Int64
+	)
 
 	for range producers {
 		go func() {

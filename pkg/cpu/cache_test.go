@@ -1,18 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package cpu
@@ -34,15 +22,18 @@ func TestCacheRemap_IsPermutation(t *testing.T) {
 	for entrySize := uint32(1); entrySize <= maxSize; entrySize++ {
 		for _, capacity := range capacities {
 			entSize, capa := entrySize, capacity
-			t.Run(fmt.Sprintf("size=%d/cap=%d", entSize, capa), func(t *testing.T) {
-				owner := make([]uint32, capa) // store the index+1 of the element that has occupied the slot
-				for i := range capa {
-					out := CacheRemap(i, capa, entSize)
-					require.Less(t, out, capa)
-					require.Zero(t, owner[out])
-					owner[out] = i + 1
-				}
-			})
+			t.Run(
+				fmt.Sprintf("size=%d/cap=%d", entSize, capa),
+				func(t *testing.T) {
+					owner := make([]uint32, capa) // store the index+1 of the element that has occupied the slot
+					for i := range capa {
+						out := CacheRemap(i, capa, entSize)
+						require.Less(t, out, capa)
+						require.Zero(t, owner[out])
+						owner[out] = i + 1
+					}
+				},
+			)
 		}
 	}
 }
@@ -69,16 +60,20 @@ func TestCacheRemap_WrapsIndex(t *testing.T) {
 // and a capacity larger than a single group, a remap must actually shift the index.
 func TestCacheRemap_StillSpreads(t *testing.T) {
 	for size := uint32(1); size <= uint32(halfCacheLineSize)/2; size++ {
-		if CacheRemap(1, 1024, size) == 1 {
-			assert.Failf(t, "", "entrySize=%d: remapping to identity eliminates the cache-line-spreading effect.", size)
-		}
+		assert.NotEqualf(
+			t,
+			1,
+			CacheRemap(1, 1024, size),
+			"entrySize=%d: remapping to identity eliminates the cache-line-spreading effect.", size,
+		)
 	}
 }
 
 // entrySize == 0 must not result in division by zero.
 func TestCacheRemap_ZeroEntrySize(t *testing.T) {
 	defer func() {
-		if r := recover(); r != nil {
+		r := recover()
+		if r != nil {
 			require.Failf(t, "", "CacheRemap(5, 16, 0) panic: %v", r)
 		}
 	}()
