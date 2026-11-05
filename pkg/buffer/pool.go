@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 
 	"xxx/pkg/cpu"
+	slicepool "xxx/pkg/pool/slice"
 )
 
 var (
@@ -25,9 +26,6 @@ const (
 	calibrateCallsThreshold = 42000
 	maxPercentile           = 0.95
 )
-
-// ringBuf is the alias of ring.Buffer.
-type ringBuf = coreRing
 
 // pool represents ring-buffer pool.
 //
@@ -50,10 +48,10 @@ var builtinPool pool
 //
 // The byte buffer may be returned to the pool via Put after the use
 // in order to minimize GC overhead.
-func (p *pool) Get() *ringBuf {
+func (p *pool) Get() *coreRing {
 	v := p.pool.Get()
 	if v != nil {
-		return v.(*ringBuf)
+		return v.(*coreRing)
 	}
 	return newCoreRing(int(p.defaultSize.Load()))
 }
@@ -61,9 +59,8 @@ func (p *pool) Get() *ringBuf {
 // Put releases byte buffer obtained via Get to the pool.
 //
 // The buffer mustn't be accessed after returning to the pool.
-func (p *pool) Put(b *ringBuf) {
+func (p *pool) Put(b *coreRing) {
 	idx := index(b.Len())
-
 	if atomic.AddUint64(&p.calls[idx], 1) > calibrateCallsThreshold {
 		p.calibrate()
 	}
@@ -72,7 +69,14 @@ func (p *pool) Put(b *ringBuf) {
 	if maxSize == 0 || b.Cap() <= maxSize {
 		b.Reset()
 		p.pool.Put(b)
+		return
 	}
+
+	// The pool does not keep a ring that is too large. slicepool can use its byte slice again.
+	slicepool.Put(b.buf)
+	b.buf = nil
+	b.size = 0
+	b.Reset()
 }
 
 func (p *pool) calibrate() {

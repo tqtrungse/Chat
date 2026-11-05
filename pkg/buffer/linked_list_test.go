@@ -10,8 +10,10 @@ import (
 	"bytes"
 	crand "crypto/rand"
 	"io"
+	"math"
 	"math/rand"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/require"
 )
@@ -210,7 +212,8 @@ func TestLinkedListBuffer_ZeroLengthInputsAreNoops(t *testing.T) {
 	llb.PushBack(nil)
 	llb.PushBack([]byte{})
 	llb.PushFront(nil)
-	llb.Append(nil)
+	llb.Append(nil, false)
+	llb.Append(nil, true)
 	require.True(t, llb.IsEmpty())
 	require.Equal(t, 0, llb.Len())
 	require.Equal(t, 0, llb.Buffered())
@@ -255,7 +258,7 @@ func TestLinkedListBuffer_AllocNodeAppendRoundTrip(t *testing.T) {
 	for i := range buf {
 		buf[i] = byte('a' + i)
 	}
-	llb.Append(buf)
+	llb.Append(buf, false)
 	require.Equal(t, 8, llb.Buffered())
 
 	buf[0] = 'Z' // mutate after Append
@@ -264,6 +267,22 @@ func TestLinkedListBuffer_AllocNodeAppendRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 8, n)
 	require.Equal(t, byte('Z'), out[0]) // must see the mutation
+}
+
+// Append with clone set to true copies p. A change to p after Append must not change the data in the list.
+// The caller keeps p, so p can be memory that does not come from slicepool.
+func TestLinkedListBuffer_AppendCloneCopies(t *testing.T) {
+	var llb LinkedList
+	buf := []byte("abcdefgh")
+	llb.Append(buf, true)
+	require.Equal(t, 8, llb.Buffered())
+
+	buf[0] = 'Z'
+	out := make([]byte, 8)
+	n, err := llb.Read(out)
+	require.NoError(t, err)
+	require.Equal(t, 8, n)
+	require.Equal(t, []byte("abcdefgh"), out)
 }
 
 func TestLinkedListBuffer_PeekZeroMeansAll(t *testing.T) {
@@ -430,4 +449,190 @@ func TestLinkedListBuffer_ReadFrom_MustNotDropFinalChunkWithEOF(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(100), n)
 	require.Equal(t, 100, llb.Buffered())
+}
+
+// ------------------------------------------------------------
+// Peek with n <= 0 returns all bytes. There is no MaxInt32 value.
+// ------------------------------------------------------------
+
+func TestLinkedListBuffer_PeekNegativeMeansAll(t *testing.T) {
+	var llb LinkedList
+	llb.PushBack([]byte("hello "))
+	llb.PushBack([]byte("world"))
+
+	bs, err := llb.Peek(-1)
+	require.NoError(t, err)
+	require.Equal(t, []byte("hello world"), bytes.Join(bs, nil))
+}
+
+func TestLinkedListBuffer_PeekEmpty(t *testing.T) {
+	var llb LinkedList
+	bs, err := llb.Peek(0)
+	require.NoError(t, err)
+	require.Empty(t, bs)
+
+	bs, err = llb.PeekWithBytes(-1)
+	require.NoError(t, err)
+	require.Empty(t, bs)
+}
+
+func TestLinkedListBuffer_PeekMaxInt32IsShortBuffer(t *testing.T) {
+	var llb LinkedList
+	llb.PushBack([]byte("abc"))
+	_, err := llb.Peek(math.MaxInt32)
+	require.ErrorIs(t, err, io.ErrShortBuffer)
+}
+
+func TestLinkedListBuffer_PeekWithBytesNegativeMeansAll(t *testing.T) {
+	var llb LinkedList
+	llb.PushBack([]byte("world"))
+
+	bs, err := llb.PeekWithBytes(-1, []byte("hello "), nil)
+	require.NoError(t, err)
+	require.Equal(t, []byte("hello world"), bytes.Join(bs, nil))
+}
+
+func TestLinkedListBuffer_PeekWithBytesLimitCountsPrefix(t *testing.T) {
+	var llb LinkedList
+	llb.PushBack([]byte("world"))
+
+	_, err := llb.PeekWithBytes(12, []byte("hello "))
+	require.ErrorIs(t, err, io.ErrShortBuffer)
+
+	bs, err := llb.PeekWithBytes(8, []byte("hello "))
+	require.NoError(t, err)
+	require.Equal(t, []byte("hello wo"), bytes.Join(bs, nil))
+}
+
+// ------------------------------------------------------------------
+// ReadFrom: the Read size grows, and a small Read gets a small buffer.
+// ------------------------------------------------------------------
+
+func TestLinkedListBuffer_ReadFromLargeSourceGivesFewNodes(t *testing.T) {
+	data := make([]byte, 1<<20)
+	_, _ = crand.Read(data)
+
+	var llb LinkedList
+	n, err := llb.ReadFrom(bytes.NewReader(data))
+	require.NoError(t, err)
+	require.Equal(t, int64(len(data)), n)
+	// 512 + 1K + ... + 32K is less than 64K. Thus, 1MB needs fewer than 7 + 1MB/64KB nodes.
+	require.Less(t, llb.Len(), 7+len(data)/listMaxRead+1)
+
+	out := make([]byte, len(data))
+	_, err = llb.Read(out)
+	require.NoError(t, err)
+	require.Equal(t, data, out)
+}
+
+func TestLinkedListBuffer_ReadFromSmallReadGetsSmallBuffer(t *testing.T) {
+	var llb LinkedList
+	_, err := llb.ReadFrom(iotest.OneByteReader(bytes.NewReader([]byte("abc"))))
+	require.NoError(t, err)
+	require.Equal(t, 3, llb.Len())
+	for iter := llb.head; iter != nil; iter = iter.next {
+		require.Equal(t, 1, cap(iter.buf))
+	}
+}
+
+// tooLongReader returns a count that is more than len(p). This breaks the io.Reader contract.
+type tooLongReader struct{}
+
+func (tooLongReader) Read(p []byte) (int, error) { return len(p) + 1, nil }
+
+func TestLinkedListBuffer_ReadFromInvalidCountPanics(t *testing.T) {
+	var llb LinkedList
+	require.Panics(t, func() { _, _ = llb.ReadFrom(tooLongReader{}) })
+}
+
+func TestCoreRing_ReadFromInvalidCountPanics(t *testing.T) {
+	rb := newCoreRing(0)
+	require.Panics(t, func() { _, _ = rb.ReadFrom(tooLongReader{}) })
+}
+
+// ---------------------------------------------------------------------------
+// A partial consume moves the offset. The node keeps the slice from slicepool.
+// ---------------------------------------------------------------------------
+
+func newFilledList(t *testing.T, data []byte) *LinkedList {
+	t.Helper()
+	var llb LinkedList
+	_, err := llb.ReadFrom(bytes.NewReader(data))
+	require.NoError(t, err)
+	require.Equal(t, 1, llb.Len())
+	return &llb
+}
+
+func TestLinkedListBuffer_PartialDiscardKeepsPoolSlice(t *testing.T) {
+	data := []byte("0123456789abcdefghij")
+	llb := newFilledList(t, data)
+	poolCap := cap(llb.head.buf)
+
+	d, err := llb.Discard(10)
+	require.NoError(t, err)
+	require.Equal(t, 10, d)
+	require.Equal(t, poolCap, cap(llb.head.buf), "the node must keep the slice that slicepool gave")
+	require.Equal(t, 10, llb.Buffered())
+
+	bs, err := llb.Peek(-1)
+	require.NoError(t, err)
+	require.Equal(t, data[10:], bytes.Join(bs, nil))
+}
+
+func TestLinkedListBuffer_PartialReadKeepsPoolSlice(t *testing.T) {
+	data := []byte("0123456789abcdefghij")
+	llb := newFilledList(t, data)
+	poolCap := cap(llb.head.buf)
+
+	out := make([]byte, 4)
+	n, err := llb.Read(out)
+	require.NoError(t, err)
+	require.Equal(t, 4, n)
+	require.Equal(t, poolCap, cap(llb.head.buf))
+	require.Equal(t, data[4:], llb.Pop())
+}
+
+// limitWriter keeps the bytes that it writes. It writes only limit bytes in each call.
+type limitWriter struct {
+	bytes.Buffer
+	limit int
+}
+
+func (w *limitWriter) Write(p []byte) (int, error) {
+	return w.Buffer.Write(p[:min(len(p), w.limit)])
+}
+
+func TestLinkedListBuffer_PartialWriteToKeepsPoolSlice(t *testing.T) {
+	data := []byte("0123456789abcdefghij")
+	llb := newFilledList(t, data)
+	poolCap := cap(llb.head.buf)
+
+	w := &limitWriter{limit: 7}
+	n, err := llb.WriteTo(w)
+	require.ErrorIs(t, err, io.ErrShortWrite)
+	require.Equal(t, int64(7), n)
+	require.Equal(t, poolCap, cap(llb.head.buf))
+
+	w.limit = len(data)
+	_, err = llb.WriteTo(w)
+	require.NoError(t, err)
+	require.Equal(t, data, w.Bytes())
+}
+
+// zeroReader returns 0, nil in each call. This breaks the advice of io.Reader.
+type zeroReader struct{ calls int }
+
+func (z *zeroReader) Read([]byte) (int, error) {
+	z.calls++
+	return 0, nil
+}
+
+func TestLinkedListBuffer_ReadFromNoProgress(t *testing.T) {
+	var llb LinkedList
+	z := &zeroReader{}
+	n, err := llb.ReadFrom(z)
+	require.ErrorIs(t, err, io.ErrNoProgress)
+	require.Zero(t, n)
+	require.Equal(t, maxConsecutiveEmptyReads, z.calls)
+	require.True(t, llb.IsEmpty())
 }

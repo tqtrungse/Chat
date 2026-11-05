@@ -7,7 +7,6 @@
 package buffer
 
 import (
-	"errors"
 	"io"
 
 	"xxx/pkg/bit"
@@ -16,20 +15,23 @@ import (
 )
 
 const (
-	// RingMinRead is the minimum slice size passed to a Read call by
-	// Buffer.ReadFrom. As long as the coreRing has at least RingMinRead bytes beyond
-	// what is required to hold the contents of r, ReadFrom will not grow the
-	// underlying buffer.
+	// RingMinRead is the minimum slice size that Ring.ReadFrom and LinkedList.ReadFrom give to a Read call.
+	// Ring.ReadFrom does not grow the ring while the ring has RingMinRead free bytes or more.
 	RingMinRead = 512
 	// RingDefaultBufferSize is the first-time allocation on a ring-buffer.
 	RingDefaultBufferSize = 1024     // 1KB
 	bufferGrowThreshold   = 4 * 1024 // 4KB
+
+	// noReadLimit tells readFrom to read until io.EOF or an error.
+	noReadLimit = -1
+
+	// maxConsecutiveEmptyReads is the number of Read calls in sequence that can return 0, nil.
+	// After this number, ReadFrom returns io.ErrNoProgress. Without this limit, a bad io.Reader can make
+	// ReadFrom loop forever. bufio uses the same limit.
+	maxConsecutiveEmptyReads = 100
 )
 
-// ErrIsEmpty will be returned when trying to read an empty ring-buffer.
-var ErrIsEmpty = errors.New("ring-buffer is empty")
-
-// coreRing is a circular buffer that implement io.ReaderWriter interface.
+// coreRing is a circular buffer. It implements io.Reader, io.Writer, io.ReaderFrom, and io.WriterTo.
 type coreRing struct {
 	buf     []byte
 	size    int
@@ -59,11 +61,9 @@ func (rb *coreRing) Buffered() int {
 		}
 		return rb.size
 	}
-
 	if rb.w > rb.r {
 		return rb.w - rb.r
 	}
-
 	return rb.size - rb.r + rb.w
 }
 
@@ -85,11 +85,9 @@ func (rb *coreRing) Available() int {
 		}
 		return 0
 	}
-
 	if rb.w < rb.r {
 		return rb.r - rb.w
 	}
-
 	return rb.size - rb.w + rb.r
 }
 
@@ -116,23 +114,18 @@ func (rb *coreRing) Peek(n int) (head []byte, tail []byte) {
 	if rb.isEmpty {
 		return
 	}
-
 	if n <= 0 {
 		return rb.peekAll()
 	}
-
-	l := n
 	if rb.w > rb.r {
 		// length of ring-buffer
-		m := min(rb.w-rb.r, l)
+		m := min(rb.w-rb.r, n)
 		head = rb.buf[rb.r : rb.r+m]
 		return
 	}
 
 	// length of ring-buffer
-	m := min(
-		rb.size-rb.r+rb.w, l)
-
+	m := min(rb.size-rb.r+rb.w, n)
 	if rb.r+m <= rb.size {
 		head = rb.buf[rb.r : rb.r+m]
 	} else {
@@ -141,7 +134,6 @@ func (rb *coreRing) Peek(n int) (head []byte, tail []byte) {
 		c2 := m - c1
 		tail = rb.buf[:c2]
 	}
-
 	return
 }
 
@@ -178,9 +170,8 @@ func (rb *coreRing) Read(p []byte) (n int, err error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-
 	if rb.isEmpty {
-		return 0, ErrIsEmpty
+		return 0, io.EOF
 	}
 
 	l := len(p)
@@ -195,7 +186,6 @@ func (rb *coreRing) Read(p []byte) (n int, err error) {
 	}
 
 	n = min(rb.size-rb.r+rb.w, l)
-
 	if rb.r+n <= rb.size {
 		copy(p, rb.buf[rb.r:rb.r+n])
 	} else {
@@ -212,15 +202,15 @@ func (rb *coreRing) Read(p []byte) (n int, err error) {
 	if rb.r == rb.w {
 		rb.Reset()
 	}
-
 	return
 }
 
-// ReadByte reads and returns the next byte from the input or ErrIsEmpty.
+// ReadByte reads and returns the next byte from the input or io.EOF.
 func (rb *coreRing) ReadByte() (b byte, err error) {
 	if rb.isEmpty {
-		return 0, ErrIsEmpty
+		return 0, io.EOF
 	}
+
 	b = rb.buf[rb.r]
 	rb.r++
 	if rb.r == rb.size {
@@ -229,7 +219,6 @@ func (rb *coreRing) ReadByte() (b byte, err error) {
 	if rb.r == rb.w {
 		rb.Reset()
 	}
-
 	return
 }
 
@@ -252,20 +241,36 @@ func (rb *coreRing) Bytes() []byte {
 	}
 
 	bb = append(bb, rb.buf[rb.r:]...)
-
 	if rb.w != 0 {
 		bb = append(bb, rb.buf[:rb.w]...)
 	}
-
 	return bb
 }
 
 // ReadFrom implements io.ReaderFrom.
-func (rb *coreRing) ReadFrom(r io.Reader) (n int64, err error) {
-	var m int
-	for {
-		if rb.Available() < RingMinRead {
-			rb.grow(rb.Buffered() + RingMinRead)
+func (rb *coreRing) ReadFrom(r io.Reader) (int64, error) {
+	n, err := rb.readFrom(r, noReadLimit)
+	if err == io.EOF {
+		return n, nil
+	}
+	return n, err
+}
+
+// readFrom reads from r until io.EOF, an error, or until it reads limit bytes.
+// A negative limit, for example noReadLimit, sets no limit.
+// readFrom returns io.EOF unchanged. Thus, the caller can know if r has no more data.
+// When readFrom reads limit bytes, it returns a nil error and does not call r.Read again.
+// readFrom does not ask grow for more than the bytes that are necessary for limit.
+// readFrom returns io.ErrNoProgress after maxConsecutiveEmptyReads calls in sequence that return 0, nil.
+func (rb *coreRing) readFrom(r io.Reader, limit int64) (n int64, err error) {
+	var empty int
+	for limit < 0 || n < limit {
+		want := RingMinRead
+		if limit >= 0 {
+			want = int(min(int64(RingMinRead), limit-n))
+		}
+		if rb.Available() < want {
+			rb.grow(rb.Buffered() + want)
 		}
 
 		var p []byte
@@ -274,10 +279,14 @@ func (rb *coreRing) ReadFrom(r io.Reader) (n int64, err error) {
 		} else {
 			p = rb.buf[rb.w:rb.r]
 		}
+		if limit >= 0 && int64(len(p)) > limit-n {
+			p = p[:limit-n]
+		}
 
+		var m int
 		m, err = r.Read(p)
-		if m < 0 {
-			panic("RingBuf.ReadFrom: reader returned negative count from Read")
+		if m < 0 || m > len(p) {
+			panic("buffer: Ring.ReadFrom: invalid Read count")
 		}
 		if m > 0 {
 			rb.isEmpty = false
@@ -287,13 +296,16 @@ func (rb *coreRing) ReadFrom(r io.Reader) (n int64, err error) {
 			}
 			n += int64(m)
 		}
-		if err == io.EOF {
-			return n, nil
-		}
 		if err != nil {
 			return
 		}
+		if m > 0 {
+			empty = 0
+		} else if empty++; empty >= maxConsecutiveEmptyReads {
+			return n, io.ErrNoProgress
+		}
 	}
+	return n, nil
 }
 
 // Write writes len(p) bytes from p to the underlying buf.
@@ -332,9 +344,7 @@ func (rb *coreRing) Write(p []byte) (n int, err error) {
 	if rb.w == rb.size {
 		rb.w = 0
 	}
-
 	rb.isEmpty = false
-
 	return
 }
 
@@ -363,14 +373,14 @@ func (rb *coreRing) WriteString(s string) (int, error) {
 // WriteTo implements io.WriterTo.
 func (rb *coreRing) WriteTo(w io.Writer) (int64, error) {
 	if rb.isEmpty {
-		return 0, ErrIsEmpty
+		return 0, nil
 	}
 
 	if rb.w > rb.r {
 		n := rb.w - rb.r
 		m, err := w.Write(rb.buf[rb.r : rb.r+n])
-		if m > n {
-			panic("RingBuf.WriteTo: invalid Write count")
+		if m < 0 || m > n {
+			panic("buffer: Ring.WriteTo: invalid Write count")
 		}
 		rb.r += m
 		if rb.r == rb.w {
@@ -388,8 +398,8 @@ func (rb *coreRing) WriteTo(w io.Writer) (int64, error) {
 	n := rb.size - rb.r + rb.w
 	if rb.r+n <= rb.size {
 		m, err := w.Write(rb.buf[rb.r : rb.r+n])
-		if m > n {
-			panic("RingBuf.WriteTo: invalid Write count")
+		if m < 0 || m > n {
+			panic("buffer: Ring.WriteTo: invalid Write count")
 		}
 		rb.r += m
 		if rb.r >= rb.size {
@@ -407,11 +417,10 @@ func (rb *coreRing) WriteTo(w io.Writer) (int64, error) {
 		return int64(m), nil
 	}
 
-	var cum int64
 	c1 := rb.size - rb.r
 	m, err := w.Write(rb.buf[rb.r:])
-	if m > c1 {
-		panic("RingBuf.WriteTo: invalid Write count")
+	if m < 0 || m > c1 {
+		panic("buffer: Ring.WriteTo: invalid Write count")
 	}
 	rb.r += m
 	if rb.r >= rb.size {
@@ -423,11 +432,11 @@ func (rb *coreRing) WriteTo(w io.Writer) (int64, error) {
 	if m < c1 {
 		return int64(m), io.ErrShortWrite
 	}
-	cum += int64(m)
+	cum := int64(m)
 	c2 := n - c1
 	m, err = w.Write(rb.buf[:c2])
-	if m > c2 {
-		panic("RingBuf.WriteTo: invalid Write count")
+	if m < 0 || m > c2 {
+		panic("buffer: Ring.WriteTo: invalid Write count")
 	}
 	rb.r = m
 	cum += int64(m)
@@ -448,17 +457,14 @@ func (rb *coreRing) peekAll() (head []byte, tail []byte) {
 	if rb.isEmpty {
 		return
 	}
-
 	if rb.w > rb.r {
 		head = rb.buf[rb.r:rb.w]
 		return
 	}
-
 	head = rb.buf[rb.r:]
 	if rb.w != 0 {
 		tail = rb.buf[:rb.w]
 	}
-
 	return
 }
 
@@ -481,22 +487,28 @@ func (rb *coreRing) grow(newCap int) {
 					rbSize += rbSize / 4
 				}
 				// The n calculation doesn't overflow, set n to newCap.
+				// The loop can go above doubleCap. slicepool.Get then rounds the capacity up to
+				// four times rb.size. The limit doubleCap prevents this waste.
 				if rbSize > 0 {
-					newCap = rbSize
+					newCap = min(rbSize, doubleCap)
 				}
 			}
 		}
 	}
 
+	// slicepool.Get rounds the capacity up, usually to a power of two.
+	// The ring uses all of this capacity. Otherwise, the bytes above newCap are not used,
+	// and the next grow allocates a new buffer that is not larger.
 	newBuf := slicepool.Get(newCap)
+	newBuf = newBuf[:cap(newBuf)]
 	oldLen := rb.Buffered()
 	_, _ = rb.Read(newBuf)
-	slicepool.PutZeroed(rb.buf)
+	slicepool.Put(rb.buf)
 
 	rb.buf = newBuf
 	rb.r = 0
 	rb.w = oldLen
-	rb.size = newCap
+	rb.size = len(newBuf)
 	if rb.w > 0 {
 		rb.isEmpty = false
 	}

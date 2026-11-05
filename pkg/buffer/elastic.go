@@ -9,41 +9,55 @@ package buffer
 import (
 	"errors"
 	"io"
-	"math"
 )
 
-var ErrNegativeSize = errors.New("nio: negative size is not allowed")
+// ErrElasticInvalidSize tells that the size for New is 0 or less. New accepts only a positive size.
+var ErrElasticInvalidSize = errors.New("elastic-buffer: size must be positive")
 
-// Elastic combines ring-buffer and list-buffer.
-// coreRing-buffer is the top-priority buffer to store response data, it will only switch to
-// LinkedList-buffer if the data size of ring-buffer reaches the maximum(MaxStackingBytes), list-buffer is more
-// flexible and scalable, which helps the application reduce memory footprint.
+// Elastic combines a Ring and a LinkedList.
+// Elastic writes data to the Ring first. When the Ring contains maxStaticBytes, Elastic writes new data to the
+// LinkedList. Elastic writes to the Ring again only after the LinkedList is empty. Thus, the data stays in order.
+// The LinkedList gets memory only for the data that it keeps. This decreases the memory that the application uses.
 type Elastic struct {
 	maxStaticBytes int
 	ring           Ring
 	list           LinkedList
 }
 
-// New instantiates an elastic.Buffer and returns it.
+// New instantiates an Elastic and returns it.
 func New(maxStaticBytes int) (*Elastic, error) {
 	if maxStaticBytes <= 0 {
-		return nil, ErrNegativeSize
+		return nil, ErrElasticInvalidSize
 	}
 	return &Elastic{maxStaticBytes: maxStaticBytes}, nil
 }
 
-// Peek returns n bytes as [][]byte, these bytes won't be discarded until Buffer.Discard() is called.
+// Peek returns n bytes as [][]byte. Peek does not remove these bytes. Discard removes them.
+//
+// The slices refer to the internal buffers. Peek does not copy the bytes.
+// The caller must not use the slices after a call to Discard, Read, WriteTo, Write, Writev, Reset, or Release.
+// When Discard empties the ring, the ring goes back to the pool, and other users can change the bytes.
 func (e *Elastic) Peek(n int) ([][]byte, error) {
-	if n <= 0 || n == math.MaxInt32 {
-		n = math.MaxInt32
+	if n <= 0 {
+		n = e.Buffered()
 	} else if n > e.Buffered() {
 		return nil, io.ErrShortBuffer
 	}
+
 	head, tail := e.ring.Peek(n)
-	if e.ring.Buffered() >= n {
-		return [][]byte{head, tail}, nil
+	if e.ring.Buffered() < n {
+		return e.list.PeekWithBytes(n, head, tail)
 	}
-	return e.list.PeekWithBytes(n, head, tail)
+
+	// The write path calls Peek for each write. Thus, Peek makes this slice only when the list is not necessary.
+	bs := make([][]byte, 0, 2)
+	if len(head) > 0 {
+		bs = append(bs, head)
+	}
+	if len(tail) > 0 {
+		bs = append(bs, tail)
+	}
+	return bs, nil
 }
 
 // Discard discards n bytes in this buffer.
@@ -60,8 +74,11 @@ func (e *Elastic) Discard(n int) (discarded int, err error) {
 	return
 }
 
-// Read reads data from the Buffer.
+// Read reads data from the Elastic.
 func (e *Elastic) Read(p []byte) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	n, err = e.ring.Read(p)
 	if n == len(p) {
 		return n, err
@@ -77,24 +94,33 @@ func (e *Elastic) ReadFrom(r io.Reader) (int64, error) {
 	if !e.list.IsEmpty() || e.ring.Buffered() >= e.maxStaticBytes {
 		return e.list.ReadFrom(r)
 	}
-	return e.ring.ReadFrom(r)
+
+	n, err := e.ring.readFrom(r, int64(e.ringWritable()))
+	if err == io.EOF {
+		return n, nil
+	}
+	if err != nil {
+		return n, err
+	}
+
+	// The ring is at its limit, and r can have more data. The list keeps the remaining data.
+	m, err := e.list.ReadFrom(r)
+	return n + m, err
 }
 
 // Write appends data to this buffer.
-func (e *Elastic) Write(p []byte) (n int, err error) {
+func (e *Elastic) Write(p []byte) (int, error) {
 	if !e.list.IsEmpty() || e.ring.Buffered() >= e.maxStaticBytes {
 		e.list.PushBack(p)
 		return len(p), nil
 	}
-	if e.ring.Len() >= e.maxStaticBytes {
-		writable := e.ring.Available()
-		if n = len(p); n > writable {
-			_, _ = e.ring.Write(p[:writable])
-			e.list.PushBack(p[writable:])
-			return
-		}
+	w := e.ringWritable()
+	if len(p) <= w {
+		return e.ring.Write(p)
 	}
-	return e.ring.Write(p)
+	_, _ = e.ring.Write(p[:w])
+	e.list.PushBack(p[w:])
+	return len(p), nil
 }
 
 // Writev appends multiple byte slices to this buffer.
@@ -108,10 +134,7 @@ func (e *Elastic) Writev(bs [][]byte) (int, error) {
 		return n, nil
 	}
 
-	writable := e.ring.Available()
-	if e.ring.Len() < e.maxStaticBytes {
-		writable = e.maxStaticBytes - e.ring.Buffered()
-	}
+	writable := e.ringWritable()
 	var pos, cum int
 	for i, b := range bs {
 		pos = i
@@ -168,4 +191,27 @@ func (e *Elastic) Reset(maxStaticBytes int) {
 func (e *Elastic) Release() {
 	e.ring.Done()
 	e.list.Reset()
+}
+
+// ringWritable returns the number of bytes that the ring can accept now.
+// Write, Writev, and ReadFrom use this one limit. Thus, they divide data between the ring and the list in the same way.
+//
+// When the capacity of the ring is less than maxStaticBytes, the ring can grow.
+// The request to grow is not more than maxStaticBytes.
+// When the capacity is equal to or more than maxStaticBytes, the ring does not grow.
+// Then the ring uses only its free space.
+//
+// maxStaticBytes limits the growth of the ring. It does not limit the capacity of the ring.
+// The capacity can be more than maxStaticBytes for these reasons:
+//   - grow rounds the capacity up. Usually, it doubles the capacity. The ring uses all of the capacity that
+//     slicepool.Get gives, and this capacity is usually a power of two.
+//   - The first allocation is RingDefaultBufferSize or the next power of two.
+//   - The pool can give a ring that is already larger than maxStaticBytes.
+//
+// When the ring grows, its capacity is less than two times maxStaticBytes or equal to RingDefaultBufferSize.
+func (e *Elastic) ringWritable() int {
+	if e.ring.Len() >= e.maxStaticBytes {
+		return e.ring.Available()
+	}
+	return max(e.maxStaticBytes-e.ring.Buffered(), 0)
 }

@@ -21,7 +21,7 @@ func TestRingBuffer_Write(t *testing.T) {
 	rb := newCoreRing(64)
 
 	_, err := rb.ReadByte()
-	assert.ErrorIs(t, err, ErrIsEmpty, "expect nil err, but got nil")
+	assert.ErrorIs(t, err, io.EOF, "expect nil err, but got nil")
 	// check empty or full
 	assert.True(t, rb.IsEmpty(), "expect IsEmpty is true but got false")
 	assert.False(t, rb.IsFull(), "expect IsFull is false but got true")
@@ -335,10 +335,12 @@ func TestRingBufferGrow(t *testing.T) {
 	m, err = rb.Write(newData)
 	assert.NoError(t, err)
 	assert.Equal(t, bufferGrowThreshold/2+1, m)
-	assert.Equal(t, 1.25*(1.25*bufferGrowThreshold), float64(rb.Cap()))
-	assert.Equal(t, 1.25*(1.25*bufferGrowThreshold), float64(rb.Len()))
+	// grow asks for 1.25*1.25*bufferGrowThreshold bytes. slicepool.Get rounds this up to
+	// 2*bufferGrowThreshold, and the ring uses all of this capacity.
+	assert.Equal(t, 2*bufferGrowThreshold, rb.Cap())
+	assert.Equal(t, 2*bufferGrowThreshold, rb.Len())
 	assert.Equal(t, 1.5*bufferGrowThreshold+1, float64(rb.Buffered()))
-	assert.EqualValues(t, 1.25*(1.25*bufferGrowThreshold)-rb.Buffered(), rb.Available())
+	assert.Equal(t, 2*bufferGrowThreshold-rb.Buffered(), rb.Available())
 	assert.Equal(t, append(data, newData...), rb.Bytes())
 }
 
@@ -364,7 +366,7 @@ func TestRingBuffer_Read(t *testing.T) {
 	// read empty
 	buf := make([]byte, 1024)
 	n, err := rb.Read(buf)
-	assert.ErrorIs(t, err, ErrIsEmpty, "expect ErrIsEmpty but got nil")
+	assert.ErrorIs(t, err, io.EOF, "expect ErrIsEmpty but got nil")
 	assert.Equalf(t, 0, n, "expect read 0 bytes but got %d", n)
 	assert.Equalf(
 		t,
@@ -965,4 +967,171 @@ func TestGap_DiscardZero(t *testing.T) {
 	require.Equal(t, 0, discarded)
 	require.Equal(t, 6, rb.Buffered())
 	require.False(t, rb.IsEmpty())
+}
+
+// countReader counts the calls to Read. A test uses it to make sure that readFrom stops at the limit.
+type countReader struct {
+	r     io.Reader
+	calls int
+}
+
+func (c *countReader) Read(p []byte) (int, error) {
+	c.calls++
+	return c.r.Read(p)
+}
+
+func TestCoreRing_ReadFromLimit_StopsAtLimit(t *testing.T) {
+	data := make([]byte, 5000)
+	_, _ = rand.Read(data)
+	src := bytes.NewReader(data)
+
+	rb := newCoreRing(0)
+	n, err := rb.readFrom(src, 3000)
+	require.NoError(t, err)
+	require.Equal(t, int64(3000), n)
+	require.Equal(t, data[:3000], rb.Bytes())
+	// readFrom must not read more than the limit from the source.
+	require.Equal(t, 2000, src.Len())
+}
+
+func TestCoreRing_ReadFromLimit_ReturnsEOFBeforeLimit(t *testing.T) {
+	data := make([]byte, 100)
+	_, _ = rand.Read(data)
+
+	rb := newCoreRing(0)
+	n, err := rb.readFrom(bytes.NewReader(data), 3000)
+	require.ErrorIs(t, err, io.EOF)
+	require.Equal(t, int64(100), n)
+	require.Equal(t, data, rb.Bytes())
+}
+
+func TestCoreRing_ReadFromLimit_NoReadAfterLimit(t *testing.T) {
+	src := &countReader{r: bytes.NewReader(make([]byte, 100))}
+	rb := newCoreRing(0)
+	n, err := rb.readFrom(src, 100)
+	require.NoError(t, err)
+	require.Equal(t, int64(100), n)
+	require.Equal(t, 1, src.calls)
+}
+
+func TestCoreRing_ReadFromLimit_ZeroLimitIsNoop(t *testing.T) {
+	src := &countReader{r: bytes.NewReader(make([]byte, 100))}
+	rb := newCoreRing(0)
+	n, err := rb.readFrom(src, 0)
+	require.NoError(t, err)
+	require.Zero(t, n)
+	require.Zero(t, src.calls)
+	require.True(t, rb.IsEmpty())
+}
+
+func TestCoreRing_ReadFromLimit_GrowRequestStaysInLimit(t *testing.T) {
+	// A ring of 4096 bytes that grows to hold 5000 bytes must not ask for more than 5000 bytes.
+	rb := newCoreRing(4096)
+	n, err := rb.readFrom(bytes.NewReader(make([]byte, 1<<20)), 5000)
+	require.NoError(t, err)
+	require.Equal(t, int64(5000), n)
+	require.Less(t, rb.Cap(), 2*5000)
+}
+
+// grow must use all the capacity that slicepool.Get gives. Then the next grow is not necessary
+// until the ring fills this capacity.
+func TestCoreRing_GrowUsesFullPoolCapacity(t *testing.T) {
+	rb := newCoreRing(bufferGrowThreshold)
+	_, err := rb.Write(make([]byte, bufferGrowThreshold+1))
+	require.NoError(t, err)
+	require.Equal(t, cap(rb.buf), rb.Cap())
+	require.Equal(t, len(rb.buf), rb.Cap())
+
+	before := rb.Cap()
+	_, err = rb.Write(make([]byte, rb.Available()))
+	require.NoError(t, err)
+	require.Equal(t, before, rb.Cap(), "the ring must fill its capacity without a new grow")
+}
+
+// The 1.25 growth loop can go above two times the old size. grow must limit the request to doubleCap.
+// Otherwise, slicepool.Get rounds the request up to four times the old size.
+func TestCoreRing_GrowDoesNotGoAboveDoubleCap(t *testing.T) {
+	rb := newCoreRing(bufferGrowThreshold)
+	// 1.25^3 is approximately 1.95. A request of 1.97 times the size makes the loop go to 1.25^4.
+	_, err := rb.Write(make([]byte, bufferGrowThreshold*197/100))
+	require.NoError(t, err)
+	require.Equal(t, 2*bufferGrowThreshold, rb.Cap())
+}
+
+// negWriter returns a negative count after okCalls calls that accept all bytes. This breaks the io.Writer contract.
+type negWriter struct {
+	okCalls int
+	calls   int
+}
+
+func (w *negWriter) Write(p []byte) (int, error) {
+	w.calls++
+	if w.calls <= w.okCalls {
+		return len(p), nil
+	}
+	return -1, nil
+}
+
+// WriteTo must panic before it changes the read pointer. Thus, the data in the ring stays correct.
+func TestCoreRing_WriteToNegativeCountPanics(t *testing.T) {
+	cases := []struct {
+		name    string
+		setup   func() *coreRing
+		okCalls int
+	}{
+		{
+			name: "contiguous",
+			setup: func() *coreRing {
+				rb := newCoreRing(16)
+				_, _ = rb.WriteString("abcdef")
+				return rb
+			},
+		},
+		{
+			name: "full",
+			setup: func() *coreRing {
+				rb := newCoreRing(16)
+				_, _ = rb.Write(bytes.Repeat([]byte("x"), 16))
+				return rb
+			},
+		},
+		{
+			name:  "wrapped first part",
+			setup: wrappedRing,
+		},
+		{
+			name:    "wrapped second part",
+			setup:   wrappedRing,
+			okCalls: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				rb := tc.setup()
+				before := rb.Bytes()
+				require.Panics(t, func() { _, _ = rb.WriteTo(&negWriter{okCalls: tc.okCalls}) })
+				if tc.okCalls == 0 {
+					require.Equal(t, before, rb.Bytes())
+				}
+				require.GreaterOrEqual(t, rb.r, 0)
+			},
+		)
+	}
+}
+
+// wrappedRing returns a ring of 16 bytes whose data goes past the end of the buffer.
+func wrappedRing() *coreRing {
+	rb := newCoreRing(16)
+	_, _ = rb.Write(make([]byte, 12))
+	_, _ = rb.Discard(8)
+	_, _ = rb.WriteString("abcdefgh") // w goes past the end and starts at 0 again
+	return rb
+}
+
+func TestLinkedListBuffer_WriteToNegativeCountPanics(t *testing.T) {
+	var llb LinkedList
+	llb.PushBack([]byte("abcdef"))
+	require.Panics(t, func() { _, _ = llb.WriteTo(&negWriter{}) })
 }

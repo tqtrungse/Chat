@@ -8,18 +8,29 @@ package buffer
 
 import (
 	"io"
-	"math"
 
 	slicepool "xxx/pkg/pool/slice"
 )
 
+// listMaxRead is the maximum slice size that LinkedList.ReadFrom gives to one Read call.
+const listMaxRead = 64 * 1024 // 64KB
+
+// node keeps buf unchanged and moves off when the list consumes a part of the data.
+// Thus, slicepool.Put always gets the slice that slicepool.Get gave. A slice that starts after
+// the start of its array makes slicepool put it in a smaller bucket, and the array stays in memory.
 type node struct {
 	buf  []byte
+	off  int // number of bytes at the start of buf that the list consumed
 	next *node
 }
 
+// data returns the bytes that the list did not consume.
+func (b *node) data() []byte {
+	return b.buf[b.off:]
+}
+
 func (b *node) len() int {
-	return len(b.buf)
+	return len(b.buf) - b.off
 }
 
 // LinkedList is a linked list of node.
@@ -41,22 +52,34 @@ func (ll *LinkedList) FreeNode(p []byte) {
 	slicepool.Put(p)
 }
 
-// Append is like PushBack but appends b without copying it.
-func (ll *LinkedList) Append(p []byte) {
-	n := len(p)
-	if n <= 0 {
+// Append adds p to the tail of the list.
+//
+// If clone is true, Append gets a new buffer from slicepool and copies p into it.
+// The caller keeps the ownership of p.
+//
+// If clone is false, Append adds p without a copy, and the list takes the ownership of p.
+// After the list consumes p, it gives p back to slicepool.
+// Thus, p must come from AllocNode, and the caller must not access p after Append.
+func (ll *LinkedList) Append(p []byte, clone bool) {
+	if len(p) == 0 {
+		return
+	}
+	if clone {
+		ll.PushBack(p)
 		return
 	}
 	ll.pushBack(&node{buf: p})
 }
 
 // Pop removes and returns the buffer of the head or nil if the list is empty.
+// Pop gives the ownership of the bytes to the caller. The list does not give them back to slicepool.
+// The bytes can start after the start of the slice from slicepool, when the list consumed a part of them.
 func (ll *LinkedList) Pop() []byte {
 	n := ll.pop()
 	if n == nil {
 		return nil
 	}
-	return n.buf
+	return n.data()
 }
 
 // PushFront is a wrapper of pushFront, which accepts []byte as its argument.
@@ -83,12 +106,19 @@ func (ll *LinkedList) PushBack(p []byte) {
 
 // Peek assembles the up to maxBytes of [][]byte based on the list of node,
 // it won't remove these nodes from l until Discard() is called.
+//
+// If maxBytes is less than or equal to 0, Peek returns all bytes.
+// If maxBytes is more than Buffered, Peek returns io.ErrShortBuffer.
 func (ll *LinkedList) Peek(maxBytes int) ([][]byte, error) {
-	if maxBytes == 0 || maxBytes == math.MaxInt32 {
-		maxBytes = math.MaxInt32
+	if maxBytes <= 0 {
+		maxBytes = ll.Buffered()
 	} else if maxBytes > ll.Buffered() {
 		return nil, io.ErrShortBuffer
 	}
+	if maxBytes == 0 {
+		return nil, nil
+	}
+
 	var bs [][]byte
 	var cum int
 	for iter := ll.head; iter != nil; iter = iter.next {
@@ -96,7 +126,7 @@ func (ll *LinkedList) Peek(maxBytes int) ([][]byte, error) {
 		if cum+offset > maxBytes {
 			offset = maxBytes - cum
 		}
-		bs = append(bs, iter.buf[:offset])
+		bs = append(bs, iter.data()[:offset])
 		if cum += offset; cum == maxBytes {
 			break
 		}
@@ -105,19 +135,21 @@ func (ll *LinkedList) Peek(maxBytes int) ([][]byte, error) {
 }
 
 // PeekWithBytes is like Peek but accepts [][]byte and puts them onto head.
+// The limit maxBytes applies to bs and to the list together.
 func (ll *LinkedList) PeekWithBytes(maxBytes int, bs ...[]byte) ([][]byte, error) {
-	if maxBytes == 0 || maxBytes == math.MaxInt32 {
-		maxBytes = math.MaxInt32
-	} else {
-		var prefixLen int
-		for _, b := range bs {
-			prefixLen += len(b)
-		}
-
-		if maxBytes > prefixLen+ll.Buffered() {
-			return nil, io.ErrShortBuffer
-		}
+	total := ll.Buffered()
+	for _, b := range bs {
+		total += len(b)
 	}
+	if maxBytes <= 0 {
+		maxBytes = total
+	} else if maxBytes > total {
+		return nil, io.ErrShortBuffer
+	}
+	if maxBytes == 0 {
+		return nil, nil
+	}
+
 	var bss [][]byte
 	var cum int
 	for _, b := range bs {
@@ -137,7 +169,7 @@ func (ll *LinkedList) PeekWithBytes(maxBytes int, bs ...[]byte) ([][]byte, error
 		if cum+offset > maxBytes {
 			offset = maxBytes - cum
 		}
-		bss = append(bss, iter.buf[:offset])
+		bss = append(bss, iter.data()[:offset])
 		if cum += offset; cum == maxBytes {
 			break
 		}
@@ -156,7 +188,7 @@ func (ll *LinkedList) Discard(n int) (discarded int, err error) {
 			break
 		}
 		if n < b.len() {
-			b.buf = b.buf[n:]
+			b.off += n
 			discarded += n
 			ll.pushFront(b)
 			break
@@ -168,30 +200,50 @@ func (ll *LinkedList) Discard(n int) (discarded int, err error) {
 	return
 }
 
-const minRead = 512
-
 // ReadFrom implements io.ReaderFrom.
+//
+// ReadFrom returns io.ErrNoProgress after maxConsecutiveEmptyReads calls in sequence that return 0, nil.
+//
+// The first Read uses RingMinRead bytes. When a Read fills the buffer, the next Read uses two times more bytes,
+// to a maximum of listMaxRead. Thus, a large source gives few large nodes.
 func (ll *LinkedList) ReadFrom(r io.Reader) (n int64, err error) {
-	var m int
+	size := RingMinRead
+	var empty int
 	for {
-		b := slicepool.Get(minRead)
+		b := slicepool.Get(size)
+		var m int
 		m, err = r.Read(b)
-		if m < 0 {
-			panic("LinkedList.ReadFrom: reader returned negative count from Read")
+		if m < 0 || m > len(b) {
+			panic("buffer: LinkedList.ReadFrom: invalid Read count")
 		}
 		// io.Reader is allowed to return (n>0, io.EOF) in the same call.
 		n += int64(m)
-		b = b[:m]
-		if m > 0 {
-			ll.pushBack(&node{buf: b})
-		} else {
+		switch {
+		case m == 0:
 			slicepool.Put(b)
+		case m < len(b)/4:
+			// A node keeps all of the capacity of its buffer. Thus, a small Read into a large buffer
+			// moves to a buffer that has the correct size.
+			small := slicepool.Get(m)
+			copy(small, b[:m])
+			slicepool.Put(b)
+			ll.pushBack(&node{buf: small})
+		default:
+			ll.pushBack(&node{buf: b[:m]})
+		}
+		if m == len(b) && size < listMaxRead {
+			size *= 2
 		}
 		if err == io.EOF {
 			return n, nil
 		}
 		if err != nil {
 			return n, err
+		}
+		if m > 0 {
+			empty = 0
+		} else if empty++; empty >= maxConsecutiveEmptyReads {
+			return n, io.ErrNoProgress
 		}
 	}
 }
@@ -203,10 +255,10 @@ func (ll *LinkedList) Read(p []byte) (n int, err error) {
 	}
 
 	for b := ll.pop(); b != nil; b = ll.pop() {
-		m := copy(p[n:], b.buf)
+		m := copy(p[n:], b.data())
 		n += m
 		if m < b.len() {
-			b.buf = b.buf[m:]
+			b.off += m
 			ll.pushFront(b)
 		} else {
 			slicepool.Put(b.buf)
@@ -225,14 +277,14 @@ func (ll *LinkedList) Read(p []byte) (n int, err error) {
 func (ll *LinkedList) WriteTo(w io.Writer) (n int64, err error) {
 	var m int
 	for b := ll.pop(); b != nil; b = ll.pop() {
-		m, err = w.Write(b.buf)
-		if m > b.len() {
-			panic("LinkedList.WriteTo: invalid Write count")
+		m, err = w.Write(b.data())
+		if m < 0 || m > b.len() {
+			panic("buffer: LinkedList.WriteTo: invalid Write count")
 		}
 		// io.Writer is allowed to return n < len(p) with err != nil in the same call.
 		n += int64(m)
 		if m < b.len() {
-			b.buf = b.buf[m:]
+			b.off += m
 			ll.pushFront(b)
 			if err != nil {
 				return n, err
