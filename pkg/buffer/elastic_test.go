@@ -379,3 +379,112 @@ func TestElastic_Release_LeavesBufferEmptyAndReusable(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 10, n)
 }
+
+// ------------------------------------------------------------------------
+// maxStaticBytes limits the growth of the ring for Write, Writev, ReadFrom.
+// ------------------------------------------------------------------------
+
+func readAll(t *testing.T, e *Elastic) []byte {
+	t.Helper()
+	out := make([]byte, e.Buffered())
+	n, err := e.Read(out)
+	require.NoError(t, err)
+	require.Equal(t, len(out), n)
+	return out
+}
+
+func TestElastic_Write_LargeWriteSpillsAtCap(t *testing.T) {
+	const maxStatic = 4096
+
+	e, _ := New(maxStatic)
+	data := randBytes(1 << 20)
+	n, err := e.Write(data)
+	require.NoError(t, err)
+	require.Equal(t, len(data), n)
+	require.Equal(t, maxStatic, e.ring.Buffered())
+	require.Equal(t, len(data)-maxStatic, e.list.Buffered())
+	// The test does not check Cap. The ring comes from builtinPool, and another test can put a large ring there.
+	// Buffered is enough: before the fix, the ring took all of the data.
+	require.Equal(t, data, readAll(t, e))
+}
+
+func TestElastic_Write_DividesLikeWritev(t *testing.T) {
+	const maxStatic = 4096
+
+	data := randBytes(10000)
+	w, _ := New(maxStatic)
+	_, _ = w.Write(data)
+	v, _ := New(maxStatic)
+	_, _ = v.Writev([][]byte{data})
+	require.Equal(t, v.ring.Buffered(), w.ring.Buffered())
+	require.Equal(t, v.list.Buffered(), w.list.Buffered())
+}
+
+func TestElastic_ReadFrom_LargeSourceSpillsAtCap(t *testing.T) {
+	const maxStatic = 4096
+
+	e, _ := New(maxStatic)
+	data := randBytes(1 << 20)
+	n, err := e.ReadFrom(bytes.NewReader(data))
+	require.NoError(t, err)
+	require.Equal(t, int64(len(data)), n)
+	require.Equal(t, maxStatic, e.ring.Buffered())
+	require.Equal(t, len(data)-maxStatic, e.list.Buffered())
+	// The test does not check Cap. The ring comes from builtinPool, and another test can put a large ring there.
+	// Buffered is enough: before the fix, the ring took all of the data.
+	require.Equal(t, data, readAll(t, e))
+}
+
+func TestElastic_ReadFrom_SourceEqualToCap(t *testing.T) {
+	const maxStatic = 4096
+
+	e, _ := New(maxStatic)
+	data := randBytes(maxStatic)
+	n, err := e.ReadFrom(bytes.NewReader(data))
+	require.NoError(t, err)
+	require.Equal(t, int64(maxStatic), n)
+	require.Equal(t, maxStatic, e.ring.Buffered())
+	require.True(t, e.list.IsEmpty())
+	require.Equal(t, data, readAll(t, e))
+}
+
+func TestElastic_ReadFrom_DataAndEOFTogether(t *testing.T) {
+	e, _ := New(4096)
+	data := randBytes(100)
+	n, err := e.ReadFrom(&dataThenEOFReader{data: data})
+	require.NoError(t, err)
+	require.Equal(t, int64(100), n)
+	require.Equal(t, data, readAll(t, e))
+}
+
+func TestElastic_ReadFrom_ErrorInRingPart(t *testing.T) {
+	e, _ := New(4096)
+	data := randBytes(100)
+	n, err := e.ReadFrom(&errReaderAfter{
+		data: data,
+		err:  errBoom,
+	})
+	require.ErrorIs(t, err, errBoom)
+	require.Equal(t, int64(100), n)
+	require.True(t, e.list.IsEmpty())
+	require.Equal(t, data, readAll(t, e))
+}
+
+func TestElastic_ReadFrom_ErrorInListPart(t *testing.T) {
+	const maxStatic = 4096
+
+	e, _ := New(maxStatic)
+	data := randBytes(maxStatic + 1000)
+	n, err := e.ReadFrom(io.MultiReader(
+		bytes.NewReader(data),
+		&errReaderAfter{
+			sent: true,
+			err:  errBoom,
+		},
+	))
+	require.ErrorIs(t, err, errBoom)
+	require.Equal(t, int64(len(data)), n)
+	require.Equal(t, maxStatic, e.ring.Buffered())
+	require.Equal(t, 1000, e.list.Buffered())
+	require.Equal(t, data, readAll(t, e))
+}

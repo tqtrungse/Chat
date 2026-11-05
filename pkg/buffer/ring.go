@@ -8,6 +8,9 @@ package buffer
 
 import "io"
 
+// Ring is a ring-buffer that gets its memory from a pool only when it must keep data.
+// When a read or Discard empties the Ring, the Ring gives the memory back to the pool. Done always gives it back.
+// The zero value is an empty Ring that is ready to use.
 type Ring struct {
 	rb *coreRing
 }
@@ -16,7 +19,6 @@ func (rb *Ring) instance() *coreRing {
 	if rb.rb == nil {
 		rb.rb = builtinPool.Get()
 	}
-
 	return rb.rb
 }
 
@@ -37,6 +39,10 @@ func (rb *Ring) done() {
 
 // Peek returns the next n bytes without advancing the read pointer,
 // it returns all bytes when n <= 0.
+//
+// head and tail refer to the internal buffer. Peek does not copy the bytes.
+// The caller must not use head or tail after a call to Discard, Read, ReadByte, WriteTo, Write, Reset, or Done.
+// When Discard or a read empties the ring, the ring goes back to the pool, and other users can change the bytes.
 func (rb *Ring) Peek(n int) (head []byte, tail []byte) {
 	if rb.rb == nil {
 		return nil, nil
@@ -47,9 +53,8 @@ func (rb *Ring) Peek(n int) (head []byte, tail []byte) {
 // Discard skips the next n bytes by advancing the read pointer.
 func (rb *Ring) Discard(n int) (int, error) {
 	if rb.rb == nil {
-		return 0, ErrIsEmpty
+		return 0, nil
 	}
-
 	defer rb.done()
 	return rb.rb.Discard(n)
 }
@@ -66,20 +71,22 @@ func (rb *Ring) Discard(n int) (int, error) {
 // Doing so correctly handles I/O errors that happen after reading some bytes and also both of the allowed EOF
 // behaviors.
 func (rb *Ring) Read(p []byte) (int, error) {
-	if rb.rb == nil {
-		return 0, ErrIsEmpty
+	// io.Reader requires 0, nil for an empty p, also when the ring has no data.
+	if len(p) == 0 {
+		return 0, nil
 	}
-
+	if rb.rb == nil {
+		return 0, io.EOF
+	}
 	defer rb.done()
 	return rb.rb.Read(p)
 }
 
-// ReadByte reads and returns the next byte from the input or ErrIsEmpty.
+// ReadByte reads and returns the next byte from the input or io.EOF.
 func (rb *Ring) ReadByte() (byte, error) {
 	if rb.rb == nil {
-		return 0, ErrIsEmpty
+		return 0, io.EOF
 	}
-
 	defer rb.done()
 	return rb.rb.ReadByte()
 }
@@ -151,16 +158,23 @@ func (rb *Ring) Bytes() []byte {
 }
 
 // ReadFrom implements io.ReaderFrom.
+// When r gives no data, ReadFrom gives the empty ring back to the pool, as Read and Discard do.
 func (rb *Ring) ReadFrom(r io.Reader) (int64, error) {
+	defer rb.done()
 	return rb.instance().ReadFrom(r)
+}
+
+// readFrom reads up to limit bytes from r. Refer to coreRing.readFrom.
+func (rb *Ring) readFrom(r io.Reader, limit int64) (int64, error) {
+	defer rb.done()
+	return rb.instance().readFrom(r, limit)
 }
 
 // WriteTo implements io.WriterTo.
 func (rb *Ring) WriteTo(w io.Writer) (int64, error) {
 	if rb.rb == nil {
-		return 0, ErrIsEmpty
+		return 0, nil
 	}
-
 	defer rb.done()
 	return rb.instance().WriteTo(w)
 }

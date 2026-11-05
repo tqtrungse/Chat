@@ -67,18 +67,32 @@ func TestPool_MaxSizeEviction(t *testing.T) {
 	require.Zero(t, got.Cap())
 }
 
+// sync.Pool does not promise to keep an object. With -race, sync.Pool.Put drops one of four objects at random.
+// Thus, the test puts many rings and expects at least one ring back. The probability that the pool drops
+// all rings is 0.25^rings.
 func TestPool_WithinMaxSizeIsPooled(t *testing.T) {
+	const rings = 64
+
 	var p pool
 	p.maxSize.Store(1024)
 
-	small := newCoreRing(64)
-	_, err := small.WriteString("marker")
-	require.NoError(t, err)
-	p.Put(small)
+	for range rings {
+		small := newCoreRing(64)
+		_, err := small.WriteString("marker")
+		require.NoError(t, err)
+		p.Put(small)
+	}
 
-	got := p.Get()
-	require.Equal(t, 64, got.Cap())
-	require.True(t, got.IsEmpty())
+	// A miss in the pool gives newCoreRing(0), which has Cap() == 0. Only a ring from the pool has Cap() == 64.
+	var pooled int
+	for range rings {
+		got := p.Get()
+		if got.Cap() == 64 {
+			pooled++
+			require.True(t, got.IsEmpty(), "Put must reset the ring before the pool keeps it")
+		}
+	}
+	require.Positive(t, pooled)
 }
 
 func TestPool_Calibrate(t *testing.T) {
@@ -175,4 +189,18 @@ func BenchmarkNoPool_NewEachTime(b *testing.B) {
 			_, _ = buf.Write(payload)
 		}
 	})
+}
+
+// pool.Put does not keep a ring above maxSize. It gives the byte slice of the ring back to slicepool.
+func TestPool_MaxSizeEviction_ReleasesBuffer(t *testing.T) {
+	var p pool
+	p.maxSize.Store(256)
+
+	big := newCoreRing(1024)
+	_, _ = big.WriteString("data")
+	p.Put(big)
+
+	require.Nil(t, big.buf)
+	require.Zero(t, big.Cap())
+	require.True(t, big.IsEmpty())
 }
