@@ -1,5 +1,11 @@
 //go:build linux
 
+/*
+ * Copyright (c) 2019 The Gnet Authors. All rights reserved.
+ * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package netpoll
 
 func breakWakeupFD(p *Poller) func() {

@@ -12,7 +12,7 @@ package mocks
 import (
 	reflect "reflect"
 	time "time"
-	device "xxx/internal/shared/device"
+	transport "xxx/internal/hub/core/transport"
 	ticket "xxx/internal/shared/ticket"
 
 	gomock "go.uber.org/mock/gomock"
@@ -43,32 +43,32 @@ func (m *MockTicketVerifier) EXPECT() *MockTicketVerifierMockRecorder {
 }
 
 // CheckExpiry mocks base method.
-func (m *MockTicketVerifier) CheckExpiry(arg0 *ticket.Ticket, now time.Time) error {
+func (m *MockTicketVerifier) CheckExpiry(meta *ticket.Info, now time.Time) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CheckExpiry", arg0, now)
+	ret := m.ctrl.Call(m, "CheckExpiry", meta, now)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // CheckExpiry indicates an expected call of CheckExpiry.
-func (mr *MockTicketVerifierMockRecorder) CheckExpiry(arg0, now any) *gomock.Call {
+func (mr *MockTicketVerifierMockRecorder) CheckExpiry(meta, now any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckExpiry", reflect.TypeOf((*MockTicketVerifier)(nil).CheckExpiry), arg0, now)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckExpiry", reflect.TypeOf((*MockTicketVerifier)(nil).CheckExpiry), meta, now)
 }
 
-// Open mocks base method.
-func (m *MockTicketVerifier) Open(deviceID device.ID, arg1 []byte) (*ticket.Ticket, error) {
+// Verify mocks base method.
+func (m *MockTicketVerifier) Verify(wire []byte, expected transport.Identity) (*ticket.Info, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Open", deviceID, arg1)
-	ret0, _ := ret[0].(*ticket.Ticket)
+	ret := m.ctrl.Call(m, "Verify", wire, expected)
+	ret0, _ := ret[0].(*ticket.Info)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// Open indicates an expected call of Open.
-func (mr *MockTicketVerifierMockRecorder) Open(deviceID, arg1 any) *gomock.Call {
+// Verify indicates an expected call of Verify.
+func (mr *MockTicketVerifierMockRecorder) Verify(wire, expected any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Open", reflect.TypeOf((*MockTicketVerifier)(nil).Open), deviceID, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Verify", reflect.TypeOf((*MockTicketVerifier)(nil).Verify), wire, expected)
 }
 
 // MockSigner is a mock of Signer interface.
@@ -96,15 +96,15 @@ func (m *MockSigner) EXPECT() *MockSignerMockRecorder {
 }
 
 // Verify mocks base method.
-func (m *MockSigner) Verify(identityPub, payload, sign []byte) error {
+func (m *MockSigner) Verify(identityPub, payload, signature []byte) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Verify", identityPub, payload, sign)
+	ret := m.ctrl.Call(m, "Verify", identityPub, payload, signature)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Verify indicates an expected call of Verify.
-func (mr *MockSignerMockRecorder) Verify(identityPub, payload, sign any) *gomock.Call {
+func (mr *MockSignerMockRecorder) Verify(identityPub, payload, signature any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Verify", reflect.TypeOf((*MockSigner)(nil).Verify), identityPub, payload, sign)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Verify", reflect.TypeOf((*MockSigner)(nil).Verify), identityPub, payload, signature)
 }

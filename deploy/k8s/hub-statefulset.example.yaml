@@ -1,0 +1,84 @@
+# Noise NK v2 deployment example. Provision service keys before applying.
+# Replace image/entrypoint and provision the referenced Secrets before use.
+# StatefulSet is intentional: MachineIDFromHostname requires numeric ordinals.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hub
+spec:
+  serviceName: hub-internal
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hub
+  template:
+    metadata:
+      labels:
+        app: hub
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: hub
+          image: example.invalid/xxx/hub:replace-me
+          command: ["/app/hub"]
+          ports:
+            - name: tcp
+              containerPort: 3008
+          env:
+            - name: HUB_CONFIG_FILE
+              value: /etc/hub/runtime/config.env
+            - name: SERVICE_ID
+              value: "1"
+            - name: HUB_ID
+              value: "0" # derive unique IDs from hub-0, hub-1, ...
+            - name: TCP_SERVER_ADDRESS
+              value: ":3008"
+            - name: HUB_NOISE_KEYRING_FILE
+              value: /etc/hub/noise/keyring.json
+            - name: HUB_NOISE_CURRENT_KEY_ID
+              value: "7"
+            - name: HUB_NOISE_AUDIENCE
+              value: hub.chat
+            - name: TCP_SERVER_MAX_FRAME_BYTES
+              value: "4096"
+            - name: HUB_NOISE_HANDSHAKE_TIMEOUT
+              value: 5s
+          volumeMounts:
+            - name: runtime
+              mountPath: /etc/hub/runtime
+              readOnly: true
+            - name: noise
+              mountPath: /etc/hub/noise
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: tcp
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 500m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+      volumes:
+        - name: runtime
+          secret:
+            secretName: hub-runtime
+            defaultMode: 0440
+            items:
+              - key: config.env
+                path: config.env
+        - name: noise
+          secret:
+            secretName: hub-noise
+            defaultMode: 0440
+            items:
+              - key: keyring.json
+                path: keyring.json

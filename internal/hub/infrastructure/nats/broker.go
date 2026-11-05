@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package nats
@@ -23,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	pbpriv "xxx/api/hub/v1/proto/gen/priv"
+	pbpriv "xxx/api/hub/v2/proto/gen/priv"
 	"xxx/internal/hub/application/sendmsg"
 
 	"xxx/pkg/bs"
@@ -48,13 +37,7 @@ var (
 	}
 )
 
-const (
-	limitMaxHops = uint8(120)
-
-	defaultMaxHops        = uint8(5)
-	defaultPublishTimeout = 30 * time.Second
-	defaultInboxWorkers   = 128
-)
+const limitMaxHops = uint8(120)
 
 type broker struct {
 	hubSubjectPrefix string
@@ -81,6 +64,7 @@ func NewBroker(
 	//persists a message for a device that can't be delivered live right now
 	pushToOffline func(context.Context, uint64, []byte) error,
 ) (sendmsg.Broker, error) {
+	cfg.applyDefault()
 	// In `handleInboxMessage`, we mutate the struct by incrementing the hops.
 	// If hops is over 127, `MarshalOptions.UseCachedSize` will not apply and
 	// `proto.MarshalAppend` will either panic or write corrupted data.
@@ -88,7 +72,6 @@ func NewBroker(
 	if cfg.MaxHops > limitMaxHops {
 		return nil, fmt.Errorf("broker: MaxHops %d exceeds limit %d", cfg.MaxHops, limitMaxHops)
 	}
-
 	b := &broker{
 		hubSubjectPrefix: cfg.HubSubjectPrefix,
 		hubID:            hubID,
@@ -101,30 +84,9 @@ func NewBroker(
 	}
 
 	b.maxHops = cfg.MaxHops
-	if cfg.MaxHops == 0 {
-		b.maxHops = defaultMaxHops
-	}
-
 	b.publishTimeout = cfg.PublishTimeout
-	if cfg.PublishTimeout <= 0 {
-		// Route is a local buffered write; use this timeout when waiting
-		// for inbox handlers during shutdown.
-		b.publishTimeout = defaultPublishTimeout
-	}
-
 	b.deliveryBackOff = cfg.DeliveryBackOff
-	if len(cfg.DeliveryBackOff) == 0 {
-		b.deliveryBackOff = defaultDeliveryBackoff
-	}
-
 	b.inboxWorkers = uint32(cfg.InboxWorkers)
-	if cfg.InboxWorkers <= 0 {
-		// Core NATS has no consumer-side batching/prefetch knob to reuse
-		// (ConsumerFetchBatch is gone along with the pull consumer), so
-		// this is the direct replacement for it. Picked a reasonable
-		// starting point, not a measured one — tune against real load.
-		b.inboxWorkers = defaultInboxWorkers
-	}
 	return b, nil
 }
 

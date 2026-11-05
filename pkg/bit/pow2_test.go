@@ -1,18 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package bit
@@ -54,6 +42,7 @@ func safeNextPow2(v int) (got uint, err error) {
 
 func checkOne(t *testing.T, v int, want uint) {
 	t.Helper()
+
 	got, err := safeNextPow2(v)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
@@ -65,15 +54,30 @@ func TestNextPowerOfTwo_Table(t *testing.T) {
 		in   int
 		want uint
 	}{
-		{-5, 1}, {0, 1}, {1, 1},
-		{2, 2}, {3, 4}, {4, 4}, {5, 8}, {7, 8}, {8, 8}, {9, 16},
-		{1023, 1024}, {1024, 1024}, {1025, 2048},
-		{1 << 20, 1 << 20}, {1<<20 + 1, 1 << 21},
-		{1 << 30, 1 << 30}, {1<<30 + 1, 1 << 31},
+		{-5, 1},
+		{0, 1},
+		{1, 1},
+		{2, 2},
+		{3, 4},
+		{4, 4},
+		{5, 8},
+		{7, 8},
+		{8, 8},
+		{9, 16},
+		{1023, 1024},
+		{1024, 1024},
+		{1025, 2048},
+		{1 << 20, 1 << 20},
+		{1<<20 + 1, 1 << 21},
+		{1 << 30, 1 << 30},
+		{1<<30 + 1, 1 << 31},
 		{math.MaxInt32, 1 << 31},
 	}
 	for _, c := range cases {
-		t.Run(fmt.Sprint(c.in), func(t *testing.T) { checkOne(t, c.in, c.want) })
+		t.Run(
+			fmt.Sprint(c.in),
+			func(t *testing.T) { checkOne(t, c.in, c.want) },
+		)
 	}
 }
 
@@ -83,13 +87,16 @@ func TestNextPowerOfTwo_EveryBit(t *testing.T) {
 	// Maximum k = UintSize-2, ensuring v+1 does not overflow an int; the maximum result is 2^(UintSize-1).
 	for k := 0; k <= bits.UintSize-2; k++ {
 		v := 1 << k
-		t.Run(fmt.Sprintf("k=%d", k), func(t *testing.T) {
-			checkOne(t, v, uint(1)<<k)       // correct power of 2
-			checkOne(t, v+1, uint(1)<<(k+1)) // just passed
-			if k >= 2 {
-				checkOne(t, v-1, uint(1)<<k) // immediately below (k=1 → v-1=1 → 1, ignored)
-			}
-		})
+		t.Run(
+			fmt.Sprintf("k=%d", k),
+			func(t *testing.T) {
+				checkOne(t, v, uint(1)<<k)       // correct power of 2
+				checkOne(t, v+1, uint(1)<<(k+1)) // just passed
+				if k >= 2 {
+					checkOne(t, v-1, uint(1)<<k) // immediately below (k=1 → v-1=1 → 1, ignored)
+				}
+			},
+		)
 	}
 }
 
@@ -113,6 +120,7 @@ func TestNextPowerOfTwo_Properties(t *testing.T) {
 
 func checkProperties(t *testing.T, v int) {
 	t.Helper()
+
 	got, err := safeNextPow2(v)
 	require.NoError(t, err)
 	require.Falsef(t, got == 0 || got&(got-1) != 0, "NextPowerOfTwo(%d) = %d: not power of 2", v, got)

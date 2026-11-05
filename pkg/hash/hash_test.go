@@ -37,11 +37,12 @@ import (
 // hash should not depend on values outside key.
 // hash should not depend on alignment.
 func TestSmhasherSanity(t *testing.T) {
-	r := rand.New(rand.NewSource(1234))
 	const REP = 10
 	const KEYMAX = 128
 	const PAD = 16
 	const OFFMAX = 16
+
+	r := rand.New(rand.NewSource(1234))
 	for range REP {
 		for n := range KEYMAX {
 			for i := range OFFMAX {
@@ -151,6 +152,7 @@ func TestSmhasherSmallKeys(t *testing.T) {
 // Different length strings of all zeros have distinct hashes.
 func TestSmhasherZeros(t *testing.T) {
 	t.Parallel()
+
 	N := 256 * 1024
 	if testing.Short() {
 		N = 1024
@@ -171,6 +173,7 @@ func TestSmhasherTwoNonzero(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping in short mode")
 	}
+
 	t.Parallel()
 
 	h := newHashSet()
@@ -216,10 +219,13 @@ func TestSmhasherCyclic(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping in short mode")
 	}
+
 	t.Parallel()
-	r := rand.New(rand.NewSource(1234))
+
 	const REPEAT = 8
 	const N = 1000000
+
+	r := rand.New(rand.NewSource(1234))
 	h := newHashSet()
 	for n := 4; n <= 12; n++ {
 		b := make([]byte, REPEAT*n)
@@ -246,7 +252,9 @@ func TestSmhasherSparse(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping in short mode")
 	}
+
 	t.Parallel()
+
 	h := newHashSet()
 	sparse(t, h, 32, 6)
 	sparse(t, h, 40, 6)
@@ -285,7 +293,9 @@ func TestSmhasherPermutation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping in short mode")
 	}
+
 	t.Parallel()
+
 	h := newHashSet()
 	permutation(t, h, []uint32{0, 1, 2, 3, 4, 5, 6, 7}, 8)
 	permutation(t, h, []uint32{0, 1 << 29, 2 << 29, 3 << 29, 4 << 29, 5 << 29, 6 << 29, 7 << 29}, 8)
@@ -323,20 +333,25 @@ type BytesKey struct {
 }
 
 func (k *BytesKey) clear() {
-	clear(k.b)
+	clear(k.b[:cap(k.b)])
 }
+
 func (k *BytesKey) random(r *rand.Rand) {
 	randBytes(r, k.b)
 }
+
 func (k *BytesKey) bits() int {
 	return len(k.b) * 8
 }
+
 func (k *BytesKey) flipBit(i int) {
 	k.b[i>>3] ^= byte(1 << uint(i&7))
 }
+
 func (k *BytesKey) hash() uintptr {
 	return uintptr(Bytes(k.b, 0))
 }
+
 func (k *BytesKey) name() string {
 	return fmt.Sprintf("bytes%d", len(k.b))
 }
@@ -348,18 +363,23 @@ type Int32Key struct {
 func (k *Int32Key) clear() {
 	k.i = 0
 }
+
 func (k *Int32Key) random(r *rand.Rand) {
 	k.i = r.Uint32()
 }
+
 func (k *Int32Key) bits() int {
 	return 32
 }
+
 func (k *Int32Key) flipBit(i int) {
 	k.i ^= 1 << uint(i)
 }
+
 func (k *Int32Key) hash() uintptr {
 	return uintptr(Int32(k.i, 0))
 }
+
 func (k *Int32Key) name() string {
 	return "int32"
 }
@@ -371,18 +391,23 @@ type Int64Key struct {
 func (k *Int64Key) clear() {
 	k.i = 0
 }
+
 func (k *Int64Key) random(r *rand.Rand) {
 	k.i = uint64(r.Uint32()) + uint64(r.Uint32())<<32
 }
+
 func (k *Int64Key) bits() int {
 	return 64
 }
+
 func (k *Int64Key) flipBit(i int) {
 	k.i ^= 1 << uint(i)
 }
+
 func (k *Int64Key) hash() uintptr {
 	return uintptr(Int64(k.i, 0))
 }
+
 func (k *Int64Key) name() string {
 	return "int64"
 }
@@ -397,6 +422,7 @@ func TestSmhasherAvalanche(t *testing.T) {
 	}
 
 	t.Parallel()
+
 	avalancheTest1(t, &BytesKey{make([]byte, 2)})
 	avalancheTest1(t, &BytesKey{make([]byte, 4)})
 	avalancheTest1(t, &BytesKey{make([]byte, 8)})
@@ -457,12 +483,7 @@ func avalancheTest1(t *testing.T, k Key) {
 			assert.Truef(
 				t,
 				x >= low && x <= high,
-				"bad bias for %s bit %d -> bit %d: %d/%d",
-				k.name(),
-				i,
-				j,
-				x,
-				REP,
+				"bad bias for %s bit %d -> bit %d: %d/%d", k.name(), i, j, x, REP,
 			)
 		}
 	}
@@ -471,6 +492,7 @@ func avalancheTest1(t *testing.T, k Key) {
 // All bit rotations of a set of distinct keys
 func TestSmhasherWindowed(t *testing.T) {
 	t.Parallel()
+
 	h := newHashSet()
 	t.Logf("32 bit keys")
 	windowed(t, h, &Int32Key{})
@@ -494,6 +516,7 @@ func windowed(t *testing.T, h *HashSet, k Key) {
 	if testing.Short() {
 		t.Skip("Skipping in short mode")
 	}
+
 	const BITS = 16
 
 	for r := 0; r < k.bits(); r++ {
@@ -515,7 +538,9 @@ func TestSmhasherText(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping in short mode")
 	}
+
 	t.Parallel()
+
 	h := newHashSet()
 	text(t, h, "Foo", "Bar")
 	text(t, h, "FooBar", "")
@@ -526,6 +551,7 @@ func text(t *testing.T, h *HashSet, prefix, suffix string) {
 	const N = 4
 	const S = "ABCDEFGHIJKLMNOPQRSTabcdefghijklmnopqrst0123456789"
 	const L = len(S)
+
 	b := make([]byte, len(prefix)+N+len(suffix))
 	copy(b, prefix)
 	copy(b[len(prefix)+N:], suffix)
@@ -547,8 +573,9 @@ func text(t *testing.T, h *HashSet, prefix, suffix string) {
 }
 
 func TestSmhasherSeed(t *testing.T) {
-	h := newHashSet()
 	const N = 100000
+
+	h := newHashSet()
 	s := "hello"
 	for i := range N {
 		h.addS_seed(s, uintptr(i))

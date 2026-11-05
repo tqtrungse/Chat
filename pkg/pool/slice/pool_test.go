@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package slice
@@ -22,6 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // -------
@@ -56,31 +46,57 @@ func TestIndex(t *testing.T) {
 	}
 }
 
+// index() keeps mapping sizes above maxPooledSize to bucket 31, which pools
+// has no slot for. This pins the relationship the Get guard relies on: cross
+// maxPooledSize and the next bucket is already out of range.
+func TestIndex_MaxPooledSizeMatchesBucketCount(t *testing.T) {
+	var p pool
+	last := uint32(len(p.pools) - 1)
+	assert.Equal(t, last, index(maxPooledSize), "maxPooledSize must land on the last bucket")
+	assert.Equal(t, uint32(len(p.pools)), index(maxPooledSize+1), "one byte more must fall off the end")
+}
+
 // ---------------
 // SlicePool.Get()
 // ---------------
 
-func TestGet_ZeroOrNegative(t *testing.T) {
+// A zero-length request is a legitimate outcome of size arithmetic — a frame
+// carrying an empty payload, say — so it yields nil rather than panicking.
+// Panicking here would turn such a frame into a remote crash.
+func TestGet_Zero_ReturnsNil(t *testing.T) {
 	var p pool
-
-	s := p.Get(0)
-	assert.Nil(t, s)
-
-	s = p.Get(-1)
-	assert.Nil(t, s)
+	assert.Nil(t, p.Get(0))
 }
 
-func TestGet_LargerThanMaxInt32_AllocatesDirect(t *testing.T) {
+// A negative size cannot come from valid arithmetic, so it is a bug worth
+// surfacing loudly instead of papering over with nil.
+func TestGet_Negative_Panics(t *testing.T) {
 	var p pool
+	assert.Panics(t, func() { p.Get(-1) })
+}
 
-	size := math.MaxInt32 + 1
-	s := p.Get(size)
+// Anything past the last bucket must be allocated directly: indexing pools
+// with the bucket index() returns would run off the end of the array.
+func TestGet_AboveMaxPooledSize_AllocatesDirect(t *testing.T) {
+	var (
+		p    pool
+		size = maxPooledSize + 1
+		s    = p.Get(size)
+	)
 	assert.Len(t, s, size)
+	assert.Equal(t, size, cap(s))
+}
+
+func TestGet_MaxPooledSize_UsesLastBucket(t *testing.T) {
+	var (
+		p pool
+		s = p.Get(maxPooledSize)
+	)
+	assert.Len(t, s, maxPooledSize)
+	assert.Equal(t, maxPooledSize, cap(s))
 }
 
 func TestGet_LengthAndCapacity(t *testing.T) {
-	var p pool
-
 	cases := []struct {
 		size    int
 		wantCap int // next power-of-two >= size
@@ -96,6 +112,7 @@ func TestGet_LengthAndCapacity(t *testing.T) {
 		{1025, 2048},
 	}
 
+	var p pool
 	for _, tc := range cases {
 		s := p.Get(tc.size)
 		assert.Len(t, s, tc.size)
@@ -139,9 +156,10 @@ func TestPut_LargerThanMaxInt32_IsIgnored(t *testing.T) {
 }
 
 func TestPut_NonPowerOfTwoCap_DoesNotPanic(t *testing.T) {
-	var p pool
-
-	buf := make([]byte, 12) // cap 12, not a power of two
+	var (
+		p   pool
+		buf = make([]byte, 12) // cap 12, not a power of two
+	)
 	p.Put(buf)
 
 	got := p.Get(8)
@@ -149,14 +167,73 @@ func TestPut_NonPowerOfTwoCap_DoesNotPanic(t *testing.T) {
 	assert.Equal(t, 8, cap(got))
 }
 
+// Put derives the bucket from cap alone, so a buffer whose cap was truncated
+// — by a []byte -> string -> []byte round trip, say — is filed by the smaller
+// cap and can never climb back. The demotion is documented here because it is
+// silent at the call site: nothing fails, the pool just stops serving the
+// size class the buffer came from.
+func TestPut_TruncatedCapIsDemoted(t *testing.T) {
+	var p pool
+
+	// Under -race, sync.Pool drops one Put in four on purpose, so a single
+	// round trip cannot be asserted on. Retry until one survives.
+	for range 100 {
+		buf := p.Get(28)
+		assert.Equal(t, 32, cap(buf), "Get(28) should come from the 32-byte bucket")
+		array := unsafe.SliceData(buf)
+
+		// Same storage, cap collapsed to the length a string header carries.
+		p.Put(unsafe.Slice(array, 9))
+
+		// index(9) = 4, and 1<<4 != 9, so Put stepped down to bucket 3.
+		demoted := p.Get(8)
+		if unsafe.SliceData(demoted) != array {
+			continue // that Put was dropped; try again
+		}
+
+		assert.Equal(t, 8, cap(demoted), "24 bytes of the original array are unreachable")
+		// The bucket it came from no longer has it.
+		assert.NotSame(t, array, unsafe.SliceData(p.Get(32)))
+		return
+	}
+	require.Fail(t, "Put never filed the truncated buffer into bucket 3")
+}
+
+// --------
+// PutZeroed
+// --------
+
+func TestPutZeroed_ClearsToCapacity(t *testing.T) {
+	buf := Get(24)
+	assert.Equal(t, 32, cap(buf))
+
+	full := buf[:cap(buf)]
+	for i := range full {
+		full[i] = 0xAA
+	}
+
+	array := unsafe.SliceData(buf)
+	PutZeroed(buf)
+
+	// Whatever comes back out of that bucket must not expose the old bytes,
+	// including the len..cap tail a plain clear(buf) would have missed.
+	got := Get(24)
+	if unsafe.SliceData(got) != array {
+		t.Skip("pool handed back a different array; nothing to assert")
+	}
+	assert.Equal(t, make([]byte, 32), got[:cap(got)])
+}
+
 // --------------------------------------
 // Round-trip: Put then Get remains usable
 // --------------------------------------
 
 func TestRoundTrip_MultipleSizes(t *testing.T) {
-	var p pool
+	var (
+		p     pool
+		sizes = []int{1, 7, 8, 63, 64, 255, 256, 1023, 1024}
+	)
 
-	sizes := []int{1, 7, 8, 63, 64, 255, 256, 1023, 1024}
 	for _, size := range sizes {
 		s := p.Get(size)
 		assert.Len(t, s, size)
@@ -176,6 +253,33 @@ func TestRoundTrip_MultipleSizes(t *testing.T) {
 		}
 		p.Put(s2)
 	}
+}
+
+// The whole point of the package is handing the same storage back out. Without
+// this, replacing Get's body with a plain make() would still pass every other
+// test in this file.
+func TestGetPut_ReusesUnderlyingArray(t *testing.T) {
+	var (
+		p      pool
+		reused = false
+	)
+
+	// A GC between Put and Get can drain the pool, so one round trip is not
+	// guaranteed to reuse. Retrying makes a pool that NEVER reuses — the
+	// regression this guards against — impossible to pass by luck.
+	for range 100 {
+		buf := p.Get(100)
+		array := unsafe.SliceData(buf)
+		p.Put(buf)
+
+		again := p.Get(100)
+		reused = unsafe.SliceData(again) == array
+		p.Put(again)
+		if reused {
+			break
+		}
+	}
+	assert.True(t, reused, "Get should hand back storage that Put returned")
 }
 
 // ------------------------------
@@ -200,11 +304,14 @@ func TestBuiltinGet_Put(t *testing.T) {
 // -----------
 
 func TestConcurrentGetPut(t *testing.T) {
-	var p pool
 	const goroutines = 64
 	const iterations = 1000
 
-	done := make(chan struct{})
+	var (
+		p    pool
+		done = make(chan struct{})
+	)
+
 	for range goroutines {
 		go func() {
 			defer func() { done <- struct{}{} }()

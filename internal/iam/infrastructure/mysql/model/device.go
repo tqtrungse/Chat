@@ -19,15 +19,14 @@ package model
 import (
 	"time"
 
-	"xxx/internal/iam/domain/device"
 	"xxx/internal/iam/domain/user"
-	shareddevice "xxx/internal/shared/device"
+	"xxx/internal/shared/device"
 
 	"gorm.io/gorm"
 )
 
 type Device struct {
-	ID          shareddevice.ID `gorm:"primaryKey;autoIncrement:false"`
+	ID          device.ID `gorm:"primaryKey;autoIncrement:false"`
 	ExternalID  string
 	UserID      user.ID
 	Name        string

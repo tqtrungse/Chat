@@ -1,17 +1,6 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package worker
@@ -35,7 +24,6 @@ func newTestLocal() *local[int] {
 
 func drainLocal(l *local[int]) []int {
 	out := make([]int, 0, l.Len())
-
 	for {
 		v, ok := l.Pop()
 		if !ok {
@@ -52,7 +40,6 @@ func assertIntsEqual(t *testing.T, got, want []int) {
 
 func popAllElastic[V any](q *elastic[V]) []V {
 	var out []V
-
 	for {
 		items, ok := q.PopBatch(256)
 		if !ok {
@@ -69,7 +56,6 @@ func popAllElastic[V any](q *elastic[V]) []V {
 
 func TestLocal_Empty(t *testing.T) {
 	l := newTestLocal()
-
 	require.Zero(t, l.Len())
 	require.Equal(t, capacity, l.RemainingSlots())
 
@@ -78,15 +64,13 @@ func TestLocal_Empty(t *testing.T) {
 }
 
 func TestLocal_PushPopFIFO(t *testing.T) {
-	l := newTestLocal()
-	e := newElastic[int]()
-
 	const n = 100
 
+	l := newTestLocal()
+	e := newElastic[int]()
 	for i := range n {
 		l.Push(i, e)
 	}
-
 	require.Equal(t, n, l.Len())
 	require.Equal(t, capacity-n, l.RemainingSlots())
 
@@ -95,20 +79,17 @@ func TestLocal_PushPopFIFO(t *testing.T) {
 		require.Truef(t, ok, "Pop() failed at i=%d", i)
 		require.Equal(t, i, got)
 	}
-
 	require.Zero(t, l.Len(), "Len() after drain")
 }
 
 func TestLocal_PushBatchNoOverflow(t *testing.T) {
-	l := newTestLocal()
-
 	tasks := make([]int, 100)
 	for i := range tasks {
 		tasks[i] = i
 	}
 
+	l := newTestLocal()
 	l.PushBatchNoOverflow(tasks)
-
 	require.Equal(t, len(tasks), l.Len())
 
 	got := drainLocal(l)
@@ -117,23 +98,19 @@ func TestLocal_PushBatchNoOverflow(t *testing.T) {
 
 func TestLocal_PushBatchNoOverflow_Empty(t *testing.T) {
 	l := newTestLocal()
-
 	l.PushBatchNoOverflow(nil)
 	l.PushBatchNoOverflow([]int{})
-
 	require.Zero(t, l.Len())
 }
 
 func TestLocal_PushBatchNoOverflow_ExactCapacity(t *testing.T) {
-	l := newTestLocal()
-
 	tasks := make([]int, capacity)
 	for i := range tasks {
 		tasks[i] = i
 	}
 
+	l := newTestLocal()
 	l.PushBatchNoOverflow(tasks)
-
 	require.Equal(t, capacity, l.Len())
 
 	got := drainLocal(l)
@@ -145,24 +122,20 @@ func TestLocal_PushBatchNoOverflow_ExactCapacity(t *testing.T) {
 // ---------------
 
 func TestLocal_PushBatchNoOverflow_TooLargePanics(t *testing.T) {
-	l := newTestLocal()
-
-	tasks := make([]int, capacity+1)
-
-	require.Panics(t, func() {
-		l.PushBatchNoOverflow(tasks)
-	})
+	var (
+		l     = newTestLocal()
+		tasks = make([]int, capacity+1)
+	)
+	require.Panics(t, func() { l.PushBatchNoOverflow(tasks) })
 }
 
 func TestLocal_PushBatchNoOverflow_NotEnoughRoomPanics(t *testing.T) {
-	l := newTestLocal()
-
-	tasks := make([]int, capacity)
+	var (
+		l     = newTestLocal()
+		tasks = make([]int, capacity)
+	)
 	l.PushBatchNoOverflow(tasks)
-
-	require.Panics(t, func() {
-		l.PushBatchNoOverflow([]int{1})
-	})
+	require.Panics(t, func() { l.PushBatchNoOverflow([]int{1}) })
 }
 
 // -----------
@@ -170,15 +143,6 @@ func TestLocal_PushBatchNoOverflow_NotEnoughRoomPanics(t *testing.T) {
 // -----------
 
 func TestLocal_WrapAround(t *testing.T) {
-	l := newTestLocal()
-	e := newElastic[int]()
-
-	// Fill the queue completely so every physical slot [0, capacity) is
-	// written at least once.
-	for i := range capacity {
-		l.Push(i, e)
-	}
-
 	// Free up a quarter of the queue so the following pushes must land
 	// at logical index >= capacity, i.e. they alias — and must
 	// correctly reuse — physical slots [0, drain), the exact slots just
@@ -186,6 +150,14 @@ func TestLocal_WrapAround(t *testing.T) {
 	// the previous version never pushed past logical index `capacity`,
 	// so no physical slot was ever written twice.
 	const drain = capacity / 4
+
+	l := newTestLocal()
+	e := newElastic[int]()
+	// Fill the queue completely so every physical slot [0, capacity) is
+	// written at least once.
+	for i := range capacity {
+		l.Push(i, e)
+	}
 
 	for i := range drain {
 		got, ok := l.Pop()
@@ -196,11 +168,9 @@ func TestLocal_WrapAround(t *testing.T) {
 	for i := range drain {
 		l.Push(capacity+i, e)
 	}
-
 	require.Equal(t, capacity, l.Len())
 
 	got := drainLocal(l)
-
 	// The live range is now a contiguous run starting at `drain`: the
 	// untouched middle (drain..capacity-1) followed by the values that
 	// just wrapped into the freed slots (capacity..capacity+drain-1).
@@ -208,14 +178,10 @@ func TestLocal_WrapAround(t *testing.T) {
 	for i := range want {
 		want[i] = drain + i
 	}
-
 	assertIntsEqual(t, got, want)
 }
 
 func TestLocal_MultipleWrapArounds(t *testing.T) {
-	l := newTestLocal()
-	e := newElastic[int]()
-
 	// Enough rounds that total pushes clear several multiples of
 	// capacity, so the ring buffer's physical slots each get reused
 	// many times over. The previous version ran only 20 rounds and
@@ -224,8 +190,12 @@ func TestLocal_MultipleWrapArounds(t *testing.T) {
 	// name.
 	const rounds = 2000
 
-	var expected []int
-	next := 0
+	var (
+		expected []int
+		l        = newTestLocal()
+		e        = newElastic[int]()
+		next     = 0
+	)
 
 	for round := range rounds {
 		n := 1 + round%64 // stays well under capacity
@@ -251,7 +221,6 @@ func TestLocal_MultipleWrapArounds(t *testing.T) {
 			got, ok := l.Pop()
 			require.Truef(t, ok, "Pop() failed in round %d", round)
 			require.Equalf(t, expected[0], got, "round %d", round)
-
 			expected = expected[1:]
 		}
 	}
@@ -288,7 +257,6 @@ func TestLocal_MoveTo_Empty(t *testing.T) {
 
 	_, ok := src.MoveTo(dst)
 	require.False(t, ok, "MoveTo() from empty queue returned ok=true")
-
 	require.Zero(t, src.Len(), "src Len()")
 	require.Zero(t, dst.Len(), "dst Len()")
 }
@@ -297,9 +265,7 @@ func TestLocal_MoveTo_One(t *testing.T) {
 	src := newTestLocal()
 	dst := newTestLocal()
 	e := newElastic[int]()
-
 	src.Push(42, e)
-
 	got, ok := src.MoveTo(dst)
 	require.True(t, ok, "MoveTo() returned ok=false")
 	require.Equal(t, 42, got)
@@ -309,76 +275,65 @@ func TestLocal_MoveTo_One(t *testing.T) {
 }
 
 func TestLocal_MoveTo_Even(t *testing.T) {
-	src := newTestLocal()
-	dst := newTestLocal()
-	e := newElastic[int]()
-
 	const n = 100
-
-	for i := range n {
-		src.Push(i, e)
-	}
-
 	// take = ceil(n/2): the oldest `take` tasks are reserved and copied
 	// out of src. Of those, the *newest* one (the one adjacent to what
 	// src keeps) is handed back directly to the caller; the remaining
 	// take-1 (the older ones) are published into dst, oldest-first.
 	const take = n - n/2 // 50
 
+	src := newTestLocal()
+	dst := newTestLocal()
+	e := newElastic[int]()
+	for i := range n {
+		src.Push(i, e)
+	}
+
 	stolen, ok := src.MoveTo(dst)
 	require.True(t, ok, "MoveTo() returned ok=false")
 	require.Equal(t, take-1, stolen, "returned task")
-
 	require.Equal(t, n-take, src.Len(), "src Len()")
 	require.Equal(t, take-1, dst.Len(), "dst Len()")
 
 	// Source keeps the second (newer) half.
 	srcGot := drainLocal(src)
-
 	wantSrc := make([]int, n-take)
 	for i := range wantSrc {
 		wantSrc[i] = take + i
 	}
-
 	assertIntsEqual(t, srcGot, wantSrc)
 
 	// Destination gets the older take-1 stolen tasks, oldest-first; the
 	// newest of the stolen batch was returned directly instead.
 	dstGot := drainLocal(dst)
-
 	wantDst := make([]int, take-1)
 	for i := range wantDst {
 		wantDst[i] = i
 	}
-
 	assertIntsEqual(t, dstGot, wantDst)
 }
 
 func TestLocal_MoveTo_Odd(t *testing.T) {
-	src := newTestLocal()
-	dst := newTestLocal()
-	e := newElastic[int]()
-
 	const n = 101
-
-	for i := range n {
-		src.Push(i, e)
-	}
-
 	// take = ceil(101/2) = 51. One (the newest of the stolen batch) is
 	// returned directly, the other 50 (older) are published into dst.
 	const take = n - n/2 // 51
 
+	src := newTestLocal()
+	dst := newTestLocal()
+	e := newElastic[int]()
+	for i := range n {
+		src.Push(i, e)
+	}
+
 	stolen, ok := src.MoveTo(dst)
 	require.True(t, ok, "MoveTo() returned ok=false")
 	require.Equal(t, take-1, stolen, "returned task")
-
 	require.Equal(t, n-take, src.Len(), "src Len()")
 	require.Equal(t, take-1, dst.Len(), "dst Len()")
 
 	srcGot := drainLocal(src)
 	dstGot := drainLocal(dst)
-
 	wantSrc := make([]int, n-take)
 	for i := range wantSrc {
 		wantSrc[i] = take + i
@@ -388,21 +343,21 @@ func TestLocal_MoveTo_Odd(t *testing.T) {
 	for i := range wantDst {
 		wantDst[i] = i
 	}
-
 	assertIntsEqual(t, srcGot, wantSrc)
 	assertIntsEqual(t, dstGot, wantDst)
 }
 
 func TestLocal_MoveTo_Repeated(t *testing.T) {
-	src := newTestLocal()
-	dst := newTestLocal()
-	e := newElastic[int]()
+	var (
+		stolen []int
+		src    = newTestLocal()
+		dst    = newTestLocal()
+		e      = newElastic[int]()
+	)
 
 	for i := range 128 {
 		src.Push(i, e)
 	}
-
-	var stolen []int
 
 	for {
 		item, ok := src.MoveTo(dst)
@@ -411,7 +366,6 @@ func TestLocal_MoveTo_Repeated(t *testing.T) {
 		}
 
 		stolen = append(stolen, item)
-
 		// The destination can fill up. Drain it as its owner would —
 		// and record what comes out, so this test can still account
 		// for every task if a future change makes this loop actually
@@ -427,7 +381,6 @@ func TestLocal_MoveTo_Repeated(t *testing.T) {
 	// check would miss a duplicate silently masking a lost item.
 	all := append(stolen, drainLocal(src)...)
 	all = append(all, drainLocal(dst)...)
-
 	assertPermutation(t, all, 128)
 }
 
@@ -436,13 +389,13 @@ func TestLocal_MoveTo_Repeated(t *testing.T) {
 // --------------------------
 
 func TestLocal_Randomized(t *testing.T) {
-	l := newTestLocal()
-	e := newElastic[int]()
-
-	rng := rand.New(rand.NewSource(1))
-
-	var expected []int
-	nextID := 0
+	var (
+		expected []int
+		l        = newTestLocal()
+		e        = newElastic[int]()
+		rng      = rand.New(rand.NewSource(1))
+		nextID   = 0
+	)
 
 	for step := range 100_000 {
 		switch rng.Intn(3) {
@@ -457,15 +410,12 @@ func TestLocal_Randomized(t *testing.T) {
 
 		case 1:
 			got, ok := l.Pop()
-
 			if len(expected) == 0 {
 				require.Falsef(t, ok, "step %d: Pop() succeeded on empty queue", step)
 				continue
 			}
-
 			require.Truef(t, ok, "step %d: Pop() failed, expected %d", step, expected[0])
 			require.Equalf(t, expected[0], got, "step %d", step)
-
 			expected = expected[1:]
 
 		case 2:
@@ -492,33 +442,35 @@ func TestLocal_ConcurrentSteal(t *testing.T) {
 		thieves   = 8
 	)
 
-	src := newTestLocal()
-	e := newElastic[int]()
+	var (
+		e    = newElastic[int]()
+		src  = newTestLocal()
+		dsts = make([]*local[int], thieves)
+	)
 
 	for i := range itemCount {
 		src.Push(i, e)
 	}
-
-	dsts := make([]*local[int], thieves)
 	for i := range dsts {
 		dsts[i] = newTestLocal()
 	}
 
 	// Each goroutine only appends to its own slice, so no locking is
 	// needed here — the slices are merged after wg.Wait().
-	consumed := make([][]int, thieves)
-
-	var wg sync.WaitGroup
+	var (
+		consumed = make([][]int, thieves)
+		wg       sync.WaitGroup
+	)
 	wg.Add(thieves)
-
 	for i := range thieves {
 		j := i
 		go func() {
 			defer wg.Done()
 
-			dst := dsts[j]
-			var mine []int
-
+			var (
+				dst  = dsts[j]
+				mine []int
+			)
 			for {
 				item, ok := src.MoveTo(dst)
 				if !ok {
@@ -530,12 +482,10 @@ func TestLocal_ConcurrentSteal(t *testing.T) {
 					if src.Len() == 0 {
 						break
 					}
-
 					continue
 				}
 
 				mine = append(mine, item)
-
 				// Drain destination periodically, as the owner would —
 				// and, unlike a real worker executing the task, record
 				// what comes out so this test can account for it.
@@ -551,20 +501,16 @@ func TestLocal_ConcurrentSteal(t *testing.T) {
 			consumed[j] = mine
 		}()
 	}
-
 	wg.Wait()
 
 	// Drain everything that remains.
 	all := drainLocal(src)
-
 	for _, mine := range consumed {
 		all = append(all, mine...)
 	}
-
 	for _, dst := range dsts {
 		all = append(all, drainLocal(dst)...)
 	}
-
 	assertPermutation(t, all, itemCount)
 }
 
@@ -572,16 +518,12 @@ func assertPermutation(t *testing.T, got []int, n int) {
 	t.Helper()
 
 	require.Len(t, got, n)
-
 	seen := make([]bool, n)
-
 	for _, v := range got {
 		require.Truef(t, v >= 0 && v < n, "invalid item %d", v)
 		require.Falsef(t, seen[v], "duplicate item %d", v)
-
 		seen[v] = true
 	}
-
 	for i, ok := range seen {
 		require.Truef(t, ok, "missing item %d", i)
 	}
@@ -602,26 +544,22 @@ func TestLocal_ConcurrentStealStress(t *testing.T) {
 	)
 
 	for iteration := range iterations {
-		src := newTestLocal()
-		e := newElastic[int]()
-
-		for i := range capacity {
-			src.Push(i, e)
-		}
-
-		dsts := make([]*local[int], thieves)
-		for i := range dsts {
-			dsts[i] = newTestLocal()
-		}
-
 		var (
+			e        = newElastic[int]()
+			src      = newTestLocal()
+			dsts     = make([]*local[int], thieves)
 			wg       sync.WaitGroup
 			returned atomic.Int64
 			seen     = make([]atomic.Uint32, capacity)
 		)
+		for i := range capacity {
+			src.Push(i, e)
+		}
+		for i := range dsts {
+			dsts[i] = newTestLocal()
+		}
 
 		wg.Add(thieves)
-
 		for i := range thieves {
 			j := i
 
@@ -631,7 +569,6 @@ func TestLocal_ConcurrentStealStress(t *testing.T) {
 				dst := dsts[j]
 				for range 10_000 {
 					item, ok := src.MoveTo(dst)
-
 					if ok {
 						if !assert.Truef(t, item >= 0 && item < capacity, "invalid stolen item %d", item) {
 							return
@@ -644,11 +581,10 @@ func TestLocal_ConcurrentStealStress(t *testing.T) {
 
 					// Drain destination.
 					for {
-						item, ok := dst.Pop()
+						item, ok = dst.Pop()
 						if !ok {
 							break
 						}
-
 						if !assert.Truef(t, item >= 0 && item < capacity, "invalid destination item %d", item) {
 							return
 						}
@@ -662,7 +598,6 @@ func TestLocal_ConcurrentStealStress(t *testing.T) {
 				}
 			}()
 		}
-
 		wg.Wait()
 
 		// Drain source and destinations after all stealers stop.
@@ -692,8 +627,7 @@ func TestLocal_ConcurrentStealStress(t *testing.T) {
 				t,
 				uint32(1),
 				count,
-				"iteration=%d item=%d seen=%d times; want exactly once",
-				iteration, item, count,
+				"iteration=%d item=%d seen=%d times; want exactly once", iteration, item, count,
 			)
 		}
 	}
@@ -712,29 +646,24 @@ func TestLocal_ConcurrentStealAndPop(t *testing.T) {
 		thieves   = 8
 	)
 
-	src := newTestLocal()
-	e := newElastic[int]()
-
+	var (
+		e       = newElastic[int]()
+		src     = newTestLocal()
+		dsts    = make([]*local[int], thieves)
+		wg      sync.WaitGroup
+		seen    = make([]atomic.Uint32, itemCount)
+		consume = func(item int) {
+			if !assert.Truef(t, item >= 0 && item < itemCount, "invalid item %d", item) {
+				return
+			}
+			seen[item].Add(1)
+		}
+	)
 	for i := range itemCount {
 		src.Push(i, e)
 	}
-
-	dsts := make([]*local[int], thieves)
 	for i := range dsts {
 		dsts[i] = newTestLocal()
-	}
-
-	var (
-		wg   sync.WaitGroup
-		seen = make([]atomic.Uint32, itemCount)
-	)
-
-	consume := func(item int) {
-		if !assert.Truef(t, item >= 0 && item < itemCount, "invalid item %d", item) {
-			return
-		}
-
-		seen[item].Add(1)
 	}
 
 	// Owner pops concurrently with thieves.
@@ -754,7 +683,6 @@ func TestLocal_ConcurrentStealAndPop(t *testing.T) {
 
 	for i := range thieves {
 		j := i
-
 		wg.Go(func() {
 			dst := dsts[j]
 			for {
@@ -766,7 +694,7 @@ func TestLocal_ConcurrentStealAndPop(t *testing.T) {
 
 				// Execute tasks already transferred to our local queue.
 				for {
-					item, ok := dst.Pop()
+					item, ok = dst.Pop()
 					if !ok {
 						break
 					}
@@ -780,7 +708,6 @@ func TestLocal_ConcurrentStealAndPop(t *testing.T) {
 			}
 		})
 	}
-
 	wg.Wait()
 
 	for _, dst := range dsts {
@@ -792,7 +719,6 @@ func TestLocal_ConcurrentStealAndPop(t *testing.T) {
 			consume(item)
 		}
 	}
-
 	for i := range itemCount {
 		got := seen[i].Load()
 		require.Equalf(t, uint32(1), got, "item %d seen %d times, want exactly once", i, got)
@@ -816,37 +742,34 @@ func TestLocal_MixedStress(t *testing.T) {
 	)
 
 	for round := range rounds {
-		src := newTestLocal()
-		e := newElastic[int]()
+		var (
+			wg      sync.WaitGroup
+			seen    [capacity]atomic.Uint32
+			e       = newElastic[int]()
+			n       = 32 + round%128
+			src     = newTestLocal()
+			dsts    = make([]*local[int], thieves)
+			consume = func(v int) {
+				if !assert.Truef(t, v >= 0 && v < n, "round=%d invalid value=%d n=%d", round, v, n) {
+					return
+				}
+				seen[v].Add(1)
+			}
+		)
 
 		// Keep the queue below capacity so Push doesn't enter the elastic
 		// overflow path. Overflow gets its own test because elastic is an
 		// external dependency of local.
-		n := 32 + round%128
 
 		for i := range n {
 			src.Push(i, e)
 		}
-
-		dsts := make([]*local[int], thieves)
 		for i := range dsts {
 			dsts[i] = newTestLocal()
 		}
 
-		var wg sync.WaitGroup
-
-		var seen [capacity]atomic.Uint32
-
-		consume := func(v int) {
-			if !assert.Truef(t, v >= 0 && v < n, "round=%d invalid value=%d n=%d", round, v, n) {
-				return
-			}
-			seen[v].Add(1)
-		}
-
 		for i := range thieves {
 			j := i
-
 			wg.Go(func() {
 				dst := dsts[j]
 				for {
@@ -858,7 +781,7 @@ func TestLocal_MixedStress(t *testing.T) {
 
 					// Consume tasks transferred to this worker.
 					for {
-						item, ok := dst.Pop()
+						item, ok = dst.Pop()
 						if !ok {
 							break
 						}
@@ -872,7 +795,6 @@ func TestLocal_MixedStress(t *testing.T) {
 				}
 			})
 		}
-
 		wg.Wait()
 
 		// Final drains.
@@ -883,7 +805,6 @@ func TestLocal_MixedStress(t *testing.T) {
 			}
 			consume(item)
 		}
-
 		for _, dst := range dsts {
 			for {
 				item, ok := dst.Pop()
@@ -893,7 +814,6 @@ func TestLocal_MixedStress(t *testing.T) {
 				consume(item)
 			}
 		}
-
 		for i := range n {
 			got := seen[i].Load()
 			require.Equalf(t, uint32(1), got, "round=%d item=%d seen=%d times; want 1", round, i, got)
@@ -946,7 +866,6 @@ func TestLocal_PushOverflow_AfterWrapAround(t *testing.T) {
 	for i := range capacity / 2 {
 		l.Push(i, e)
 	}
-
 	for i := range capacity / 2 {
 		got, ok := l.Pop()
 		require.Truef(t, ok, "Pop() failed at %d", i)
@@ -985,17 +904,15 @@ func TestLocal_PushOverflow_AfterWrapAround(t *testing.T) {
 }
 
 func TestLocal_RefillFromOverflow(t *testing.T) {
-	l := newTestLocal()
-	e := newElastic[int]()
-
 	const n = capacity / 2
 
+	l := newTestLocal()
 	items := make([]int, n)
-
 	for i := range items {
 		items[i] = i
 	}
 
+	e := newElastic[int]()
 	e.PushBatch(items)
 	require.Equal(t, capacity, l.RemainingSlots(), "initial RemainingSlots()")
 
@@ -1014,20 +931,19 @@ func TestLocal_RefillFromOverflow(t *testing.T) {
 }
 
 func TestLocal_OverflowRoundTrip(t *testing.T) {
-	l := newTestLocal()
-	e := newElastic[int]()
-
 	const n = capacity * 4
 
+	var (
+		all []int
+		l   = newTestLocal()
+		e   = newElastic[int]()
+	)
 	for i := range n {
 		l.Push(i, e)
 	}
 
-	var all []int
-
 	// Drain local.
 	all = append(all, drainLocal(l)...)
-
 	// Drain overflow.
 	all = append(all, popAllElastic(e)...)
 
@@ -1052,30 +968,28 @@ func TestLocal_ConcurrentStealOverflow(t *testing.T) {
 		items   = capacity * 16
 	)
 
-	overflow := newElastic[int]()
-	src := newTestLocal()
+	var (
+		wg       sync.WaitGroup
+		overflow = newElastic[int]()
+		src      = newTestLocal()
+		dsts     = make([]*local[int], thieves)
+		seen     = make([]atomic.Uint32, items)
+		consume  = func(v int) {
+			if !assert.Truef(t, v >= 0 && v < items, "invalid item %d", v) {
+				return
+			}
+			seen[v].Add(1)
+		}
+	)
 
 	for i := range items {
 		src.Push(i, overflow)
 	}
-
-	dsts := make([]*local[int], thieves)
 	for i := range dsts {
 		dsts[i] = newTestLocal()
 	}
 
-	seen := make([]atomic.Uint32, items)
-	var wg sync.WaitGroup
-
-	consume := func(v int) {
-		if !assert.Truef(t, v >= 0 && v < items, "invalid item %d", v) {
-			return
-		}
-		seen[v].Add(1)
-	}
-
 	wg.Add(thieves)
-
 	for i := range thieves {
 		j := i
 
@@ -1091,7 +1005,7 @@ func TestLocal_ConcurrentStealOverflow(t *testing.T) {
 				}
 
 				for {
-					item, ok := dst.Pop()
+					item, ok = dst.Pop()
 					if !ok {
 						break
 					}
@@ -1105,7 +1019,6 @@ func TestLocal_ConcurrentStealOverflow(t *testing.T) {
 			}
 		}()
 	}
-
 	wg.Wait()
 
 	// Drain everything remaining.
@@ -1116,7 +1029,6 @@ func TestLocal_ConcurrentStealOverflow(t *testing.T) {
 		}
 		consume(item)
 	}
-
 	for _, dst := range dsts {
 		for {
 			item, ok := dst.Pop()
@@ -1131,7 +1043,6 @@ func TestLocal_ConcurrentStealOverflow(t *testing.T) {
 	for _, item := range popAllElastic(overflow) {
 		consume(item)
 	}
-
 	for i := range items {
 		got := seen[i].Load()
 		require.Equalf(t, uint32(1), got, "item %d seen %d times, want exactly once", i, got)
@@ -1139,9 +1050,10 @@ func TestLocal_ConcurrentStealOverflow(t *testing.T) {
 }
 
 func TestLocal_CacheRemapIsPermutation(t *testing.T) {
-	l := newTestLocal()
-
-	seen := make([]bool, capacity)
+	var (
+		l    = newTestLocal()
+		seen = make([]bool, capacity)
+	)
 
 	for i := range uint32(capacity) {
 		idx := cpu.CacheRemap(
@@ -1149,13 +1061,10 @@ func TestLocal_CacheRemapIsPermutation(t *testing.T) {
 			capacity,
 			l.entrySize,
 		)
-
 		require.Lessf(t, idx, uint32(capacity), "CacheRemap(%d) outside [0,%d)", i, capacity)
 		require.Falsef(t, seen[idx], "CacheRemap is not injective: physical index %d mapped twice", idx)
-
 		seen[idx] = true
 	}
-
 	for i, ok := range seen {
 		require.Truef(t, ok, "physical index %d is never mapped", i)
 	}

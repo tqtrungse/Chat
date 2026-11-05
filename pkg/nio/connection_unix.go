@@ -3,20 +3,7 @@
 /*
  * Copyright (c) 2019 The Gnet Authors. All rights reserved.
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Modified from the original gnet source by tqtrungse@gmail.com in 2026.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package nio
@@ -29,13 +16,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"xxx/pkg/bs"
 	"xxx/pkg/buffer"
 	errorx "xxx/pkg/nio/error"
 	nio "xxx/pkg/nio/io"
 	"xxx/pkg/nio/netpoll"
 	"xxx/pkg/nio/queue"
 	"xxx/pkg/nio/socket"
+
 	slicepool "xxx/pkg/pool/slice"
 
 	"golang.org/x/sys/unix"
@@ -149,8 +136,7 @@ func (c *conn) Peek(n int) (buf []byte, err error) {
 
 func (c *conn) Discard(n int) (int, error) {
 	if len(c.cache) > 0 {
-		clear(c.cache[:cap(c.cache)])
-		slicepool.Put(c.cache)
+		slicepool.PutZeroed(c.cache)
 		c.cache = nil
 	}
 
@@ -401,18 +387,6 @@ func (c *conn) release() {
 	c.isEOF = false
 	c.ctx.Store(nil)
 	c.buffer = nil
-	if addr, ok := c.localAddr.(*net.TCPAddr); ok && c.loop.listeners.Len() == 0 && len(addr.Zone) > 0 {
-		slicepool.Put(bs.StringToBytes(addr.Zone))
-	}
-	if addr, ok := c.remoteAddr.(*net.TCPAddr); ok && len(addr.Zone) > 0 {
-		slicepool.Put(bs.StringToBytes(addr.Zone))
-	}
-	if addr, ok := c.localAddr.(*net.UDPAddr); ok && c.loop.listeners.Len() == 0 && len(addr.Zone) > 0 {
-		slicepool.Put(bs.StringToBytes(addr.Zone))
-	}
-	if addr, ok := c.remoteAddr.(*net.UDPAddr); ok && len(addr.Zone) > 0 {
-		slicepool.Put(bs.StringToBytes(addr.Zone))
-	}
 	c.localAddr = nil
 	c.remoteAddr = nil
 	if !c.isDatagram {

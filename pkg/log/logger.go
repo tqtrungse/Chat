@@ -1,164 +1,211 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package log
 
 import (
-	"errors"
+	"io"
 	"os"
 	"sync"
-	"syscall"
 	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"golang.org/x/term"
-	"gopkg.in/natefinch/lumberjack.v2"
+
+	// logzapcore is a partial fork of zapcore. It gives the encoder and the
+	// core that move the buffer of the encoder to the sink, with no copy.
+	// Each other part of zap and zapcore comes from upstream. See
+	// zap/FORK.md.
+	logzapcore "xxx/pkg/log/zap/zapcore"
 )
 
-type Logger struct {
-	logger         *zap.Logger
-	bufferedSyncer *zapcore.BufferedWriteSyncer
-	lumberjack     *lumberjack.Logger
-	atomicLevel    zap.AtomicLevel
-
-	// closeOnce makes Close idempotent and safe to call concurrently.
-	//
-	// This is important because shutting down BufferedWriteSyncer stops its
-	// background flushing goroutine and closes the logger's underlying
-	// resources. Those operations should happen exactly once.
-	closeOnce sync.Once
-	closeErr  error
+// shutdown holds the state that a root Logger and each Logger from that root
+// share. Therefore, each derived Logger writes to the same sink, and one
+// shutdown stops all of them.
+type shutdown struct {
+	once sync.Once
+	err  error
 }
 
-// NewLogger constructs a Logger.
+type Logger struct {
+	logger      *zap.Logger
+	sink        *asyncSink
+	atomicLevel zap.AtomicLevel
+	shutdown    *shutdown
+}
+
+// NewLogger makes a Logger that writes JSON entries to stdout through an
+// asynchronous sink. A zero Config gives each default value.
 //
-// Log entries are buffered in memory (see FileConfig.BufferSize and
-// FileConfig.FlushInterval). Error and higher levels flush immediately,
-// including any earlier buffered entries. Other entries reach the writer
-// after a successful call to Sync or closeFn. If the process exits without
-// calling one of them — e.g. it is killed, panics outside of this logger,
-// or the machine loses power — any buffered-but-not-yet-flushed log entries
-// are lost. Callers should call closeFn (or Sync, for a periodic/graceful
-// flush without shutting the logger down) during normal shutdown, and
-// ideally also from a signal handler (SIGTERM/SIGINT) so logs are not lost
-// when the process is asked to stop.
+// The logger encodes an entry on the goroutine of the caller. Then it sends
+// the entry to one writer goroutine through a queue of a fixed size. A log
+// call costs one copy and one channel send, and the call does not wait for
+// stdout. If the queue is full, the sink discards the entries and counts
+// them, and the caller does not wait. The sink writes the count in the
+// stream, and Dropped gives the same count. In a container, stdout is a pipe
+// to the log collector. Without this design, a slow collector stops the
+// goroutine that wrote the log.
 //
-// closeFn func flushes pending log entries, stops the buffered writer's background
-// goroutine, and closes the underlying rotating file when file logging is
-// enabled.
+// The sampler applies only to the levels below Error. It keeps
+// Config.SampleFirst entries with the same message in each second. After
+// that, it keeps one entry in Config.SampleThereafter entries. The sampler
+// uses the message as its key. Therefore, each message must be constant, and
+// each variable part must be a field.
 //
-// Because lower-severity log entries are buffered until Sync or closeFn runs,
-// callers MUST call closeFn during shutdown — or logs written shortly before
-// exit can be silently lost. Prefer calling it via defer closeFn() right after
-// construction, and also from a signal handler for processes that may be stopped
-// externally.
+// The sampler does not apply to Error, but the queue does. If the queue is
+// full, the sink discards each level, and this includes Error. A reserve of
+// space for each level is not possible. With such a reserve, the sink could
+// write an Error before an Info from an earlier time. The sampler is the
+// protection that keeps the queue from a full condition.
 //
-// closeFn is idempotent and concurrency-safe. Subsequent calls return the same
-// result produced by the first shutdown attempt.
-func NewLogger(cfg *FileConfig) (l *Logger, closeFn func() error) {
+// NewLogger copies cfg and puts the default value in each field that is not
+// set. Therefore, a call to LoadConfig before NewLogger is not necessary,
+// and NewLogger does not change the Config of the caller.
+//
+// If the process exits before closeFn, the sink loses each entry in the
+// buffer. A SIGKILL, an out-of-memory condition and a fatal error of the
+// runtime cause such an exit. Config.FlushInterval limits this loss. Sync
+// empties the sink, and zap calls Sync for DPanic and the levels above
+// DPanic. Therefore, stdout shows the entry that explains a Fatal before the
+// process exits.
+//
+// The sink reports each failure one time on stderr. It does not use the
+// logger, because the logger cannot write a report about its own stream. A
+// later call to Sync or closeFn returns that failure.
+//
+// Call closeFn at a normal shutdown, after each goroutine that writes logs
+// stops. closeFn empties the queue, flushes, and stops the writer goroutine.
+// A second call gives the result of the first call, and concurrent calls are
+// safe. Do not write a log after closeFn. Write accepts the entry, but the
+// sink does not write it.
+func NewLogger(cfg Config) (l *Logger, closeFn func() error, err error) {
+	return newLogger(&cfg, os.Stdout, os.Stderr, time.Now)
+}
+
+// newLogger is NewLogger with the destination, the diagnostics writer and
+// the clock as parameters. A test can then read the output and control the
+// drop notices.
+func newLogger(
+	cfg *Config,
+	dst io.Writer,
+	diagnostics io.Writer,
+	now func() time.Time,
+) (l *Logger, closeFn func() error, err error) {
+	cfg.applyDefault()
+
+	err = cfg.validate()
+	if err != nil {
+		return nil, nil, err
+	}
+
 	l = &Logger{
-		// AtomicLevel allows the minimum log level to be changed dynamically
-		// without rebuilding the logger or introducing data races.
+		// AtomicLevel allows a change of the minimum level at run time. The
+		// logger needs no rebuild, and the change makes no data race.
 		atomicLevel: zap.NewAtomicLevelAt(zap.InfoLevel),
+		shutdown:    &shutdown{},
 	}
-
-	var (
-		sink          zapcore.WriteSyncer
-		bufferSize    int
-		flushInterval time.Duration
-	)
-
-	if cfg != nil {
-		if cfg.BufferSize > 0 {
-			bufferSize = cfg.BufferSize
-		}
-		if cfg.FlushInterval > 0 {
-			flushInterval = cfg.FlushInterval
-		}
-		// Lumberjack owns log rotation and retention. BufferedWriteSyncer is
-		// layered on top of it to reduce the number of writes to the file.
-		l.lumberjack = &lumberjack.Logger{
-			Filename:   cfg.Filename,
-			MaxSize:    cfg.MaxSize,
-			MaxBackups: cfg.MaxBackups,
-			MaxAge:     cfg.MaxAge,
-			Compress:   cfg.Compress,
-		}
-		sink = zapcore.AddSync(l.lumberjack)
-	} else {
-		ws := zapcore.AddSync(os.Stdout)
-		if term.IsTerminal(int(os.Stdout.Fd())) {
-			ws = noSyncWriteSyncer{ws}
-		}
-		sink = ws
-	}
-
-	// Always keep a reference to BufferedWriteSyncer, regardless of whether
-	// the destination is stdout or a file. This gives both modes the same
-	// shutdown lifecycle: Stop() can flush pending data and stop the internal
-	// background flushing goroutine.
-	l.bufferedSyncer = &zapcore.BufferedWriteSyncer{
-		WS:            sink,
-		Size:          bufferSize,
-		FlushInterval: flushInterval,
-	}
+	l.sink = newAsyncSink(cfg, dst, diagnostics, now)
 
 	encoderConfig := zap.NewProductionEncoderConfig()
 	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	encoder := logzapcore.NewJSONEncoder(encoderConfig)
 
-	core := zapcore.NewCore(
-		zapcore.NewJSONEncoder(encoderConfig),
-		l.bufferedSyncer,
-		l.atomicLevel,
+	// lowCore applies for Debug (-1), Info (0), Warn (1).
+	// lowCore passes through a sampling if configured.
+	lowCore := logzapcore.NewCore(
+		encoder,
+		l.sink,
+		zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
+			return l.atomicLevel.Enabled(lvl) && lvl < zapcore.ErrorLevel
+		}),
+	)
+	if !cfg.DisableSampling {
+		lowCore = zapcore.NewSamplerWithOptions(
+			lowCore,
+			time.Second,
+			cfg.SampleFirst,
+			cfg.SampleThereafter,
+		)
+	}
+
+	// highCore applies for Error (2), DPanic (3), Panic (4), Fatal (5).
+	// highCore has no sampler. Therefore, it writes every entry, and it
+	// ignores none.
+	highCore := logzapcore.NewCore(
+		encoder,
+		l.sink,
+		zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
+			return l.atomicLevel.Enabled(lvl) && lvl >= zapcore.ErrorLevel
+		}),
 	)
 
 	l.logger = zap.New(
-		core,
+		zapcore.NewTee(lowCore, highCore),
 
-		// Hooks run after the entry is written and before zap's panic/exit
-		// action, so Panic and Fatal also flush the buffered diagnostics.
-		zap.Hooks(func(entry zapcore.Entry) error {
-			if entry.Level >= zapcore.DPanicLevel {
-				return l.Sync()
-			}
-			return nil
-		}),
-
-		// Include the source file and line number of each log call.
+		// Add the file and the line number of each log call.
 		zap.AddCaller(),
 
-		// Skip Logger.Info/Debug/etc. so the reported caller is the code that
-		// invoked this Logger wrapper rather than the wrapper method itself.
+		// The log shows the file name and line number of the code that calls the wrapper function.
+		// The log does not show the file name and line number of the wrapper function itself.
 		zap.AddCallerSkip(1),
+
+		// Keep the diagnostics of zap out of the log stream and out of the
+		// sink.
+		zap.ErrorOutput(zapcore.Lock(zapcore.AddSync(diagnostics))),
 	)
-	return l, l.close
+	return l, l.close, nil
 }
 
-// SetLevel dynamically changes the minimum log level.
+// Component gives a Logger that adds the field component=name to each entry
+// and removes the caller field.
 //
-// AtomicLevel is concurrency-safe, so this method may be called while other
-// goroutines are writing logs.
+// Use Component to send the logs of a library to this logger. The caller of
+// such an entry is in that library, some frames deep, and the depth is not
+// constant. Therefore, the caller field would show the bridge and nothing
+// useful.
+//
+// The new Logger shares the sink and the shutdown of this Logger. A close of
+// one Logger closes both. Do not close a component Logger separately.
+func (l *Logger) Component(name string) *Logger {
+	return &Logger{
+		logger:      l.logger.WithOptions(zap.WithCaller(false)).With(zap.String("component", name)),
+		sink:        l.sink,
+		atomicLevel: l.atomicLevel,
+		shutdown:    l.shutdown,
+	}
+}
+
+// With gives a Logger that adds fields to each entry. The new Logger shares
+// the sink and the shutdown of this Logger.
+func (l *Logger) With(fields ...zap.Field) *Logger {
+	return &Logger{
+		logger:      l.logger.With(fields...),
+		sink:        l.sink,
+		atomicLevel: l.atomicLevel,
+		shutdown:    l.shutdown,
+	}
+}
+
+// SetLevel changes the minimum log level at run time.
+//
+// AtomicLevel is safe for concurrent use. Therefore, a call to SetLevel is
+// possible while other goroutines write logs.
 func (l *Logger) SetLevel(level zapcore.Level) {
 	l.atomicLevel.SetLevel(level)
 }
 
-// GetLevel returns the currently configured minimum log level.
+// GetLevel gives the minimum log level of this Logger.
 func (l *Logger) GetLevel() zapcore.Level {
 	return l.atomicLevel.Level()
+}
+
+// Dropped gives the number of entries that the sink discarded because its
+// queue was full. Export this number as a metric. A value that increases
+// shows that the log stream loses data.
+func (l *Logger) Dropped() uint64 {
+	return l.sink.Dropped()
 }
 
 func (l *Logger) Debug(msg string, fields ...zap.Field) {
@@ -189,75 +236,19 @@ func (l *Logger) Fatal(msg string, fields ...zap.Field) {
 	l.logger.Fatal(msg, fields...)
 }
 
-// Sync flushes any buffered log entries to the underlying writer (the log
-// file, or stdout when file logging is not configured).
+// Sync writes each entry that is in the queue and flushes it to stdout.
 //
-// Unlike Close, Sync does not stop the buffered writer's background
-// flushing goroutine or release any resources, so the Logger remains fully
-// usable afterward. Call Sync when you want a flush point without ending
-// the logger's lifecycle — e.g. periodically, or on a non-fatal signal —
-// and reserve Close for final shutdown.
-//
-// Errors returned when syncing a non-seekable descriptor such as stdout
-// (e.g. ENOTTY/EINVAL) are not treated as failures; see isUnsyncable.
+// Sync does not stop the writer goroutine, but closeFn stops it. Therefore,
+// the Logger stays usable after Sync. Sync returns the first write failure
+// of the sink. It returns ErrSyncTimeout if the writer goroutine did not
+// empty the queue before Config.SyncTimeout.
 func (l *Logger) Sync() error {
-	if err := l.bufferedSyncer.Sync(); err != nil && !isUnsyncable(err) {
-		return err
-	}
-	return nil
+	return l.sink.Sync()
 }
 
 func (l *Logger) close() error {
-	l.closeOnce.Do(func() {
-		var errs []error
-
-		// Stop is preferred for shutdown over Sync alone.
-		//
-		// Sync flushes the current buffer, but Stop also terminates the
-		// BufferedWriteSyncer's background flushing goroutine. Since this
-		// is the final lifecycle operation for the buffered writer, Stop
-		// ensures that both responsibilities are completed.
-		if l.bufferedSyncer != nil {
-			if err := l.bufferedSyncer.Stop(); err != nil &&
-				!isUnsyncable(err) {
-				errs = append(errs, err)
-			}
-		}
-
-		// Stop has already flushed buffered data before the underlying
-		// lumberjack writer is closed, so no buffered writes should remain.
-		if l.lumberjack != nil {
-			if err := l.lumberjack.Close(); err != nil {
-				errs = append(errs, err)
-			}
-		}
-
-		// Preserve all shutdown errors instead of returning only the first one.
-		l.closeErr = errors.Join(errs...)
+	l.shutdown.once.Do(func() {
+		l.shutdown.err = l.sink.Stop()
 	})
-	return l.closeErr
-}
-
-// noSyncWriteSyncer wraps a WriteSyncer whose Sync should be a no-op —
-// typically because the underlying descriptor is a terminal, where
-// fsync-style semantics don't apply and the OS's error code for a failed
-// flush attempt is platform-specific (EINVAL/ENOTTY on Unix,
-// ERROR_INVALID_HANDLE on Windows, etc.). Skipping the syscall entirely
-// avoids depending on an exhaustive, per-platform errno list.
-type noSyncWriteSyncer struct {
-	zapcore.WriteSyncer
-}
-
-func (noSyncWriteSyncer) Sync() error { return nil }
-
-// isUnsyncable reports whether err is one of the well-known errors returned
-// when syncing a non-seekable file descriptor such as stdout or stderr.
-//
-// On some platforms, calling fsync-like operations on streams can return
-// ENOTTY or EINVAL. Those errors do not indicate that buffered log data was
-// lost, so they are intentionally ignored during shutdown.
-func isUnsyncable(err error) bool {
-	return errors.Is(err, syscall.EINVAL) ||
-		errors.Is(err, syscall.ENOTTY) ||
-		errors.Is(err, syscall.EBADF)
+	return l.shutdown.err
 }

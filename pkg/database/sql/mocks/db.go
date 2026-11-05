@@ -34,13 +34,13 @@ func Setup(t *testing.T, db sql.DB) {
 		},
 	}
 
-	err := db.Open(t.Context(), testConfig)
+	closeDB, err := db.Open(t.Context(), testConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	t.Cleanup(func() {
-		err = db.Close()
+		err := closeDB()
 		if err != nil {
 			t.Fatal(err)
 		}

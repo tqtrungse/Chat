@@ -1,30 +1,18 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package worker
 
 import (
 	"errors"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 
-	"xxx/pkg/backoff"
 	"xxx/pkg/cpu"
+	"xxx/pkg/log"
 	"xxx/pkg/os"
 )
 
@@ -41,11 +29,12 @@ const closedBit = uint64(1) << 63
 // (shared unbounded injection queue — elastic_queue.go)
 type Pool struct {
 	panicHandler        func(workerID int, recovered any, stack []byte)
+	logger              *log.Logger
 	workers             []*worker
 	global              *elastic[Task]
 	globalCheckInterval uint32
 	globalBatchSize     uint32
-	_                   [cpu.CacheLineSize - 2*os.PtrSize - unsafe.Sizeof([]*worker{}) - 8]byte
+	_                   [cpu.CacheLineSize - 3*os.PtrSize - unsafe.Sizeof([]*worker{}) - 8]byte
 
 	// The closed bit and number of active Submit calls share one word so
 	// admission cannot race shutdown's check for outstanding submitters.
@@ -61,10 +50,17 @@ type Pool struct {
 }
 
 // New creates a worker pool.
+// New applies defaults to a copy of cfg. Thus a call to LoadConfig before New
+// is not necessary.
 //
 // panicHandler, if non-nil, is invoked (from the recovering worker's own
-// goroutine) whenever a Task panics. If unset, panics are reported
-// via the standard log package. A panicking task never kills its worker.
+// goroutine) whenever a Task panics. With no panicHandler the pool reports
+// the panic through logger, and with neither it reports nothing at all. A
+// panicking task never kills its worker.
+//
+// logger may be nil. The pool reports through a component logger derived
+// from it, which shares the sink of logger. Therefore closeFn does not close
+// that sink: the owner of logger closes it.
 //
 // closeFn stops the pool: no Submit accepted after this call succeeds in
 // setting the closed flag, workers finish whatever is already queued,
@@ -73,20 +69,10 @@ type Pool struct {
 // complete, not just the first one in.
 func New(
 	cfg Config,
+	logger *log.Logger,
 	panicHandler func(workerID int, recovered any, stack []byte),
 ) (p *Pool, closeFn func()) {
-	if cfg.NumWorkers <= 0 {
-		cfg.NumWorkers = runtime.GOMAXPROCS(0)
-	}
-
-	if cfg.GlobalCheckInterval <= 0 {
-		cfg.GlobalCheckInterval = 64
-	}
-
-	if cfg.GlobalBatchSize <= 0 {
-		cfg.GlobalBatchSize = 32
-	}
-
+	cfg.applyDefault()
 	p = &Pool{
 		panicHandler:        panicHandler,
 		global:              newElastic[Task](),
@@ -94,6 +80,12 @@ func New(
 		globalBatchSize:     uint32(cfg.GlobalBatchSize),
 		wakeCh:              make(chan struct{}, cfg.NumWorkers),
 		doneCh:              make(chan struct{}),
+	}
+	if logger != nil {
+		// The caller of a panic report is exec, always the same line, so the
+		// component logger drops the caller field. The stack field holds the
+		// line of the task that panicked.
+		p.logger = logger.Component("worker")
 	}
 
 	p.workers = make([]*worker, cfg.NumWorkers)
@@ -172,9 +164,9 @@ func (p *Pool) close() {
 
 	// All admitted Submit calls must finish Add/Push before Wait can
 	// observe a zero task count. No new Submit can pass the closed bit.
-	var bc backoff.Cpu
+	var contention cpu.Backoff
 	for p.submitState.Load()&^closedBit != 0 {
-		bc.Snooze()
+		contention.Snooze()
 	}
 
 	// every submitted/spawned task has actually run, not just been queued

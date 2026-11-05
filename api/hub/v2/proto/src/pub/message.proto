@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package pub;
+
+import "validate/validate.proto";
+//import "google/protobuf/timestamp.proto";
+
+option go_package = "./gen/pub";
+
+enum MsgKind {
+  UNKNOWN = 0;
+
+  REQ_AUTHENTICATE = 1;
+  REQ_SEND_MSG = 2;
+  REQ_DIRECT_FORWARD_MSG = 3;
+  REQ_BROKER_FORWARD_MSG = 4;
+  REQ_ACK_RECV_MSG = 5;
+
+  RESP_AUTHENTICATE = 505;
+  RESP_SEND_MSG = 503;
+  RESP_ACK_RECV_MSG = 504;
+}
+
+enum Code {
+  SUCCESS = 0;
+
+  ERR_PKG_INVALID_SIZE = 1; // Wrong packet size
+  ERR_PKG_MODIFIED = 2; // packet is modified
+  ERR_MSG_INVALID_TYPE = 3; // Wrong message type
+  ERR_CIPHER_INVALID_SIZE = 4; // Wrong cipher size
+  ERR_PB_INVALID_SIZE = 5; // Wrong protobuf size
+  ERR_DECRYPT = 6; // message decryption error
+  ERR_DESERIALIZE = 7; // message parsing error
+  ERR_INTERNAL = 8; // Server error
+}
+
+message NoiseServerHelloPayload {
+  bytes challenge = 1 [(validate.rules).bytes = {len: 32}];
+}
+message AuthenticateReq {
+  bytes ticket = 1 [(validate.rules).bytes = {min_len: 180, max_len: 307}];
+  bytes signature = 2 [(validate.rules).bytes = {len: 64}];
+}
+message AuthenticateResp { Code code = 1; }
+
+// All fields and the opaque E2EE expand bytes travel inside Noise transport.
+message SendMsgReq {
+  uint64 channel_id = 1 [(validate.rules).uint64.gte = 1];
+  uint64 dedup_key = 2 [(validate.rules).uint64.gte = 1];
+
+  repeated uint64 recv_device_ids = 3 [(validate.rules).repeated = {
+    min_items: 1,
+    max_items: 9,
+    unique: true,
+  }];
+}
+
+message SendMsgResp {
+  uint64 channel_id = 1;
+  uint64 msg_id = 2; // Received device will dedup key by LRU cache + DB.
+}
+
+message DirectForwardMsgReq {
+  uint64 send_device_id = 1;
+  uint64 msg_id = 2;
+  uint64 channel_id = 3;
+}
+
+message BrokerForwardMsgReq {
+  uint64 send_device_id = 1 [(validate.rules).uint64.gte = 1];
+  uint64 recv_device_id = 2 [(validate.rules).uint64.gte = 1];
+  uint64 msg_id = 3 [(validate.rules).uint64.gte = 1];
+  uint64 channel_id = 4 [(validate.rules).uint64.gte = 1];
+}
+
+message AckRecvMsgReq {
+  uint64 channel_id = 1 [(validate.rules).uint64.gte = 1];
+  uint64 msg_id = 2 [(validate.rules).uint64.gte = 1];
+}
+
+message AckRecvMsgResp {
+  Code code = 1;
+}

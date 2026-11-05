@@ -1,44 +1,33 @@
 /*
  * Copyright (c) 2026 tqtrungse@gmail.com. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package worker
 
 import (
-	"bytes"
+	"encoding/json"
 	"errors"
-	"log"
 	"math/rand/v2"
+	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"xxx/pkg/log"
+	"xxx/pkg/log/logtest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestPool_SubmitExecutesTask(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
-		nil,
-	)
-	defer closePool()
+	cfg := Config{NumWorkers: 2}
+	p, closePool := New(cfg, nil, nil)
+	t.Cleanup(closePool)
 
 	done := make(chan struct{})
 	err := p.Submit(func(ctx *Context) { close(done) })
@@ -52,15 +41,12 @@ func TestPool_SubmitExecutesTask(t *testing.T) {
 }
 
 func TestPool_SubmitMultipleTasksAllExecuteExactlyOnce(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
-		nil,
-	)
-	defer closePool()
-
 	const n = 10_000
+
+	cfg := Config{NumWorkers: 4}
+	p, closePool := New(cfg, nil, nil)
+	t.Cleanup(closePool)
+
 	var counts [n]atomic.Int32
 	for i := range n {
 		j := i
@@ -76,13 +62,9 @@ func TestPool_SubmitMultipleTasksAllExecuteExactlyOnce(t *testing.T) {
 }
 
 func TestPool_SpawnLocalChildExecutes(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
-		nil,
-	)
-	defer closePool()
+	cfg := Config{NumWorkers: 2}
+	p, closePool := New(cfg, nil, nil)
+	t.Cleanup(closePool)
 
 	childDone := make(chan struct{})
 	err := p.Submit(func(ctx *Context) {
@@ -98,18 +80,16 @@ func TestPool_SpawnLocalChildExecutes(t *testing.T) {
 }
 
 func TestPool_SpawnLocalDeepChain(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
-		nil,
-	)
-	defer closePool()
-
 	const depth = 50
-	done := make(chan struct{})
 
-	var next func(ctx *Context, remaining int)
+	cfg := Config{NumWorkers: 2}
+	p, closePool := New(cfg, nil, nil)
+	t.Cleanup(closePool)
+
+	var (
+		done = make(chan struct{})
+		next func(ctx *Context, remaining int)
+	)
 	next = func(ctx *Context, remaining int) {
 		if remaining == 0 {
 			close(done)
@@ -129,14 +109,11 @@ func TestPool_SpawnLocalDeepChain(t *testing.T) {
 }
 
 func TestPool_CloseWaitsForSpawnedDescendants(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
-		nil,
+	var (
+		leafRan      atomic.Bool
+		cfg          = Config{NumWorkers: 4}
+		p, closePool = New(cfg, nil, nil)
 	)
-
-	var leafRan atomic.Bool
 	err := p.Submit(func(ctx *Context) {
 		ctx.SpawnLocal(func(ctx *Context) {
 			ctx.SpawnLocal(func(ctx *Context) {
@@ -154,13 +131,9 @@ func TestPool_CloseWaitsForSpawnedDescendants(t *testing.T) {
 }
 
 func TestPool_PanicInTaskDoesNotStopThePool(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
-		nil,
-	)
-	defer closePool()
+	cfg := Config{NumWorkers: 2}
+	p, closePool := New(cfg, nil, nil)
+	t.Cleanup(closePool)
 
 	err := p.Submit(func(ctx *Context) { panic("boom") })
 	require.NoError(t, err)
@@ -179,15 +152,17 @@ func TestPool_PanicInTaskDoesNotStopThePool(t *testing.T) {
 }
 
 func TestPool_PanicHandlerReceivesDetails(t *testing.T) {
-	gotWorker := -1
-	var gotRecovered any
-	var gotStackLen int
-	handlerCalled := make(chan struct{})
+	var (
+		gotRecovered  any
+		gotStackLen   int
+		gotWorker     = -1
+		handlerCalled = make(chan struct{})
+	)
 
+	cfg := Config{NumWorkers: 2}
 	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
+		cfg,
+		nil,
 		func(workerID int, recovered any, stack []byte) {
 			gotWorker = workerID
 			gotRecovered = recovered
@@ -195,7 +170,7 @@ func TestPool_PanicHandlerReceivesDetails(t *testing.T) {
 			close(handlerCalled)
 		},
 	)
-	defer closePool()
+	t.Cleanup(closePool)
 
 	err := p.Submit(func(ctx *Context) { panic("boom-details") })
 	require.NoError(t, err)
@@ -213,41 +188,40 @@ func TestPool_PanicHandlerReceivesDetails(t *testing.T) {
 }
 
 func TestPool_DefaultPanicHandlerLogsWithoutCrashing(t *testing.T) {
-	var buf bytes.Buffer
-	orig := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(orig)
-
-	p, closePool := New(
-		Config{
-			NumWorkers: 1,
-		},
-		nil,
+	var (
+		logger, closeLogger, path = logtest.New(t, log.Config{})
+		cfg                       = Config{NumWorkers: 1}
+		p, closePool              = New(cfg, logger, nil)
 	)
-	defer closePool()
+
+	t.Cleanup(func() {
+		_ = closeLogger()
+		closePool()
+	})
 
 	err := p.Submit(func(ctx *Context) { panic("default-handler-boom") })
 	require.NoError(t, err)
 	// exec()'s deferred tasksWg.Done() runs strictly after the deferred
 	// recover+log, so by the time Wait() returns the log line is written.
 	p.Wait()
+	require.NoError(t, closeLogger())
 
-	require.Containsf(
-		t,
-		buf.String(),
-		"default-handler-boom",
-		"expected default log output to mention the panic value, got: %q",
-		buf.String(),
-	)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var ent map[string]any
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(string(data))), &ent))
+	require.Equal(t, "error", ent["level"])
+	require.Equal(t, "task panicked", ent["msg"])
+	require.Equal(t, "worker", ent["component"])
+	require.Equal(t, "default-handler-boom", ent["panic"])
+	require.NotEmpty(t, ent["stack"])
+	require.Equal(t, float64(0), ent["workerID"])
 }
 
 func TestPool_SubmitAfterCloseReturnsErrPoolClosed(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
-		nil,
-	)
+	cfg := Config{NumWorkers: 2}
+	p, closePool := New(cfg, nil, nil)
 	closePool()
 
 	err := p.Submit(func(ctx *Context) {})
@@ -255,24 +229,17 @@ func TestPool_SubmitAfterCloseReturnsErrPoolClosed(t *testing.T) {
 }
 
 func TestPool_CloseIsIdempotentAndAllCallersReturn(t *testing.T) {
-	_, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
-		nil,
-	)
+	cfg := Config{NumWorkers: 2}
+	_, closePool := New(cfg, nil, nil)
 	closePool()
 	closePool()
 	closePool() // must not hang or panic on repeat calls
 }
 
 func TestPool_CloseWithNoWorkReturnsPromptly(t *testing.T) {
-	_, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
-		nil,
-	)
+	cfg := Config{NumWorkers: 4}
+	_, closePool := New(cfg, nil, nil)
+
 	done := make(chan struct{})
 	go func() {
 		closePool()
@@ -286,13 +253,9 @@ func TestPool_CloseWithNoWorkReturnsPromptly(t *testing.T) {
 }
 
 func TestPool_WaitWithNoWorkReturnsImmediately(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
-		nil,
-	)
-	defer closePool()
+	cfg := Config{NumWorkers: 4}
+	p, closePool := New(cfg, nil, nil)
+	t.Cleanup(closePool)
 
 	done := make(chan struct{})
 	go func() {
@@ -307,13 +270,9 @@ func TestPool_WaitWithNoWorkReturnsImmediately(t *testing.T) {
 }
 
 func TestPool_WaitBlocksUntilTaskActuallyFinishes(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
-		nil,
-	)
-	defer closePool()
+	cfg := Config{NumWorkers: 2}
+	p, closePool := New(cfg, nil, nil)
+	t.Cleanup(closePool)
 
 	release := make(chan struct{})
 	started := make(chan struct{})
@@ -346,26 +305,18 @@ func TestPool_WaitBlocksUntilTaskActuallyFinishes(t *testing.T) {
 }
 
 func TestPool_NumWorkersMatchesRequested(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 7,
-		},
-		nil,
-	)
-	defer closePool()
+	cfg := Config{NumWorkers: 7}
+	p, closePool := New(cfg, nil, nil)
+	t.Cleanup(closePool)
 
 	got := p.NumWorkers()
 	assert.Equal(t, 7, got)
 }
 
-func TestPool_NewNonPositiveDefaultsToGOMAXPROCS(t *testing.T) {
+func TestPool_LoadNonPositiveWorkersDefaultsToGOMAXPROCS(t *testing.T) {
 	for _, n := range []int{0, -1, -100} {
-		p, closePool := New(
-			Config{
-				NumWorkers: n,
-			},
-			nil,
-		)
+		cfg := Config{NumWorkers: n}
+		p, closePool := New(cfg, nil, nil)
 		got := p.NumWorkers()
 		assert.GreaterOrEqual(t, got, 1)
 		closePool()
@@ -373,19 +324,17 @@ func TestPool_NewNonPositiveDefaultsToGOMAXPROCS(t *testing.T) {
 }
 
 func TestPool_ConcurrentSubmitFromManyGoroutines(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
-		nil,
-	)
-	defer closePool()
-
 	const producers = 32
 	const perProducer = 2000
-	var executed atomic.Int64
 
-	var wg sync.WaitGroup
+	var (
+		executed     atomic.Int64
+		wg           sync.WaitGroup
+		cfg          = Config{NumWorkers: 4}
+		p, closePool = New(cfg, nil, nil)
+	)
+
+	t.Cleanup(closePool)
 	wg.Add(producers)
 	for range producers {
 		go func() {
@@ -407,19 +356,17 @@ func TestPool_ConcurrentSubmitFromManyGoroutines(t *testing.T) {
 }
 
 func TestPool_Concurrent_SpawnLocalFromManyTasks(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
-		nil,
-	)
-	defer closePool()
-
 	const n = 5000
-	var executed atomic.Int64
-	var wg sync.WaitGroup
-	wg.Add(n * 2) // each top-level task + the one child it spawns
 
+	var (
+		executed     atomic.Int64
+		wg           sync.WaitGroup
+		cfg          = Config{NumWorkers: 4}
+		p, closePool = New(cfg, nil, nil)
+	)
+
+	t.Cleanup(closePool)
+	wg.Add(n * 2) // each top-level task + the one child it spawns
 	for range n {
 		err := p.Submit(func(ctx *Context) {
 			executed.Add(1)
@@ -446,18 +393,17 @@ func TestPool_Concurrent_SpawnLocalFromManyTasks(t *testing.T) {
 
 func TestPool_Concurrent_SubmitAndClose(t *testing.T) {
 	const rounds = 300
-	for round := range rounds {
-		p, closePool := New(
-			Config{
-				NumWorkers: 4,
-			},
-			nil,
-		)
 
-		var executed atomic.Int64
-		var accepted atomic.Int64
-		started := make(chan struct{}, 1)
-		var wg sync.WaitGroup
+	for round := range rounds {
+		cfg := Config{NumWorkers: 4}
+		p, closePool := New(cfg, nil, nil)
+
+		var (
+			started  = make(chan struct{}, 1)
+			executed atomic.Int64
+			accepted atomic.Int64
+			wg       sync.WaitGroup
+		)
 		for range 8 {
 			wg.Go(func() {
 				for range 100 {
@@ -483,13 +429,8 @@ func TestPool_Concurrent_SubmitAndClose(t *testing.T) {
 }
 
 func TestPool_Concurrent_CloseCallersAllReturn(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 3,
-		},
-		nil,
-	)
-
+	cfg := Config{NumWorkers: 3}
+	p, closePool := New(cfg, nil, nil)
 	for range 200 {
 		err := p.Submit(func(ctx *Context) {})
 		require.NoError(t, err)
@@ -515,15 +456,13 @@ func TestPool_Concurrent_CloseCallersAllReturn(t *testing.T) {
 }
 
 func TestPool_Concurrent_WaitCallersAllSeeCompletion(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
-		nil,
-	)
-	defer closePool()
-
 	const n = 3000
+	const waiters = 8
+
+	cfg := Config{NumWorkers: 4}
+	p, closePool := New(cfg, nil, nil)
+	t.Cleanup(closePool)
+
 	var executed atomic.Int64
 	// Submit everything up front, sequentially, before any Wait() call —
 	// Wait()'s documented contract only covers a fixed batch, not a
@@ -533,7 +472,6 @@ func TestPool_Concurrent_WaitCallersAllSeeCompletion(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	const waiters = 8
 	var wg sync.WaitGroup
 	wg.Add(waiters)
 	for range waiters {
@@ -555,20 +493,19 @@ func TestPool_Concurrent_WaitCallersAllSeeCompletion(t *testing.T) {
 }
 
 func TestPool_Concurrent_StealDistributesWorkAcrossWorkers(t *testing.T) {
-	p, closePool := New(
-		Config{
-			NumWorkers: 4,
-		},
-		nil,
-	)
-	defer closePool()
-
 	const n = 20000
-	var mu sync.Mutex
-	seen := make(map[int]int)
-	var wg sync.WaitGroup
-	wg.Add(n)
 
+	cfg := Config{NumWorkers: 4}
+	p, closePool := New(cfg, nil, nil)
+	t.Cleanup(closePool)
+
+	var (
+		seen = make(map[int]int)
+		mu   sync.Mutex
+		wg   sync.WaitGroup
+	)
+
+	wg.Add(n)
 	for range n {
 		err := p.Submit(func(ctx *Context) {
 			defer wg.Done()
@@ -585,15 +522,11 @@ func TestPool_Concurrent_StealDistributesWorkAcrossWorkers(t *testing.T) {
 }
 
 func TestPool_Concurrent_NoGoroutineLeakAfterClose(t *testing.T) {
-	baseline := runtime.NumGoroutine()
-
-	p, closePool := New(
-		Config{
-			NumWorkers: 6,
-		},
-		nil,
+	var (
+		baseline     = runtime.NumGoroutine()
+		cfg          = Config{NumWorkers: 6}
+		p, closePool = New(cfg, nil, nil)
 	)
-
 	for range 500 {
 		err := p.Submit(func(ctx *Context) {})
 		require.NoError(t, err)
@@ -620,16 +553,15 @@ func TestPool_Stress_HighVolumeSubmit(t *testing.T) {
 		t.Skip("skipping stress test in -short mode")
 	}
 
-	p, closePool := New(
-		Config{
-			NumWorkers: 8,
-		},
-		nil,
-	)
-	defer closePool()
-
 	const n = 300_000
-	var executed atomic.Int64
+
+	var (
+		executed     atomic.Int64
+		cfg          = Config{NumWorkers: 8}
+		p, closePool = New(cfg, nil, nil)
+	)
+
+	t.Cleanup(closePool)
 	for range n {
 		err := p.Submit(func(ctx *Context) { executed.Add(1) })
 		require.NoError(t, err)
@@ -645,25 +577,24 @@ func TestPool_Stress_ManyProducersHighVolume(t *testing.T) {
 		t.Skip("skipping stress test in -short mode")
 	}
 
-	p, closePool := New(
-		Config{
-			NumWorkers: 8,
-		},
-		nil,
-	)
-	defer closePool()
-
 	const producers = 16
 	const perProducer = 15_000
-	var executed atomic.Int64
 
-	done := make(chan struct{}, producers)
+	var (
+		executed     atomic.Int64
+		cfg          = Config{NumWorkers: 8}
+		p, closePool = New(cfg, nil, nil)
+		done         = make(chan struct{}, producers)
+	)
+
+	t.Cleanup(closePool)
 	for range producers {
 		go func() {
 			defer func() { done <- struct{}{} }()
 			for range perProducer {
-				if err := p.Submit(func(ctx *Context) { executed.Add(1) }); err != nil {
-					t.Errorf("Submit: %v", err)
+				err := p.Submit(func(ctx *Context) { executed.Add(1) })
+				if err != nil {
+					assert.Failf(t, "", "Submit: %v", err)
 					return
 				}
 			}
@@ -689,19 +620,15 @@ func TestPool_Stress_RandomSpawnDepth(t *testing.T) {
 		t.Skip("skipping stress test in -short mode")
 	}
 
-	p, closePool := New(
-		Config{
-			NumWorkers: 8,
-		},
-		nil,
-	)
-	defer closePool()
-
 	const topLevel = 4000
-	var executed atomic.Int64
-	done := make(chan struct{}, topLevel*8) // generous upper bound on tree size
 
-	var spawn func(ctx *Context, depthLeft int)
+	var (
+		executed     atomic.Int64
+		spawn        func(ctx *Context, depthLeft int)
+		cfg          = Config{NumWorkers: 8}
+		p, closePool = New(cfg, nil, nil)
+		done         = make(chan struct{}, topLevel*8) // generous upper bound on tree size
+	)
 	spawn = func(ctx *Context, depthLeft int) {
 		executed.Add(1)
 		done <- struct{}{}
@@ -715,6 +642,7 @@ func TestPool_Stress_RandomSpawnDepth(t *testing.T) {
 		}
 	}
 
+	t.Cleanup(closePool)
 	for range topLevel {
 		sErr := p.Submit(func(ctx *Context) { spawn(ctx, 3) })
 		require.NoError(t, sErr)
@@ -742,17 +670,16 @@ func TestPool_Stress_SmallPoolForcesOverflowAndSteal(t *testing.T) {
 		t.Skip("skipping stress test in -short mode")
 	}
 
-	// deliberately small: local queues will overflow constantly
-	p, closePool := New(
-		Config{
-			NumWorkers: 2,
-		},
-		nil,
-	)
-	defer closePool()
-
 	const n = capacity * 20 // capacity is local_queue.go's per-worker size
-	var executed atomic.Int64
+
+	// deliberately small: local queues will overflow constantly
+	var (
+		executed     atomic.Int64
+		cfg          = Config{NumWorkers: 2}
+		p, closePool = New(cfg, nil, nil)
+	)
+
+	t.Cleanup(closePool)
 	for range n {
 		err := p.Submit(func(ctx *Context) { executed.Add(1) })
 		require.NoError(t, err)
@@ -768,24 +695,22 @@ func TestPool_Stress_PanicsInterleavedWithNormalTasks(t *testing.T) {
 		t.Skip("skipping stress test in -short mode")
 	}
 
-	// Swallow the (expected, high-volume) panic logs so test output stays
-	// readable; still sanity-check the log saw at least one of them.
-	var buf bytes.Buffer
-	orig := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(orig)
-
-	p, closePool := New(
-		Config{
-			NumWorkers: 6,
-		},
-		nil,
-	)
-	defer closePool()
-
 	const n = 50_000
-	var normalDone atomic.Int64
-	var wantNormal int64
+
+	var (
+		// Keep the (expected, high-volume) panic logs out of the test output
+		// while still checking that the default path reported them.
+		logger, closeLogger, path = logtest.New(t, log.Config{})
+		cfg                       = Config{NumWorkers: 6}
+		p, closePool              = New(cfg, logger, nil)
+		normalDone                atomic.Int64
+		wantNormal                int64
+	)
+	t.Cleanup(func() {
+		_ = closeLogger()
+		closePool()
+	})
+
 	for i := range n {
 		panics := i%7 == 0
 		if !panics {
@@ -808,31 +733,34 @@ func TestPool_Stress_PanicsInterleavedWithNormalTasks(t *testing.T) {
 		got,
 		"normalDone = %d, want %d (panicking tasks must not affect the rest)", got, wantNormal,
 	)
-	require.NotEmpty(t, buf)
+
+	require.NoError(t, closeLogger())
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "stress-induced panic")
 }
 
 func TestPool_Stress_RepeatedPoolLifecycle(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping stress test in -short mode")
 	}
-	baseline := runtime.NumGoroutine()
 
 	const rounds = 200
 	const perRound = 300
-	for range rounds {
-		p, closePool := New(
-			Config{
-				NumWorkers: 4,
-			},
-			nil,
-		)
 
-		var executed atomic.Int64
+	baseline := runtime.NumGoroutine()
+	for range rounds {
+		var (
+			cfg          = Config{NumWorkers: 4}
+			p, closePool = New(cfg, nil, nil)
+			executed     atomic.Int64
+		)
 		for range perRound {
 			err := p.Submit(func(ctx *Context) { executed.Add(1) })
 			require.NoError(t, err)
 		}
 		closePool()
+
 		got := executed.Load()
 		require.Equal(t, int64(perRound), got)
 	}
@@ -857,12 +785,8 @@ func TestPool_Stress_RepeatedPoolLifecycle(t *testing.T) {
 // ----------
 
 func BenchmarkSubmitSequential(b *testing.B) {
-	p, closePool := New(
-		Config{
-			NumWorkers: runtime.GOMAXPROCS(0),
-		},
-		nil,
-	)
+	cfg := Config{NumWorkers: runtime.GOMAXPROCS(0)}
+	p, closePool := New(cfg, nil, nil)
 	defer closePool()
 
 	var executed atomic.Int64
@@ -876,12 +800,8 @@ func BenchmarkSubmitSequential(b *testing.B) {
 }
 
 func BenchmarkSubmitParallel(b *testing.B) {
-	p, closePool := New(
-		Config{
-			NumWorkers: runtime.GOMAXPROCS(0),
-		},
-		nil,
-	)
+	cfg := Config{NumWorkers: runtime.GOMAXPROCS(0)}
+	p, closePool := New(cfg, nil, nil)
 	defer closePool()
 
 	var executed atomic.Int64
