@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"sync"
 	"testing"
 	"time"
@@ -33,12 +35,19 @@ func isInfra(target error) func(error) bool {
 func newTestBreaker(
 	cfg Config,
 	isInfraErr func(error) bool,
-	onChange func(name string, from, to gobreaker.State),
+	onChange func(name string, from, to State),
 ) Circuit {
 	if onChange == nil {
-		onChange = func(string, gobreaker.State, gobreaker.State) {}
+		onChange = func(string, State, State) {}
 	}
 	return New(cfg, isInfraErr, onChange)
+}
+
+func TestState_String(t *testing.T) {
+	require.Equal(t, "closed", StateClosed.String())
+	require.Equal(t, "half-open", StateHalfOpen.String())
+	require.Equal(t, "open", StateOpen.String())
+	require.Equal(t, "unknown", State(99).String())
 }
 
 func TestExecute_SuccessPassesCtxThrough(t *testing.T) {
@@ -62,6 +71,28 @@ func TestExecute_SuccessPassesCtxThrough(t *testing.T) {
 	require.Equal(t, StateClosed, cb.State())
 }
 
+// A ctx that is done before the call must stop Execute. Execute must not run
+// fn, and the circuit breaker must not count the error as a failure.
+func TestExecute_DoneCtxSkipsFnAndIsNotCounted(t *testing.T) {
+	cb := newTestBreaker(
+		Config{ConsecutiveFailures: 1},
+		func(error) bool { return true },
+		nil,
+	)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	called := false
+	err := cb.Execute(ctx, func(context.Context) error {
+		called = true
+		return nil
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, called)
+	require.Equal(t, StateClosed, cb.State())
+}
+
 // IsExcluded exists for this property. If isInfrastructureError does not
 // identify an error, that error must never open the circuit. The number of
 // times that the error occurs makes no difference.
@@ -72,7 +103,7 @@ func TestExecute_NonInfraErrorsAreExcludedNeverTrip(t *testing.T) {
 		nil,
 	)
 
-	for range 10 { // many more times than ConsecutiveFailures=2
+	for range 10 { // The loop runs more times than ConsecutiveFailures=2.
 		err := cb.Execute(
 			t.Context(),
 			func(context.Context) error {
@@ -286,7 +317,7 @@ func TestExecute_HalfOpenRejectsConcurrentProbeBeyondMaxRequests(t *testing.T) {
 	require.Equal(t, StateClosed, cb.State())
 }
 
-func TestExecute_PanicIsRecoveredAndRepanickedWithOriginalValue(t *testing.T) {
+func TestExecute_PanicReachesCallerWithOriginalValue(t *testing.T) {
 	cb := newTestBreaker(
 		Config{ConsecutiveFailures: 5},
 		func(error) bool { return true },
@@ -312,7 +343,7 @@ func TestExecute_PanicIsRecoveredAndRepanickedWithOriginalValue(t *testing.T) {
 	require.Equal(t, want, gotVal)
 }
 
-// panicError exists for this behavior. The isInfrastructureError function
+// errPanic exists for this behavior. The isInfrastructureError function
 // excludes each error in this test, but a panic must still count as a
 // failure and open the circuit. The test
 // TestExecute_NonInfraErrorsAreExcludedNeverTrip shows the different result
@@ -340,10 +371,156 @@ func TestExecute_PanicAlwaysCountsAsFailureEvenIfClassifierWouldExcludeIt(t *tes
 	require.Equal(t, StateOpen, cb.State())
 }
 
+// panicInFn is a named function, so that the test can find its frame in a
+// stack trace.
+//
+//go:noinline
+func panicInFn() {
+	panic("boom")
+}
+
+// The caller must see the stack frames of fn when it recovers the panic. A
+// recover inside Execute removes these frames.
+func TestExecute_PanicKeepsOriginalStack(t *testing.T) {
+	cb := newTestBreaker(
+		Config{ConsecutiveFailures: 5},
+		func(error) bool { return true },
+		nil,
+	)
+
+	var stack string
+	func() {
+		defer func() {
+			if recover() != nil {
+				stack = string(debug.Stack())
+			}
+		}()
+		_ = cb.Execute(
+			t.Context(),
+			func(context.Context) error {
+				panicInFn()
+				return nil
+			},
+		)
+	}()
+
+	require.Contains(t, stack, "panicInFn")
+}
+
+// A call to runtime.Goexit in fn must not keep the half-open request slot.
+// The circuit breaker must count the call as a failure and go to the open
+// state. A later probe must then be able to close the circuit.
+func TestExecute_GoexitInHalfOpenDoesNotBlockCircuit(t *testing.T) {
+	cb := newTestBreaker(
+		Config{
+			ConsecutiveFailures: 1,
+			Timeout:             20 * time.Millisecond,
+			MaxRequests:         1,
+		},
+		isInfra(errCacheDown),
+		nil,
+	)
+	_ = cb.Execute(
+		t.Context(),
+		func(context.Context) error { return errCacheDown },
+	)
+	time.Sleep(30 * time.Millisecond)
+	require.Equal(t, StateHalfOpen, cb.State())
+
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		_ = cb.Execute(
+			t.Context(),
+			func(context.Context) error {
+				runtime.Goexit()
+				return nil
+			},
+		)
+	}()
+	<-exited
+
+	require.Equal(t, StateOpen, cb.State())
+
+	time.Sleep(30 * time.Millisecond)
+	err := cb.Execute(
+		t.Context(),
+		func(context.Context) error { return nil },
+	)
+	require.NoError(t, err)
+	require.Equal(t, StateClosed, cb.State())
+}
+
+// The default isInfrastructureError must not count context.Canceled. The
+// caller canceled the call, and the remote service has no fault. Each other
+// error must count as a failure.
+func TestNew_NilClassifierExcludesOnlyContextCanceled(t *testing.T) {
+	cb := New(Config{ConsecutiveFailures: 2}, nil, nil)
+
+	for range 10 { // The loop runs more times than ConsecutiveFailures=2.
+		err := cb.Execute(
+			t.Context(),
+			func(context.Context) error {
+				return fmt.Errorf("redis: %w", context.Canceled)
+			},
+		)
+		require.ErrorIs(t, err, context.Canceled)
+	}
+	require.Equal(t, StateClosed, cb.State())
+
+	for range 2 {
+		_ = cb.Execute(
+			t.Context(),
+			func(context.Context) error { return errBusiness },
+		)
+	}
+	require.Equal(t, StateOpen, cb.State())
+}
+
+// In the half-open state, the circuit closes only after MaxRequests
+// successful calls, one after the other.
+func TestExecute_HalfOpenNeedsMaxRequestsSuccessesToClose(t *testing.T) {
+	cb := newTestBreaker(
+		Config{
+			ConsecutiveFailures: 1,
+			Timeout:             20 * time.Millisecond,
+			MaxRequests:         2,
+		},
+		isInfra(errCacheDown),
+		nil,
+	)
+	_ = cb.Execute(
+		t.Context(),
+		func(context.Context) error { return errCacheDown },
+	)
+	time.Sleep(30 * time.Millisecond)
+
+	err := cb.Execute(t.Context(), func(context.Context) error { return nil })
+	require.NoError(t, err)
+	require.Equal(t, StateHalfOpen, cb.State())
+
+	err = cb.Execute(t.Context(), func(context.Context) error { return nil })
+	require.NoError(t, err)
+	require.Equal(t, StateClosed, cb.State())
+}
+
+// A nil onStateChange is valid. The circuit breaker must not call it when the
+// state changes. newTestBreaker replaces nil, so this test calls New.
+func TestNew_NilOnStateChangeDoesNotPanic(t *testing.T) {
+	cb := New(Config{ConsecutiveFailures: 1}, isInfra(errCacheDown), nil)
+
+	err := cb.Execute(
+		t.Context(),
+		func(context.Context) error { return errCacheDown }, // Closed -> Open
+	)
+	require.Equal(t, errCacheDown, err)
+	require.Equal(t, StateOpen, cb.State())
+}
+
 func TestExecute_OnStateChangeReportsTransitions(t *testing.T) {
 	type transition struct {
-		from gobreaker.State
-		to   gobreaker.State
+		from State
+		to   State
 	}
 
 	var mu sync.Mutex
@@ -355,7 +532,7 @@ func TestExecute_OnStateChangeReportsTransitions(t *testing.T) {
 			Timeout:             20 * time.Millisecond,
 		},
 		isInfra(errCacheDown),
-		func(_ string, from, to gobreaker.State) {
+		func(_ string, from, to State) {
 			mu.Lock()
 			defer mu.Unlock()
 			got = append(got, transition{from, to})
@@ -378,16 +555,16 @@ func TestExecute_OnStateChangeReportsTransitions(t *testing.T) {
 
 	want := []transition{
 		{
-			gobreaker.StateClosed,
-			gobreaker.StateOpen,
+			StateClosed,
+			StateOpen,
 		},
 		{
-			gobreaker.StateOpen,
-			gobreaker.StateHalfOpen,
+			StateOpen,
+			StateHalfOpen,
 		},
 		{
-			gobreaker.StateHalfOpen,
-			gobreaker.StateClosed,
+			StateHalfOpen,
+			StateClosed,
 		},
 	}
 	require.Equal(t, len(want), len(got))

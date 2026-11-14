@@ -14,18 +14,12 @@ import (
 
 const defaultConsecutiveFailures = 5
 
-// State is the state of a circuit.
-type State int
-
-// These constants are the states of a circuit.
-const (
-	StateClosed State = iota
-	StateHalfOpen
-	StateOpen
-)
-
+// circuit is the Circuit implementation. It wraps a gobreaker circuit breaker.
+//
+// The two-step form of gobreaker lets Execute run fn itself, without a
+// recover. Therefore a panic from fn keeps its original stack.
 type circuit struct {
-	core *gobreaker.CircuitBreaker[struct{}]
+	core *gobreaker.TwoStepCircuitBreaker[struct{}]
 }
 
 // New makes a circuit breaker with the settings in cfg.
@@ -34,20 +28,30 @@ type circuit struct {
 // show a fault in the remote service. The circuit breaker counts only these
 // errors as failures. It sends each other error to the caller, and the
 // circuit stays closed. If isInfrastructureError is nil, the circuit breaker
-// counts each error as a failure.
+// counts each error as a failure, except context.Canceled. A canceled ctx
+// shows a fault in the caller, not in the remote service.
+//
+// The circuit breaker calls isInfrastructureError while it holds an internal
+// lock. Therefore isInfrastructureError must not call Execute or State, and
+// it must not block.
 //
 // The onStateChange function can be nil. If it is not nil, the circuit
-// breaker calls it after each change of state.
+// breaker calls it after each change of state. The circuit breaker holds an
+// internal lock during the call. Therefore onStateChange must not call
+// Execute or State, and it must not block. The arguments name, from, and to
+// give all the data that a log message needs.
 func New(
 	cfg Config,
 	isInfrastructureError func(error) bool,
-	onStateChange func(name string, from, to gobreaker.State),
+	onStateChange func(name string, from, to State),
 ) Circuit {
 	if cfg.ConsecutiveFailures == 0 {
 		cfg.ConsecutiveFailures = defaultConsecutiveFailures
 	}
 	if isInfrastructureError == nil {
-		isInfrastructureError = func(error) bool { return true }
+		isInfrastructureError = func(err error) bool {
+			return !errors.Is(err, context.Canceled)
+		}
 	}
 
 	settings := gobreaker.Settings{
@@ -63,63 +67,65 @@ func New(
 				return false
 			}
 			// A panic in fn is always a real failure. Execute
-			// recovers the panic, and puts the value in a
-			// panicError. The circuit breaker must count this error,
-			// also when isInfrastructureError cannot identify the
-			// message.
-			_, ok := errors.AsType[*panicError](err)
-			if ok {
+			// reports it as errPanic. The circuit breaker must
+			// count this error, because isInfrastructureError
+			// cannot identify it.
+			if errors.Is(err, errPanic) {
 				return false
 			}
 			return !isInfrastructureError(err)
 		},
-		OnStateChange: onStateChange,
+	}
+	if onStateChange != nil {
+		settings.OnStateChange = func(name string, from, to gobreaker.State) {
+			onStateChange(name, convertState(from), convertState(to))
+		}
 	}
 
 	return &circuit{
-		core: gobreaker.NewCircuitBreaker[struct{}](settings),
+		core: gobreaker.NewTwoStepCircuitBreaker[struct{}](settings),
 	}
 }
 
-// Execute runs fn when the circuit is in the closed state or in the half-open
-// state. Execute then sends the result of fn to the circuit breaker.
-//
-// Execute returns ErrOpen when the circuit stops the call. In this condition,
-// Execute does not run fn.
-//
-// Execute recovers a panic from fn before gobreaker receives the panic, and
-// changes the value to a panicError. The circuit breaker then always counts
-// the panic as a failure. Execute makes the same panic again with the
-// original value. Therefore, the caller receives the panic without a change.
+// Execute implements Circuit.Execute. The Circuit interface gives the full
+// contract.
 func (c *circuit) Execute(ctx context.Context, fn func(ctx context.Context) error) error {
-	// The fn function can return the error of a different circuit breaker.
-	// The called flag shows if this circuit breaker stopped the call, or if
-	// fn ran and gave the error.
-	called := false
-	_, err := c.core.Execute(func() (result struct{}, err error) {
-		called = true
-		defer func() {
-			if r := recover(); r != nil {
-				err = &panicError{value: r}
-			}
-		}()
-		return struct{}{}, fn(ctx)
-	})
-
-	pe, ok := errors.AsType[*panicError](err)
-	if ok {
-		panic(pe.value)
+	// A ctx that is already done must not reach fn. The circuit breaker
+	// does not count this error as a failure, because the fault is in the
+	// caller and not in the remote service.
+	err := ctx.Err()
+	if err != nil {
+		return err
 	}
-
-	if !called && (errors.Is(err, gobreaker.ErrOpenState) || errors.Is(err, gobreaker.ErrTooManyRequests)) {
+	// Allow returns only ErrOpenState or ErrTooManyRequests. An error from
+	// fn never comes through this path. Thus, an error of a different
+	// circuit breaker inside fn goes to the caller without a change.
+	done, err := c.core.Allow()
+	if err != nil {
 		return ErrOpen
 	}
+
+	finished := false
+	defer func() {
+		// If fn did not return, it panicked or called runtime.Goexit.
+		// Do not recover here. A recover removes the stack frames of fn.
+		if !finished {
+			done(errPanic)
+		}
+	}()
+	err = fn(ctx)
+	finished = true
+	done(err)
 	return err
 }
 
-// State gives the state of the circuit breaker at this time.
+// State implements Circuit.State.
 func (c *circuit) State() State {
-	switch c.core.State() {
+	return convertState(c.core.State())
+}
+
+func convertState(s gobreaker.State) State {
+	switch s {
 	case gobreaker.StateOpen:
 		return StateOpen
 	case gobreaker.StateHalfOpen:
