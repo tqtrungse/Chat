@@ -7,12 +7,20 @@ package breaker
 
 import "time"
 
+// Config holds the settings of a circuit breaker. The function New reads
+// these settings.
+//
+// When a field has a Default: line, New uses that value if the field is 0.
 type Config struct {
 	// Name identifies this circuit breaker in log messages and in metrics.
 	Name string
 
 	// MaxRequests is the maximum number of requests that the circuit
 	// breaker sends to the remote service in the half-open state.
+	//
+	// MaxRequests is also the number of successful calls, one after the
+	// other, that close the circuit from the half-open state. One failure
+	// in the half-open state opens the circuit again.
 	//
 	// Default: 1
 	MaxRequests uint32

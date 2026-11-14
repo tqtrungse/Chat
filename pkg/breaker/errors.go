@@ -5,10 +5,7 @@
 
 package breaker
 
-import (
-	"errors"
-	"fmt"
-)
+import "errors"
 
 // ErrOpen is the error that Execute returns when the circuit stops the call.
 // The circuit is in the open state, or it is in the half-open state and the
@@ -16,18 +13,11 @@ import (
 // function.
 var ErrOpen = errors.New("circuit breaker open")
 
-// panicError holds the value from a panic in the function that Execute
-// runs.
+// errPanic is the error that Execute reports to gobreaker when fn does not
+// return. This occurs when fn panics or calls runtime.Goexit. The caller
+// never receives errPanic.
 //
-// The private type lets IsExcluded in New identify a panic correctly, and
-// always count the panic as a failure. gobreaker also recovers a panic, but
-// gobreaker changes the value to a plain error from fmt.Errorf("%v", e). An
-// error of that type looks the same as each other unknown error. Therefore
-// the isInfrastructureError function cannot identify it.
-type panicError struct {
-	value any
-}
-
-func (e *panicError) Error() string {
-	return fmt.Sprintf("panic: %v", e.value)
-}
+// The private value lets IsExcluded in New identify this condition, and
+// always count it as a failure. The isInfrastructureError function cannot
+// identify it.
+var errPanic = errors.New("breaker: fn did not return")
