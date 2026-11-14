@@ -1,0 +1,22 @@
+create_table "users",
+    options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    collation: "utf8mb4_0900_as_ci",
+    force: :cascade,
+    id: :bigint, unsigned: true, auto_increment: false do |t| # "id" is a Snowflake ID, not auto increment.
+
+    t.string "username",    limit: 128,     null: false
+
+    t.binary "phone_hash",  limit: 16,      null: false # HMAC-SHA256 truncated to 128 bits
+    t.integer "phone_tail", unsigned: true, null: false
+
+    t.column "state", "smallint", null: false, default: 1 # 1: active, 3: locked
+
+    t.datetime "created_at", limit: 3, null: false
+    t.datetime "updated_at", limit: 3, null: false
+
+    t.index ["username"],   name: "unique_index_users_on_username",   unique: true
+    t.index ["phone_hash"], name: "unique_index_users_on_phone_hash", unique: true
+end
+
+execute "ALTER TABLE users MODIFY created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) NOT NULL;"
+execute "ALTER TABLE users MODIFY updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) NOT NULL;"

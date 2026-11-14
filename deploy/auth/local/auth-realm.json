@@ -1,5 +1,5 @@
 {
-  "realm": "iam-dev",
+  "realm": "auth",
   "enabled": true,
   "clients": [
     {

@@ -1,0 +1,15 @@
+test:
+  adapter: mysql2
+  host: host.docker.internal
+  port: 9996
+  database: chat_test
+  username: test
+  password: test123456789
+
+local:
+  adapter: mysql2
+  host: host.docker.internal
+  port: 9996
+  database: chat_local
+  username: chat
+  password: chat123456789

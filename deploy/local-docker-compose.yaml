@@ -1,7 +1,79 @@
 name: chat
 
-include:
-  - ./auth/local/keycloak/docker-compose.yaml
-  - ./nats/local/docker-compose.yaml
-  - ./redis/local/docker-compose.yaml
-  - ./dbmigrator/docker-compose.yaml
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.0
+    command: [ "start-dev", "--import-realm" ]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${AUTH_ADMIN_USER:?Set AUTH_ADMIN_USER}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${AUTH_ADMIN_PASSWORD:?Set AUTH_ADMIN_PASSWORD}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ${AUTH_REALM_JSON:?Set AUTH_REALM_JSON to a auth-realm.json path}:/opt/keycloak/data/import/auth-realm.json:ro
+
+  dbmigrator:
+    profiles: [ "dbmigrate" ]
+    build:
+      context: .
+      dockerfile: ./dbmigrator/Dockerfile
+    depends_on:
+      mysql:
+        condition: service_healthy
+    container_name: chat-dbmigrator
+    volumes:
+      - ../internal:/internal:ro
+    command: /bin/bash
+    tty: true
+    stdin_open: true
+
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    container_name: chat-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:?Set MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER:?Set MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}
+    ports:
+      - "127.0.0.1:9996:3306"
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  nats:
+    image: nats:2.15.3-alpine3.22
+    container_name: hub-nats
+    command: [ "-c", "/etc/nats/nats.conf" ]
+    ports:
+      - "127.0.0.1:4222:4222"
+    environment:
+      HUB_1_PASSWORD: ${HUB_1_PASSWORD:?Set HUB_1_PASSWORD}
+      HUB_2_PASSWORD: ${HUB_2_PASSWORD:?Set HUB_2_PASSWORD}
+    volumes:
+      - ${NATS_CONF:?Set NATS_CONF to a nats.conf path}:/etc/nats/nats.conf:ro
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.10-alpine
+    container_name: hub-redis
+    command:
+      - redis-server
+      - /usr/local/etc/redis/redis.conf
+      - --requirepass
+      - ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+    volumes:
+      - ${REDIS_CONF:?Set REDIS_CONF to a redis.conf path}:/usr/local/etc/redis/redis.conf:ro
+    ports:
+      - "127.0.0.1:6379:6379"
+    deploy:
+      resources:
+        limits:
+          memory: 2200m
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536

@@ -1,0 +1,30 @@
+create_table "devices",
+    options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    collation: "utf8mb4_0900_as_ci",
+    force: :cascade,
+    id: :bigint, unsigned: true, auto_increment: false do |t| # "id" is a Snowflake ID, not auto increment.
+
+    t.string "external_id",  limit: 64,      null: false # Auth0 ID
+    t.bigint "user_id",      unsigned: true, null: false
+
+    t.string "name",         limit: 128,     null: false # Device type + OS name
+    t.integer "state",                       null: false, default: 1 # 1: active, 2: locked
+
+    t.binary "identity_pub", limit: 255,     null: false # ed25519.GenerateKey(rand.Reader)
+    t.binary "peer_pub",     limit: 255,     null: false # x25519
+
+    t.datetime "created_at", limit: 3,       null: false
+    t.datetime "updated_at", limit: 3,       null: false
+    t.timestamp "deleted_at", limit: 3
+
+    t.index ["external_id"], name: "unique_index_devices_on_external_id", unique: true
+    t.index ["user_id"],     name: "index_devices_on_user"
+
+    t.foreign_key "users",
+        column: ["user_id"],
+        primary_key: ["id"],
+        name: "fk_devices_users"
+end
+
+execute "ALTER TABLE devices MODIFY created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) NOT NULL;"
+execute "ALTER TABLE devices MODIFY updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) NOT NULL;"

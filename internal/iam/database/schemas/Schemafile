@@ -1,0 +1,2 @@
+require_relative 'users.schema'
+require_relative 'devices.schema'

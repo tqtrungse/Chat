@@ -9,7 +9,7 @@ With SERVICE_ID=1 and HUB_ID=0, hub-0/hub-1 get distinct IDs. They share one
 Noise **service** keyring but keep separate connection state. Never assign
 the same explicit HUB_ID to all replicas.
 
-1. Generate a service key once with `scripts/hub/gen-noise-key.go` as documented
+1. Generate a service key once with `../../scripts/gen/noise-key.go` as documented
    in `docs/protocol/noise-v2.md`. Set address to the real public TCP endpoint.
 2. Provision the private `hub-noise` Secret outside Git, for example:
 

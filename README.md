@@ -227,7 +227,7 @@ for the ticket TTL.
 ## Getting Started
 
 Requirements: Go (see `go.mod`), MySQL for IAM, Redis for Hub presence, and an
-OIDC issuer (for example the [local Keycloak setup](deploy/auth/local/keycloak/README.md)).
+OIDC issuer (for example the [local Keycloak setup](deploy/auth/local/README.md)).
 NATS/ScyllaDB components are used by the separate message-routing/storage work.
 
 Copy `.example.env` into each service's ignored `.local/.config.env`, configure
