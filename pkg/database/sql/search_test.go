@@ -99,13 +99,10 @@ func TestEscapeLike(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(
-			tt.name,
-			func(t *testing.T) {
-				got := EscapeLike(tt.in)
-				assert.Equal(t, tt.want, got)
-			},
-		)
+		t.Run(tt.name, func(t *testing.T) {
+			got := EscapeLike(tt.in)
+			assert.Equal(t, tt.want, got)
+		})
 	}
 }
 
@@ -183,27 +180,24 @@ func TestEscapeLikeMatchesLiterally(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(
-			tt.name,
-			func(t *testing.T) {
-				pattern := []rune(EscapeLike(tt.in))
-				for _, s := range tt.match {
-					assert.Truef(
-						t,
-						likeMatch(pattern, []rune(s)),
-						"pattern %q should match %q", string(pattern), s,
-					)
-				}
+		t.Run(tt.name, func(t *testing.T) {
+			pattern := []rune(EscapeLike(tt.in))
+			for _, s := range tt.match {
+				assert.Truef(
+					t,
+					likeMatch(pattern, []rune(s)),
+					"pattern %q should match %q", string(pattern), s,
+				)
+			}
 
-				for _, s := range tt.mismatch {
-					assert.Falsef(
-						t,
-						likeMatch(pattern, []rune(s)), "pattern %q must not match %q",
-						string(pattern), s,
-					)
-				}
-			},
-		)
+			for _, s := range tt.mismatch {
+				assert.Falsef(
+					t,
+					likeMatch(pattern, []rune(s)), "pattern %q must not match %q",
+					string(pattern), s,
+				)
+			}
+		})
 	}
 }
 

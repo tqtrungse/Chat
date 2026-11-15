@@ -15,10 +15,10 @@ import (
 	pbpriv "xxx/api/hub/v2/proto/gen/priv"
 	"xxx/internal/hub/application/sendmsg"
 
-	"xxx/pkg/bs"
 	"xxx/pkg/log"
 	slicepool "xxx/pkg/pool/slice"
 	workerpool "xxx/pkg/pool/worker"
+	"xxx/pkg/utils/bs"
 
 	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"

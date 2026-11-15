@@ -23,11 +23,11 @@ import (
 	"xxx/internal/hub/domain/message"
 	"xxx/internal/shared/device"
 
-	"xxx/pkg/bit"
-	"xxx/pkg/bs"
 	"xxx/pkg/log"
 	slicepool "xxx/pkg/pool/slice"
 	workerpool "xxx/pkg/pool/worker"
+	"xxx/pkg/utils/bit"
+	"xxx/pkg/utils/bs"
 
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"

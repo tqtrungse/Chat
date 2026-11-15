@@ -20,16 +20,19 @@ func TestConfigLoadDefaults(t *testing.T) {
 		name   string
 		loader config.Loader
 	}{
-		{name: "nil loader", loader: nil},
-		{name: "unset keys", loader: viper.New()},
+		{
+			name:   "nil loader",
+			loader: nil,
+		},
+		{
+			name:   "unset keys",
+			loader: viper.New(),
+		},
 	} {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				cfg := LoadConfig(tc.loader)
-				require.Equal(t, DefaultConfig(), cfg)
-			},
-		)
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := LoadConfig(tc.loader)
+			require.Equal(t, DefaultConfig(), cfg)
+		})
 	}
 }
 

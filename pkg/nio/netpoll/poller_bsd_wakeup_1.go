@@ -23,7 +23,9 @@ import (
 
 func (p *Poller) addWakeupEvent() error {
 	p.pipe = make([]int, 2)
-	if err := unix.Pipe2(p.pipe[:], unix.O_NONBLOCK|unix.O_CLOEXEC); err != nil {
+
+	err := unix.Pipe2(p.pipe[:], unix.O_NONBLOCK|unix.O_CLOEXEC)
+	if err != nil {
 		//logging.Fatalf("failed to create pipe for wakeup event: %v", err)
 	}
 	_, err := unix.Kevent(p.fd, []unix.Kevent_t{{

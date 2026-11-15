@@ -99,7 +99,10 @@ func TestElastic_ReadFromNoProgress(t *testing.T) {
 // A reader that gives some data between empty reads is not stopped. The count starts again after each data.
 func TestRing_ReadFromEmptyReadsBetweenData(t *testing.T) {
 	var rb Ring
-	r := &gapReader{data: []byte("abcdef"), gap: maxConsecutiveEmptyReads - 1}
+	r := &gapReader{
+		data: []byte("abcdef"),
+		gap:  maxConsecutiveEmptyReads - 1,
+	}
 	n, err := rb.ReadFrom(r)
 	require.NoError(t, err)
 	require.Equal(t, int64(6), n)

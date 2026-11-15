@@ -3,9 +3,9 @@
 //
 // Forked from go.uber.org/zap/buffer/buffer.go at v1.28.0.
 
-// Package buffer provides a thin wrapper around a byte slice. Unlike the
-// standard library's bytes.Buffer, it supports a portion of the strconv
-// package's zero-allocation formatters.
+// Package buffer gives a thin wrapper around a byte slice. The bytes.Buffer of
+// the standard library does not support the zero-allocation formatters of
+// strconv. This package supports some of them.
 package buffer
 
 import (
@@ -13,10 +13,10 @@ import (
 	"time"
 )
 
-const size = 1024 // by default, create 1 KiB buffers
+const size = 1024 // default capacity of a new buffer: 1 KiB
 
-// Buffer is a thin wrapper around a byte slice. It's intended to be pooled, so
-// the only way to construct one is via Get.
+// Buffer is a thin wrapper around a byte slice. A pool holds each Buffer.
+// Therefore, Get is the only way to make a Buffer.
 type Buffer struct {
 	bs []byte
 }
@@ -36,7 +36,7 @@ func (b *Buffer) AppendString(s string) {
 	b.bs = append(b.bs, s...)
 }
 
-// AppendInt appends an integer to the underlying buffer (assuming base 10).
+// AppendInt appends an integer in base 10 to the underlying buffer.
 func (b *Buffer) AppendInt(i int64) {
 	b.bs = strconv.AppendInt(b.bs, i, 10)
 }
@@ -46,8 +46,7 @@ func (b *Buffer) AppendTime(t time.Time, layout string) {
 	b.bs = t.AppendFormat(b.bs, layout)
 }
 
-// AppendUint appends an unsigned integer to the underlying buffer (assuming
-// base 10).
+// AppendUint appends an unsigned integer in base 10 to the underlying buffer.
 func (b *Buffer) AppendUint(i uint64) {
 	b.bs = strconv.AppendUint(b.bs, i, 10)
 }
@@ -57,7 +56,7 @@ func (b *Buffer) AppendBool(v bool) {
 	b.bs = strconv.AppendBool(b.bs, v)
 }
 
-// AppendFloat appends a float to the underlying buffer. It doesn't quote NaN
+// AppendFloat appends a float to the underlying buffer. It does not quote NaN
 // or +/- Inf.
 func (b *Buffer) AppendFloat(f float64, bitSize int) {
 	b.bs = strconv.AppendFloat(b.bs, f, 'f', -1, bitSize)
@@ -83,8 +82,8 @@ func (b *Buffer) String() string {
 	return string(b.bs)
 }
 
-// Reset resets the underlying byte slice. Subsequent writes re-use the slice's
-// backing array.
+// Reset sets the length of the underlying byte slice to zero. Each later write
+// uses the same backing array again.
 func (b *Buffer) Reset() {
 	b.bs = b.bs[:0]
 }
@@ -97,8 +96,8 @@ func (b *Buffer) Write(bs []byte) (int, error) {
 
 // WriteByte writes a single byte to the Buffer.
 //
-// Error returned is always nil, function signature is compatible
-// with bytes.Buffer and bufio.Writer
+// The returned error is always nil. The signature is the same as in
+// bytes.Buffer and bufio.Writer.
 func (b *Buffer) WriteByte(v byte) error {
 	b.AppendByte(v)
 	return nil
@@ -106,14 +105,14 @@ func (b *Buffer) WriteByte(v byte) error {
 
 // WriteString writes a string to the Buffer.
 //
-// Error returned is always nil, function signature is compatible
-// with bytes.Buffer and bufio.Writer
+// The returned error is always nil. The signature is the same as in
+// bytes.Buffer and bufio.Writer.
 func (b *Buffer) WriteString(s string) (int, error) {
 	b.AppendString(s)
 	return len(s), nil
 }
 
-// TrimNewline trims any final "\n" byte from the end of the buffer.
+// TrimNewline removes the last byte of the buffer if that byte is "\n".
 func (b *Buffer) TrimNewline() {
 	if i := len(b.bs) - 1; i >= 0 {
 		if b.bs[i] == '\n' {
@@ -124,7 +123,7 @@ func (b *Buffer) TrimNewline() {
 
 // Free returns the Buffer to the pool of this package.
 //
-// Callers must not retain references to the Buffer after calling Free.
+// The caller must not keep a reference to the Buffer after it calls Free.
 func (b *Buffer) Free() {
 	put(b)
 }

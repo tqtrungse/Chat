@@ -63,18 +63,22 @@ type eventList struct {
 }
 
 func newEventList(size int) *eventList {
-	return &eventList{size, make([]unix.Kevent_t, size)}
+	return &eventList{size: size,
+		events: make([]unix.Kevent_t, size),
+	}
 }
 
 func (el *eventList) expand() {
-	if newSize := el.size << 1; newSize <= MaxPollEventsCap {
+	newSize := el.size << 1
+	if newSize <= MaxPollEventsCap {
 		el.size = newSize
 		el.events = make([]unix.Kevent_t, newSize)
 	}
 }
 
 func (el *eventList) shrink() {
-	if newSize := el.size >> 1; newSize >= MinPollEventsCap {
+	newSize := el.size >> 1
+	if newSize >= MinPollEventsCap {
 		el.size = newSize
 		el.events = make([]unix.Kevent_t, newSize)
 	}
@@ -96,17 +100,22 @@ type Poller struct {
 // OpenPoller instantiates a poller.
 func OpenPoller(logger *log.Logger) (poller *Poller, err error) {
 	poller = new(Poller)
-	if poller.fd, err = unix.Kqueue(); err != nil {
+
+	poller.fd, err = unix.Kqueue()
+	if err != nil {
 		poller = nil
 		err = os.NewSyscallError("kqueue", err)
 		return
 	}
-	if err = poller.addWakeupEvent(); err != nil {
+
+	err = poller.addWakeupEvent()
+	if err != nil {
 		_ = poller.Close()
 		poller = nil
 		err = os.NewSyscallError("kevent | pipe2", err)
 		return
 	}
+
 	poller.logger = logger
 	poller.asyncTaskQueue = queue.NewAsyncTaskQueue()
 	poller.urgentAsyncTaskQueue = queue.NewAsyncTaskQueue()

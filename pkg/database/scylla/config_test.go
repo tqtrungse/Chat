@@ -36,14 +36,11 @@ func TestConfigLoadDefaults(t *testing.T) {
 		ReconnectionJitterCap:  time.Minute,
 	}
 
-	t.Run(
-		"unset keys",
-		func(t *testing.T) {
-			cfg, err := LoadConfig(hostsLoader())
-			require.NoError(t, err)
-			require.Equal(t, want, cfg)
-		},
-	)
+	t.Run("unset keys", func(t *testing.T) {
+		cfg, err := LoadConfig(hostsLoader())
+		require.NoError(t, err)
+		require.Equal(t, want, cfg)
+	})
 }
 
 func TestConfigLoadRequiresHosts(t *testing.T) {
@@ -51,16 +48,19 @@ func TestConfigLoadRequiresHosts(t *testing.T) {
 		name   string
 		loader config.Loader
 	}{
-		{name: "nil loader", loader: nil},
-		{name: "empty loader", loader: viper.New()},
+		{
+			name:   "nil loader",
+			loader: nil,
+		},
+		{
+			name:   "empty loader",
+			loader: viper.New(),
+		},
 	} {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				_, err := LoadConfig(tc.loader)
-				require.ErrorIs(t, err, ErrNilHosts)
-			},
-		)
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := LoadConfig(tc.loader)
+			require.ErrorIs(t, err, ErrNilHosts)
+		})
 	}
 }
 

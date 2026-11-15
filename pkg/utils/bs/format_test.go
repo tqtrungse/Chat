@@ -79,13 +79,34 @@ func TestDigitCount_ValuesUnrepresentableAsFloat64(t *testing.T) {
 		value uint64
 		want  int
 	}{
-		{999_999_999_999_999_999, 18},
-		{9_999_999_999_999_999, 16},
-		{99_999_999_999_999_999, 17},
-		{9_999_999_999_999_999_999, 19},
-		{math.MaxUint64 - 1, 20},
-		{1 << 53, 16},
-		{(1 << 53) + 1, 16},
+		{
+			value: 999_999_999_999_999_999,
+			want:  18,
+		},
+		{
+			value: 9_999_999_999_999_999,
+			want:  16,
+		},
+		{
+			value: 99_999_999_999_999_999,
+			want:  17,
+		},
+		{
+			value: 9_999_999_999_999_999_999,
+			want:  19,
+		},
+		{
+			value: math.MaxUint64 - 1,
+			want:  20,
+		},
+		{
+			value: 1 << 53,
+			want:  16,
+		},
+		{
+			value: (1 << 53) + 1,
+			want:  16,
+		},
 	}
 
 	for _, tc := range cases {
@@ -175,12 +196,30 @@ func TestConcat(t *testing.T) {
 		prefix string
 		value  uint64
 	}{
-		{"", 0},
-		{"", math.MaxUint64},
-		{"key-", 1},
-		{"prefix_", 12345},
-		{"x", 999_999_999_999_999_999},
-		{"a-rather-long-prefix:", math.MaxUint64},
+		{
+			prefix: "",
+			value:  0,
+		},
+		{
+			prefix: "",
+			value:  math.MaxUint64,
+		},
+		{
+			prefix: "key-",
+			value:  1,
+		},
+		{
+			prefix: "prefix_",
+			value:  12345,
+		},
+		{
+			prefix: "x",
+			value:  999_999_999_999_999_999,
+		},
+		{
+			prefix: "a-rather-long-prefix:",
+			value:  math.MaxUint64,
+		},
 	}
 
 	for _, tc := range cases {

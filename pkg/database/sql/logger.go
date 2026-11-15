@@ -146,7 +146,7 @@ func (l *gormLogger) Trace(
 //
 // GORM asks the logger of the statement for this filter. DB.Scan is the one
 // finisher that replaces that logger with logger.Recorder, which reads the
-// package-level logger.RecorderParamsFilter of GORM instead. Therefore a
+// package-level logger.RecorderParamsFilter of GORM instead. Therefore, a
 // statement of DB.Scan reports each parameter. No repository uses DB.Scan;
 // the one that starts to use it must set that filter of GORM as well.
 func (l *gormLogger) ParamsFilter(

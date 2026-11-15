@@ -9,9 +9,9 @@ package buffer
 import (
 	"io"
 
-	"xxx/pkg/bit"
-	"xxx/pkg/bs"
 	slicepool "xxx/pkg/pool/slice"
+	"xxx/pkg/utils/bit"
+	"xxx/pkg/utils/bs"
 )
 
 const (

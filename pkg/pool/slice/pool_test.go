@@ -7,6 +7,7 @@ package slice
 
 import (
 	"math"
+	"math/bits"
 	"testing"
 	"unsafe"
 
@@ -24,20 +25,61 @@ func TestIndex(t *testing.T) {
 		want uint32
 	}{
 		// Powers of two map to themselves (ceil-log2 of a power-of-two is the exponent).
-		{1, 0}, // 2^0 = 1
-		{2, 1}, // 2^1 = 2
-		{4, 2},
-		{8, 3},
-		{16, 4},
-		{1024, 10},
-		{1 << 31, 31},
+		// 2^0 = 1
+		{
+			n:    1,
+			want: 0,
+		},
+		// 2^1 = 2
+		{
+			n:    2,
+			want: 1,
+		},
+		{
+			n:    4,
+			want: 2,
+		},
+		{
+			n:    8,
+			want: 3,
+		},
+		{
+			n:    16,
+			want: 4,
+		},
+		{
+			n:    1024,
+			want: 10,
+		},
+		{
+			n:    1 << 31,
+			want: 31,
+		},
 
 		// Values that are not powers of two round up to the next bucket.
-		{3, 2}, // fits in 2^2 = 4
-		{5, 3}, // fits in 2^3 = 8
-		{9, 4}, // fits in 2^4 = 16
-		{1023, 10},
-		{1025, 11},
+		// fits in 2^2 = 4
+		{
+			n:    3,
+			want: 2,
+		},
+		// fits in 2^3 = 8
+		{
+			n:    5,
+			want: 3,
+		},
+		// fits in 2^4 = 16
+		{
+			n:    9,
+			want: 4,
+		},
+		{
+			n:    1023,
+			want: 10,
+		},
+		{
+			n:    1025,
+			want: 11,
+		},
 	}
 
 	for _, tc := range cases {
@@ -101,15 +143,33 @@ func TestGet_LengthAndCapacity(t *testing.T) {
 		size    int
 		wantCap int // next power-of-two >= size
 	}{
-		{1, 1},
-		{2, 2},
-		{3, 4},
-		{7, 8},
-		{8, 8},
-		{9, 16},
-		{100, 128},
-		{1024, 1024},
-		{1025, 2048},
+		{size: 1,
+			wantCap: 1,
+		},
+		{size: 2,
+			wantCap: 2,
+		},
+		{size: 3,
+			wantCap: 4,
+		},
+		{size: 7,
+			wantCap: 8,
+		},
+		{size: 8,
+			wantCap: 8,
+		},
+		{size: 9,
+			wantCap: 16,
+		},
+		{size: 100,
+			wantCap: 128,
+		},
+		{size: 1024,
+			wantCap: 1024,
+		},
+		{size: 1025,
+			wantCap: 2048,
+		},
 	}
 
 	var p pool
@@ -132,6 +192,11 @@ func TestPut_ZeroCapIsIgnored(t *testing.T) {
 }
 
 func TestPut_LargerThanMaxInt32_IsIgnored(t *testing.T) {
+	// On a 32-bit platform, int cannot hold a value larger than MaxInt32.
+	if bits.UintSize == 32 {
+		t.Skip("cap larger than MaxInt32 is not possible on a 32-bit platform")
+	}
+
 	var p pool
 
 	// Build a slice header with a very large cap without actually allocating.
@@ -147,7 +212,9 @@ func TestPut_LargerThanMaxInt32_IsIgnored(t *testing.T) {
 	}
 	hdr := (*sliceHeader)(unsafe.Pointer(&s))
 	origCap := hdr.Cap
-	hdr.Cap = math.MaxInt32 + 1
+	// Use a variable because the constant does not fit in int on a 32-bit platform.
+	tooLarge := uint(math.MaxInt32) + 1
+	hdr.Cap = int(tooLarge)
 
 	p.Put(s) // must not panic
 

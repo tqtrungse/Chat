@@ -11,11 +11,11 @@ import (
 
 	"xxx/internal/shared/device"
 
-	"xxx/pkg/bit"
 	"xxx/pkg/collection/swiss"
 	"xxx/pkg/cpu"
 	"xxx/pkg/hash"
 	"xxx/pkg/nio"
+	"xxx/pkg/utils/bit"
 )
 
 const (

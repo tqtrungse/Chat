@@ -1,10 +1,8 @@
 // Copyright (c) 2016 Uber Technologies, Inc.
 // SPDX-License-Identifier: MIT
 //
-// Forked from go.uber.org/zap/buffer/buffer.go at v1.28.0.
+// Forked from go.uber.org/zap/buffer/pool.go at v1.28.0.
 
-// Modified from go.uber.org/zap/buffer/pool.go.
-//
 // The original keeps each byte slice in one sync.Pool of Buffer objects. This
 // version keeps the Buffer objects in a sync.Pool and the byte slices in
 // xxx/pkg/pool/slice. The reasons are below.
@@ -42,7 +40,8 @@ var objectPool = &sync.Pool{
 	New: func() any { return new(Buffer) },
 }
 
-// Get retrieves a Buffer from the pool, creating one if necessary.
+// Get gets a Buffer from the pool. If the pool is empty, Get makes a new
+// Buffer.
 //
 // The Buffer object and its byte slice come from two different pools. The
 // object pool gives a Put that costs no allocation, because the value is
@@ -56,8 +55,8 @@ func Get() *Buffer {
 	return buf
 }
 
-// put gives the byte slice back to the slice pool and the Buffer object back
-// to the object pool.
+// put returns the byte slice to the slice pool and the Buffer object to the
+// object pool.
 //
 // A nil slice shows that a previous call already gave this Buffer back. Such a
 // second call is an error of the caller. put then drops the Buffer object

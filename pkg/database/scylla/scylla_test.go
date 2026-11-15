@@ -47,30 +47,27 @@ func TestNewClusterConfigQueryRetries(t *testing.T) {
 			want:  3,
 		},
 	} {
-		t.Run(
-			tt.name,
-			func(t *testing.T) {
-				loader := hostsLoader()
-				if tt.value != nil {
-					loader.Set("SCYLLA_DATABASE_NUM_RETRIES", tt.value)
-				}
-				cfg, err := LoadConfig(loader)
-				require.NoError(t, err)
-				cluster := newClusterConfig(cfg)
-				require.NotNil(t, cluster.RetryPolicy)
+		t.Run(tt.name, func(t *testing.T) {
+			loader := hostsLoader()
+			if tt.value != nil {
+				loader.Set("SCYLLA_DATABASE_NUM_RETRIES", tt.value)
+			}
+			cfg, err := LoadConfig(loader)
+			require.NoError(t, err)
+			cluster := newClusterConfig(cfg)
+			require.NotNil(t, cluster.RetryPolicy)
 
-				// Attempts includes the initial execution. Exercise the policy
-				// installed on the cluster, including the zero-retry boundary.
-				for attempts := 1; attempts <= tt.want+1; attempts++ {
-					require.Equal(
-						t,
-						attempts <= tt.want,
-						cluster.RetryPolicy.Attempt(retryableQuery{attempts: attempts}),
-						"attempts=%d", attempts,
-					)
-				}
-			},
-		)
+			// Attempts includes the initial execution. Exercise the policy
+			// installed on the cluster, including the zero-retry boundary.
+			for attempts := 1; attempts <= tt.want+1; attempts++ {
+				require.Equal(
+					t,
+					attempts <= tt.want,
+					cluster.RetryPolicy.Attempt(retryableQuery{attempts: attempts}),
+					"attempts=%d", attempts,
+				)
+			}
+		})
 	}
 }
 
@@ -94,30 +91,30 @@ func TestNewClusterConfigReconnectionPolicy(t *testing.T) {
 			cap:     45 * time.Second,
 		},
 	} {
-		t.Run(
-			tt.name,
-			func(t *testing.T) {
-				cfg := Config{
-					Hosts:                  []string{"127.0.0.1"},
-					ReconnectMaxRetries:    tt.retries,
-					ReconnectionJitterBase: tt.base,
-					ReconnectionJitterCap:  tt.cap,
-				}
-				cfg.applyDefault()
-				cluster := newClusterConfig(cfg)
-				rp, ok := cluster.ReconnectionPolicy.(*gocql.ExponentialReconnectionPolicy)
-				require.True(t, ok)
-				require.Equal(t, int(tt.retries), rp.GetMaxRetries())
-				require.Positive(t, rp.GetMaxRetries())
-				require.Equal(t, tt.base, rp.InitialInterval)
-				require.Equal(t, tt.cap, rp.MaxInterval)
-			},
-		)
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				Hosts:                  []string{"127.0.0.1"},
+				ReconnectMaxRetries:    tt.retries,
+				ReconnectionJitterBase: tt.base,
+				ReconnectionJitterCap:  tt.cap,
+			}
+			cfg.applyDefault()
+			cluster := newClusterConfig(cfg)
+			rp, ok := cluster.ReconnectionPolicy.(*gocql.ExponentialReconnectionPolicy)
+			require.True(t, ok)
+			require.Equal(t, int(tt.retries), rp.GetMaxRetries())
+			require.Positive(t, rp.GetMaxRetries())
+			require.Equal(t, tt.base, rp.InitialInterval)
+			require.Equal(t, tt.cap, rp.MaxInterval)
+		})
 	}
 }
 
 func TestScyllaOpenPublishesConfiguredRetryPolicy(t *testing.T) {
-	cfg := Config{Hosts: []string{"127.0.0.1"}, NumRetries: 7}
+	cfg := Config{
+		Hosts:      []string{"127.0.0.1"},
+		NumRetries: 7,
+	}
 	// Invalid serial consistency fails driver validation before any network
 	// connection. This checks the open path without requiring a live cluster.
 	cfg.SerialConsistency = gocql.One

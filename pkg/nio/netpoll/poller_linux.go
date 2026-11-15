@@ -71,14 +71,16 @@ func newEventList(size int) *eventList {
 }
 
 func (el *eventList) expand() {
-	if newSize := el.size << 1; newSize <= MaxPollEventsCap {
+	newSize := el.size << 1
+	if newSize <= MaxPollEventsCap {
 		el.size = newSize
 		el.events = make([]epollevent, newSize)
 	}
 }
 
 func (el *eventList) shrink() {
-	if newSize := el.size >> 1; newSize >= MinPollEventsCap {
+	newSize := el.size >> 1
+	if newSize >= MinPollEventsCap {
 		el.size = newSize
 		el.events = make([]epollevent, newSize)
 	}
@@ -101,25 +103,33 @@ type Poller struct {
 // OpenPoller instantiates a poller.
 func OpenPoller(logger *log.Logger) (poller *Poller, err error) {
 	poller = new(Poller)
-	if poller.fd, err = unix.EpollCreate1(unix.EPOLL_CLOEXEC); err != nil {
+
+	poller.fd, err = unix.EpollCreate1(unix.EPOLL_CLOEXEC)
+	if err != nil {
 		poller = nil
 		err = os.NewSyscallError("epoll_create1", err)
 		return
 	}
+
 	var efd int
-	if efd, err = unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC); err != nil {
+	efd, err = unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
+	if err != nil {
 		_ = poller.Close()
 		poller = nil
 		err = os.NewSyscallError("eventfd", err)
 		return
 	}
+
 	poller.efdBuf = make([]byte, 8)
 	poller.epa = &PollAttachment{FD: efd}
-	if err = poller.AddRead(poller.epa, true); err != nil {
+
+	err = poller.AddRead(poller.epa, true)
+	if err != nil {
 		_ = poller.Close()
 		poller = nil
 		return
 	}
+
 	poller.logger = logger
 	poller.asyncTaskQueue = queue.NewAsyncTaskQueue()
 	poller.urgentAsyncTaskQueue = queue.NewAsyncTaskQueue()

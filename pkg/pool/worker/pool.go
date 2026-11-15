@@ -7,13 +7,13 @@ package worker
 
 import (
 	"errors"
+	"math/bits"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 
 	"xxx/pkg/cpu"
 	"xxx/pkg/log"
-	"xxx/pkg/os"
 )
 
 var (
@@ -34,7 +34,7 @@ type Pool struct {
 	global              *elastic[Task]
 	globalCheckInterval uint32
 	globalBatchSize     uint32
-	_                   [cpu.CacheLineSize - 3*os.PtrSize - unsafe.Sizeof([]*worker{}) - 8]byte
+	_                   [cpu.CacheLineSize - 3*(bits.UintSize/8) - unsafe.Sizeof([]*worker{}) - 8]byte
 
 	// The closed bit and number of active Submit calls share one word so
 	// admission cannot race shutdown's check for outstanding submitters.

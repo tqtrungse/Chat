@@ -23,7 +23,8 @@ type Option[T int | string] struct {
 
 func execSockOpts[T int | string](fd int, opts []Option[T]) error {
 	for _, opt := range opts {
-		if err := opt.SetSockOpt(fd, opt.Opt); err != nil {
+		err := opt.SetSockOpt(fd, opt.Opt)
+		if err != nil {
 			return err
 		}
 	}
@@ -60,7 +61,10 @@ func ipToSockaddrInet4(ip net.IP, port int) (unix.SockaddrInet4, error) {
 	}
 	ip4 := ip.To4()
 	if ip4 == nil {
-		return unix.SockaddrInet4{}, &net.AddrError{Err: "non-IPv4 address", Addr: ip.String()}
+		return unix.SockaddrInet4{}, &net.AddrError{
+			Err:  "non-IPv4 address",
+			Addr: ip.String(),
+		}
 	}
 	sa := unix.SockaddrInet4{Port: port}
 	copy(sa.Addr[:], ip4)
@@ -85,7 +89,10 @@ func ipToSockaddrInet6(ip net.IP, port int, zone string) (unix.SockaddrInet6, er
 	// IPv6 address.
 	ip6 := ip.To16()
 	if ip6 == nil {
-		return unix.SockaddrInet6{}, &net.AddrError{Err: "non-IPv6 address", Addr: ip.String()}
+		return unix.SockaddrInet6{}, &net.AddrError{
+			Err:  "non-IPv6 address",
+			Addr: ip.String(),
+		}
 	}
 
 	sa := unix.SockaddrInet6{Port: port}
@@ -107,6 +114,7 @@ func ipToSockaddr(family int, ip net.IP, port int, zone string) (unix.Sockaddr, 
 			return nil, err
 		}
 		return &sa, nil
+
 	case syscall.AF_INET6:
 		sa, err := ipToSockaddrInet6(ip, port, zone)
 		if err != nil {
@@ -114,5 +122,9 @@ func ipToSockaddr(family int, ip net.IP, port int, zone string) (unix.Sockaddr, 
 		}
 		return &sa, nil
 	}
-	return nil, &net.AddrError{Err: "invalid address family", Addr: ip.String()}
+
+	return nil, &net.AddrError{
+		Err:  "invalid address family",
+		Addr: ip.String(),
+	}
 }

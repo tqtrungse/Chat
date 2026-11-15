@@ -90,7 +90,28 @@ func TestElastic_PushPop_StructValueType(t *testing.T) {
 	e, err := NewElastic[payload](4)
 	require.NoError(t, err)
 
-	want := []payload{{1, "a"}, {2, "b"}, {3, "c"}, {4, "d"}, {5, "e"}}
+	want := []payload{
+		{
+			ID:   1,
+			Name: "a",
+		},
+		{
+			ID:   2,
+			Name: "b",
+		},
+		{
+			ID:   3,
+			Name: "c",
+		},
+		{
+			ID:   4,
+			Name: "d",
+		},
+		{
+			ID:   5,
+			Name: "e",
+		},
+	}
 	for _, p := range want {
 		e.Push(p)
 	}

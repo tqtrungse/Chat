@@ -11,7 +11,7 @@ import (
 	"unsafe"
 
 	"xxx/pkg/cpu"
-	"xxx/pkg/generic"
+	"xxx/pkg/utils/generic"
 )
 
 // 1. Each local queue has exactly one owner.

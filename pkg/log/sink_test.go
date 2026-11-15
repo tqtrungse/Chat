@@ -89,9 +89,11 @@ type failingWriter struct{ err error }
 func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
 
 // TestWrite_CopiesPayload is the regression test for the most dangerous
-// requirement of the sink. zap reuses the buffer of the encoder as soon as
-// Write returns. Therefore, a sink that queued the slice of the caller would
-// publish whatever bytes the next entry wrote into that slice.
+// requirement of Write. The forked core does not use Write, because it gives
+// the buffer to WriteBuffer. A caller of Write keeps the ownership of its
+// slice and can use the slice again after Write returns. Therefore, a Write
+// that puts the slice of the caller in the queue can write the bytes of the
+// next entry.
 func TestWrite_CopiesPayload(t *testing.T) {
 	var out syncBuffer
 	cfg := Config{}
@@ -103,7 +105,8 @@ func TestWrite_CopiesPayload(t *testing.T) {
 	_, err := sink.Write(payload)
 	require.NoError(t, err)
 
-	// Simulate zap reusing the buffer before the writer goroutine runs.
+	// Change the bytes, as a caller does when it uses the slice again. The
+	// writer goroutine has not run yet.
 	copy(payload, []byte("SECON"))
 
 	require.NoError(t, sink.Sync())
@@ -131,9 +134,9 @@ func TestWrite_PreservesOrder(t *testing.T) {
 	}
 }
 
-// TestWrite_DropsWhenQueueFull parks the writer goroutine, fills the queue
-// past its limit, and checks that the producer does not block and does not
-// lose the count.
+// TestWrite_DropsWhenQueueFull stops the writer goroutine and fills the queue
+// to more than its limit. Then it checks that the producer does not block,
+// and that the count of the discarded entries is correct.
 func TestWrite_DropsWhenQueueFull(t *testing.T) {
 	gate := newGateWriter()
 	cfg := Config{
@@ -143,16 +146,16 @@ func TestWrite_DropsWhenQueueFull(t *testing.T) {
 	cfg.applyDefault()
 	sink := newAsyncSink(&cfg, gate, io.Discard, time.Now)
 
-	// The first entry reaches the destination and parks there. This leaves
-	// the queue free to fill behind it.
+	// The first entry reaches the destination and stays there. The queue is
+	// then empty, and the test can fill it.
 	_, err := sink.Write([]byte("blocking entry that exceeds the buffer\n"))
 	require.NoError(t, err)
 	<-gate.entered
 
 	const extra = 50
 	for i := range extra {
-		// Each of these calls must return at once. None must wait for the
-		// parked writer goroutine.
+		// Each of these calls must return at once. A call must not wait for
+		// the stopped writer goroutine.
 		_, writeErr := sink.Write([]byte(fmt.Sprintf("entry %d\n", i)))
 		require.NoError(t, writeErr)
 	}
@@ -164,9 +167,9 @@ func TestWrite_DropsWhenQueueFull(t *testing.T) {
 	require.NoError(t, sink.Stop())
 }
 
-// TestReportDropped_EmitsNoticeInline checks that the gap is marked in the
-// stream itself, as valid JSON. The sink does not log this notice through
-// itself.
+// TestReportDropped_EmitsNoticeInline checks that the sink writes a notice of
+// the gap in the stream, as valid JSON. The sink does not send this notice
+// through the logger.
 func TestReportDropped_EmitsNoticeInline(t *testing.T) {
 	var out syncBuffer
 	cfg := Config{}
@@ -205,8 +208,8 @@ func TestReportDropped_RateLimitedBetweenFlushes(t *testing.T) {
 	cfg.applyDefault()
 	sink := newAsyncSink(&cfg, &out, io.Discard, clock)
 
-	// Several background flushes happen while the clock stands still.
-	// Therefore, the interval check must collapse them into one notice.
+	// Several background flushes occur while the clock does not move.
+	// Therefore, the interval check must make one notice for all of them.
 	sink.dropped.Store(3)
 	time.Sleep(20 * time.Millisecond)
 
@@ -215,7 +218,8 @@ func TestReportDropped_RateLimitedBetweenFlushes(t *testing.T) {
 }
 
 // TestSync_DrainsEverythingQueuedBefore covers the barrier. Sync must not
-// return while an entry queued before it is still in flight.
+// return before the sink writes each entry that was in the queue before the
+// call.
 func TestSync_DrainsEverythingQueuedBefore(t *testing.T) {
 	var out syncBuffer
 	cfg := &Config{FlushInterval: time.Hour}
@@ -298,8 +302,8 @@ func TestStop_IsIdempotentAndStopsWriterGoroutine(t *testing.T) {
 	require.NoError(t, sink.Stop(), "Stop must be idempotent")
 	assert.Equal(t, "entry\n", out.String())
 
-	// The writer goroutine owns the only reference to the destination.
-	// Therefore, a leak here would keep writing after shutdown.
+	// The writer goroutine holds the only reference to the destination.
+	// Therefore, a leak here can continue to write after the shutdown.
 	deadline := time.Now().Add(time.Second)
 	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
@@ -350,15 +354,15 @@ func TestIsUnsyncable(t *testing.T) {
 	assert.True(t, isUnsyncable(errors.Join(syscall.EINVAL, syscall.ENOTTY)))
 	assert.False(t, isUnsyncable(nil))
 	assert.False(t, isUnsyncable(errors.New("some other error")))
-	// A mixed error still indicates a real failure.
+	// A mixed error still shows a real failure.
 	assert.False(t, isUnsyncable(errors.Join(syscall.ENOTTY, errors.New("real failure"))))
 	assert.False(t, isUnsyncable(syscall.EBADF), "a bad descriptor must still be reported")
 }
 
 // TestSampling_ThinsLowLevelsButNeverError is the regression test for the
 // split between the two cores. The sampler of zapcore does not see the
-// level. Therefore, a sampler around the whole core would thin out the exact
-// entries that an incident needs.
+// level. Therefore, a sampler around the full core removes the entries that
+// an incident needs.
 func TestSampling_ThinsLowLevelsButNeverError(t *testing.T) {
 	logger, closeFn, path := newTestLogger(
 		t,

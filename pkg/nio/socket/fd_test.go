@@ -20,44 +20,47 @@ func TestDupSetsCloseOnExecAndOwnsDescriptor(t *testing.T) {
 		name string
 		dup  func(int) (int, error)
 	}{
-		{"Dup", Dup},
-		{"portable fallback", dupCloseOnExecOld},
+		{
+			name: "Dup",
+			dup:  Dup,
+		},
+		{
+			name: "portable fallback",
+			dup:  dupCloseOnExecOld,
+		},
 	} {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
-				require.NoError(t, err)
+		t.Run(tc.name, func(t *testing.T) {
+			fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+			require.NoError(t, err)
 
-				original := fds[0]
-				t.Cleanup(func() {
-					if original >= 0 {
-						_ = unix.Close(original)
-					}
-					_ = unix.Close(fds[1])
-				})
+			original := fds[0]
+			t.Cleanup(func() {
+				if original >= 0 {
+					_ = unix.Close(original)
+				}
+				_ = unix.Close(fds[1])
+			})
 
-				fd, err := tc.dup(original)
-				require.NoError(t, err)
-				t.Cleanup(func() { _ = unix.Close(fd) })
-				require.NotEqual(t, original, fd)
+			fd, err := tc.dup(original)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = unix.Close(fd) })
+			require.NotEqual(t, original, fd)
 
-				flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
-				require.NoError(t, err)
-				require.NotZero(t, flags&unix.FD_CLOEXEC)
-				require.NoError(t, unix.Close(original))
+			flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+			require.NoError(t, err)
+			require.NotZero(t, flags&unix.FD_CLOEXEC)
+			require.NoError(t, unix.Close(original))
 
-				original = -1
-				n, err := unix.Write(fd, []byte("probe"))
-				require.NoError(t, err)
-				require.Equal(t, 5, n)
+			original = -1
+			n, err := unix.Write(fd, []byte("probe"))
+			require.NoError(t, err)
+			require.Equal(t, 5, n)
 
-				var got [5]byte
-				n, err = unix.Read(fds[1], got[:])
-				require.NoError(t, err)
-				require.Equal(t, 5, n)
-				require.Equal(t, "probe", string(got[:]))
-			},
-		)
+			var got [5]byte
+			n, err = unix.Read(fds[1], got[:])
+			require.NoError(t, err)
+			require.Equal(t, 5, n)
+			require.Equal(t, "probe", string(got[:]))
+		})
 	}
 }

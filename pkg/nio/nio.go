@@ -17,12 +17,10 @@ import (
 	"strings"
 	"time"
 
-	"xxx/pkg/bit"
 	"xxx/pkg/buffer"
-	"xxx/pkg/collection/swiss"
-	"xxx/pkg/hash"
 	errorx "xxx/pkg/nio/error"
 	"xxx/pkg/nio/socket"
+	"xxx/pkg/utils/bit"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -335,17 +333,16 @@ func (e Engine) ListenerAddresses() []string {
 	if e.eng == nil {
 		return nil
 	}
-	addrs := make([]string, 0, e.eng.listeners.Len())
-	e.eng.listeners.Range(func(_ int, ln *listener) bool {
+	addrs := make([]string, 0, len(e.eng.listeners))
+	for _, ln := range e.eng.listeners {
 		addrs = append(addrs, ln.addr.String())
-		return true
-	})
+	}
 	return addrs
 }
 
 // Validate checks whether the engine is available.
 func (e Engine) Validate() error {
-	if e.eng == nil || e.eng.listeners.Len() == 0 {
+	if e.eng == nil || len(e.eng.listeners) == 0 {
 		return errorx.ErrEmptyEngine
 	}
 	if e.eng.isShutdown() {
@@ -408,14 +405,13 @@ func (e Engine) Dup() (fd int, err error) {
 		return -1, err
 	}
 
-	if e.eng.listeners.Len() > 1 {
+	if len(e.eng.listeners) > 1 {
 		return -1, errorx.ErrUnsupportedOp
 	}
 
-	e.eng.listeners.Range(func(_ int, ln *listener) (goOn bool) {
+	for _, ln := range e.eng.listeners {
 		fd, err = ln.dup()
-		return true
-	})
+	}
 	return
 }
 
@@ -427,15 +423,10 @@ func (e Engine) DupListener(network, addr string) (fd int, err error) {
 		return
 	}
 
-	e.eng.listeners.Range(func(_ int, ln *listener) (goOn bool) {
+	for _, ln := range e.eng.listeners {
 		if ln.network == network && ln.address == addr {
-			fd, err = ln.dup()
-			return false
+			return ln.dup()
 		}
-		return true
-	})
-	if fd != -1 {
-		return
 	}
 
 	err = errorx.ErrInvalidNetworkAddress
@@ -700,9 +691,9 @@ func run(eventHandler EventHandler, listeners []*listener, options *Options, add
 		zap.String("listening on", strings.Join(addrs, " | ")),
 	)
 
-	lns := swiss.NewTableWithCap[int, *listener](len(listeners), hash.Int)
+	lns := make(map[int]*listener, len(listeners))
 	for _, ln := range listeners {
-		lns.Set(ln.fd, ln)
+		lns[ln.fd] = ln
 	}
 	rootCtx, shutdown := context.WithCancel(context.Background())
 	eg, ctx := errgroup.WithContext(rootCtx)
@@ -715,7 +706,10 @@ func run(eventHandler EventHandler, listeners []*listener, options *Options, add
 		concurrency: struct {
 			*errgroup.Group
 			ctx context.Context
-		}{eg, ctx},
+		}{
+			Group: eg,
+			ctx:   ctx,
+		},
 	}
 	switch options.LB {
 	case RoundRobin:

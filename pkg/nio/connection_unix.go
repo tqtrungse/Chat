@@ -220,14 +220,28 @@ func (c *conn) AsyncWrite(buf []byte, callback AsyncCallback) error {
 		}
 		return err
 	}
-	return c.loop.poller.Trigger(queue.HighPriority, c.asyncWrite, &asyncWriteHook{callback, buf})
+	return c.loop.poller.Trigger(
+		queue.HighPriority,
+		c.asyncWrite,
+		&asyncWriteHook{
+			callback: callback,
+			data:     buf,
+		},
+	)
 }
 
 func (c *conn) AsyncWritev(bs [][]byte, callback AsyncCallback) error {
 	if c.isDatagram {
 		return errorx.ErrUnsupportedOp
 	}
-	return c.loop.poller.Trigger(queue.HighPriority, c.asyncWritev, &asyncWritevHook{callback, bs})
+	return c.loop.poller.Trigger(
+		queue.HighPriority,
+		c.asyncWritev,
+		&asyncWritevHook{
+			callback: callback,
+			data:     bs,
+		},
+	)
 }
 
 // ----------------------------------
@@ -344,14 +358,17 @@ func newStreamConn(proto string, fd int, el *eventloop, sa unix.Sockaddr, localA
 
 func newUDPConn(fd int, el *eventloop, localAddr net.Addr, sa unix.Sockaddr, connected bool) (c *conn) {
 	c = &conn{
-		fd:             fd,
-		proto:          "udp",
-		remote:         sa,
-		loop:           el,
-		localAddr:      localAddr,
-		remoteAddr:     socket.SockaddrToUDPAddr(sa),
-		isDatagram:     true,
-		pollAttachment: netpoll.PollAttachment{FD: fd, Callback: el.readUDP},
+		fd:         fd,
+		proto:      "udp",
+		remote:     sa,
+		loop:       el,
+		localAddr:  localAddr,
+		remoteAddr: socket.SockaddrToUDPAddr(sa),
+		isDatagram: true,
+		pollAttachment: netpoll.PollAttachment{
+			FD:       fd,
+			Callback: el.readUDP,
+		},
 	}
 	if connected {
 		c.remote = nil

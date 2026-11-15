@@ -47,7 +47,10 @@ func TestConnContextConcurrentReadAndReplace(t *testing.T) {
 			for i := range 2000 {
 				if worker%2 == 0 {
 					id := uint64(worker*2000 + i)
-					c.SetContext(&state{id: id, inverse: ^id})
+					c.SetContext(&state{
+						id:      id,
+						inverse: ^id,
+					})
 					if i%2 == 0 {
 						c.SetContext(nil)
 					}

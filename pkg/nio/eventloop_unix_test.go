@@ -167,119 +167,91 @@ func (s *benchmarkServerGC) OnBoot(eng Engine) Action {
 // TestServeGC generates fake connections asynchronously.
 // The large cases are skipped unless testBigGC is set to true.
 func TestServeGC(t *testing.T) {
-	t.Run(
-		"gc-loop",
-		func(t *testing.T) {
-			t.Run(
-				"1-loop-10000",
-				func(t *testing.T) {
-					if testBigGC {
-						t.Skipf("Skip when testBigGC=%t", testBigGC)
-					}
-					testServeGC(t, "tcp", ":0", true, true, 1, 10000)
-				},
-			)
-			t.Run(
-				"1-loop-100000",
-				func(t *testing.T) {
-					if !testBigGC {
-						t.Skipf("Skip when testBigGC=%t", testBigGC)
-					}
-					testServeGC(t, "tcp", ":0", true, true, 1, 100000)
-				},
-			)
-			t.Run(
-				"1-loop-1000000",
-				func(t *testing.T) {
-					if !testBigGC {
-						t.Skipf("Skip when testBigGC=%t", testBigGC)
-					}
-					testServeGC(t, "tcp", ":0", true, true, 1, 1000000)
-				},
-			)
-			t.Run(
-				"2-loop-10000",
-				func(t *testing.T) {
-					if testBigGC {
-						t.Skipf("Skip when testBigGC=%t", testBigGC)
-					}
-					testServeGC(t, "tcp", ":0", true, true, 2, 10000)
-				},
-			)
-			t.Run(
-				"2-loop-100000",
-				func(t *testing.T) {
-					if !testBigGC {
-						t.Skipf("Skip when testBigGC=%t", testBigGC)
-					}
-					testServeGC(t, "tcp", ":0", true, true, 2, 100000)
-				},
-			)
-			t.Run(
-				"2-loop-1000000",
-				func(t *testing.T) {
-					if !testBigGC {
-						t.Skipf("Skip when testBigGC=%t", testBigGC)
-					}
-					testServeGC(t, "tcp", ":0", true, true, 2, 1000000)
-				},
-			)
-			t.Run(
-				"4-loop-10000",
-				func(t *testing.T) {
-					if testBigGC {
-						t.Skipf("Skip when testBigGC=%t", testBigGC)
-					}
-					testServeGC(t, "tcp", ":0", true, true, 4, 10000)
-				},
-			)
-			t.Run(
-				"4-loop-100000",
-				func(t *testing.T) {
-					if !testBigGC {
-						t.Skipf("Skip when testBigGC=%t", testBigGC)
-					}
-					testServeGC(t, "tcp", ":0", true, true, 4, 100000)
-				},
-			)
-			t.Run(
-				"4-loop-1000000",
-				func(t *testing.T) {
-					if !testBigGC {
-						t.Skipf("Skip when testBigGC=%t", testBigGC)
-					}
-					testServeGC(t, "tcp", ":0", true, true, 4, 1000000)
-				},
-			)
-			t.Run(
-				"16-loop-10000",
-				func(t *testing.T) {
-					if testBigGC {
-						t.Skipf("Skip when testBigGC=%t", testBigGC)
-					}
-					testServeGC(t, "tcp", ":0", true, true, 16, 10000)
-				},
-			)
-			t.Run(
-				"16-loop-100000",
-				func(t *testing.T) {
-					if !testBigGC {
-						t.Skipf("Skip when testBigGC=%t", testBigGC)
-					}
-					testServeGC(t, "tcp", ":0", true, true, 16, 100000)
-				},
-			)
-			t.Run(
-				"16-loop-1000000",
-				func(t *testing.T) {
-					if !testBigGC {
-						t.Skipf("Skip when testBigGC=%t", testBigGC)
-					}
-					testServeGC(t, "tcp", ":0", true, true, 16, 1000000)
-				},
-			)
-		},
-	)
+	t.Run("gc-loop", func(t *testing.T) {
+		t.Run("1-loop-10000", func(t *testing.T) {
+			if testBigGC {
+				t.Skipf("Skip when testBigGC=%t", testBigGC)
+			}
+			testServeGC(t, "tcp", ":0", true, true, 1, 10000)
+		})
+
+		t.Run("1-loop-100000", func(t *testing.T) {
+			if !testBigGC {
+				t.Skipf("Skip when testBigGC=%t", testBigGC)
+			}
+			testServeGC(t, "tcp", ":0", true, true, 1, 100000)
+		})
+
+		t.Run("1-loop-1000000", func(t *testing.T) {
+			if !testBigGC {
+				t.Skipf("Skip when testBigGC=%t", testBigGC)
+			}
+			testServeGC(t, "tcp", ":0", true, true, 1, 1000000)
+		})
+
+		t.Run("2-loop-10000", func(t *testing.T) {
+			if testBigGC {
+				t.Skipf("Skip when testBigGC=%t", testBigGC)
+			}
+			testServeGC(t, "tcp", ":0", true, true, 2, 10000)
+		})
+
+		t.Run("2-loop-100000", func(t *testing.T) {
+			if !testBigGC {
+				t.Skipf("Skip when testBigGC=%t", testBigGC)
+			}
+			testServeGC(t, "tcp", ":0", true, true, 2, 100000)
+		})
+
+		t.Run("2-loop-1000000", func(t *testing.T) {
+			if !testBigGC {
+				t.Skipf("Skip when testBigGC=%t", testBigGC)
+			}
+			testServeGC(t, "tcp", ":0", true, true, 2, 1000000)
+		})
+
+		t.Run("4-loop-10000", func(t *testing.T) {
+			if testBigGC {
+				t.Skipf("Skip when testBigGC=%t", testBigGC)
+			}
+			testServeGC(t, "tcp", ":0", true, true, 4, 10000)
+		})
+
+		t.Run("4-loop-100000", func(t *testing.T) {
+			if !testBigGC {
+				t.Skipf("Skip when testBigGC=%t", testBigGC)
+			}
+			testServeGC(t, "tcp", ":0", true, true, 4, 100000)
+		})
+
+		t.Run("4-loop-1000000", func(t *testing.T) {
+			if !testBigGC {
+				t.Skipf("Skip when testBigGC=%t", testBigGC)
+			}
+			testServeGC(t, "tcp", ":0", true, true, 4, 1000000)
+		})
+
+		t.Run("16-loop-10000", func(t *testing.T) {
+			if testBigGC {
+				t.Skipf("Skip when testBigGC=%t", testBigGC)
+			}
+			testServeGC(t, "tcp", ":0", true, true, 16, 10000)
+		})
+
+		t.Run("16-loop-100000", func(t *testing.T) {
+			if !testBigGC {
+				t.Skipf("Skip when testBigGC=%t", testBigGC)
+			}
+			testServeGC(t, "tcp", ":0", true, true, 16, 100000)
+		})
+
+		t.Run("16-loop-1000000", func(t *testing.T) {
+			if !testBigGC {
+				t.Skipf("Skip when testBigGC=%t", testBigGC)
+			}
+			testServeGC(t, "tcp", ":0", true, true, 16, 1000000)
+		})
+	})
 }
 
 func testServeGC(
@@ -418,39 +390,45 @@ func TestGCLoadBalancerIsScopedToFixture(t *testing.T) {
 		name string
 		lb   loadBalancer
 	}{
-		{"round robin", new(roundRobinLoadBalancer)},
-		{"least connections", new(leastConnectionsLoadBalancer)},
-		{"source address hash", new(sourceAddrHashLoadBalancer)},
+		{
+			name: "round robin",
+			lb:   new(roundRobinLoadBalancer),
+		},
+		{
+			name: "least connections",
+			lb:   new(leastConnectionsLoadBalancer),
+		},
+		{
+			name: "source address hash",
+			lb:   new(sourceAddrHashLoadBalancer),
+		},
 	} {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				ready := make(chan struct{})
-				fixture := &gcLoadBalancer{
-					loadBalancer:  tc.lb,
-					initConnCount: 3,
-					loops:         2,
-					ready:         ready,
-				}
+		t.Run(tc.name, func(t *testing.T) {
+			ready := make(chan struct{})
+			fixture := &gcLoadBalancer{
+				loadBalancer:  tc.lb,
+				initConnCount: 3,
+				loops:         2,
+				ready:         ready,
+			}
 
-				for range 2 {
-					el := &eventloop{engine: &engine{opts: &Options{}}}
-					el.connections.init(0)
-					fixture.register(el)
-					require.EqualValues(t, 3, el.countConn())
-				}
-
-				select {
-				case <-ready:
-				default:
-					t.Fatal("fixture did not report initialization")
-				}
-
-				el := new(eventloop)
+			for range 2 {
+				el := &eventloop{engine: &engine{opts: &Options{}}}
 				el.connections.init(0)
-				tc.lb.register(el)
-				require.Zero(t, el.countConn(), "ordinary registration must not inherit GC fixture setup")
-			},
-		)
+				fixture.register(el)
+				require.EqualValues(t, 3, el.countConn())
+			}
+
+			select {
+			case <-ready:
+			default:
+				t.Fatal("fixture did not report initialization")
+			}
+
+			el := new(eventloop)
+			el.connections.init(0)
+			tc.lb.register(el)
+			require.Zero(t, el.countConn(), "ordinary registration must not inherit GC fixture setup")
+		})
 	}
 }

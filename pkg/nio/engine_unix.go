@@ -13,8 +13,6 @@ import (
 	"errors"
 	"sync/atomic"
 
-	"xxx/pkg/collection/swiss"
-	"xxx/pkg/hash"
 	errorx "xxx/pkg/nio/error"
 	"xxx/pkg/nio/netpoll"
 	"xxx/pkg/nio/queue"
@@ -25,11 +23,11 @@ import (
 )
 
 type engine struct {
-	listeners         *swiss.Table[int, *listener] // listeners for accepting incoming connections
-	opts              *Options                     // options with engine
-	ingress           *eventloop                   // main event-loop that monitors all listeners
-	eventLoops        loadBalancer                 // event-loops for handling events
-	inShutdown        atomic.Bool                  // whether the engine is in shutdown
+	listeners         map[int]*listener // listeners for accepting incoming connections
+	opts              *Options          // options with engine
+	ingress           *eventloop        // main event-loop that monitors all listeners
+	eventLoops        loadBalancer      // event-loops for handling events
+	inShutdown        atomic.Bool       // whether the engine is in shutdown
 	turnOff           context.CancelFunc
 	eventHandler      EventHandler        // user eventHandler
 	registrationSlots *semaphore.Weighted // shared by all event loops; limits in-flight registrations
@@ -55,18 +53,16 @@ func (eng *engine) shutdown(err error) {
 
 func (eng *engine) closeEventLoops() {
 	eng.eventLoops.iterate(func(_ int, el *eventloop) bool {
-		el.listeners.Range(func(_ int, ln *listener) (goOn bool) {
+		for _, ln := range eng.listeners {
 			ln.close()
-			return true
-		})
+		}
 		_ = el.poller.Close()
 		return true
 	})
 	if eng.ingress != nil {
-		eng.listeners.Range(func(_ int, ln *listener) (goOn bool) {
+		for _, ln := range eng.listeners {
 			ln.close()
-			return true
-		})
+		}
 		err := eng.ingress.poller.Close()
 		if err != nil {
 			eng.opts.Logger.Error("failed to close poller when stopping engine", zap.Error(err))
@@ -80,24 +76,22 @@ func (eng *engine) runEventLoops(ctx context.Context, numEventLoop int, maxConns
 	// Create loops locally and bind the listeners.
 	for i := range numEventLoop {
 		if i > 0 {
-			lns = swiss.NewTableWithCap[int, *listener](eng.listeners.Len(), hash.Int)
+			lns = make(map[int]*listener, len(eng.listeners))
 			var (
 				err error
 				ln  *listener
 			)
-			eng.listeners.Range(func(_ int, l *listener) (goOn bool) {
-				ln, err = initListener(l.network, l.address, eng.opts)
+			for _, ln = range eng.listeners {
+				ln, err = initListener(ln.network, ln.address, eng.opts)
 				if err != nil {
-					return false
+					break
 				}
-				lns.Set(ln.fd, ln)
-				return true
-			})
+				lns[ln.fd] = ln
+			}
 			if err != nil {
-				lns.Range(func(_ int, ln *listener) bool {
+				for _, ln = range lns {
 					ln.close()
-					return true
-				})
+				}
 				return err
 			}
 		}
@@ -112,12 +106,12 @@ func (eng *engine) runEventLoops(ctx context.Context, numEventLoop int, maxConns
 		el.buffer = make([]byte, eng.opts.ReadBufferCap)
 		el.connections.init(maxConns / numEventLoop)
 		el.eventHandler = eng.eventHandler
-		lns.Range(func(_ int, ln *listener) (goOn bool) {
-			if err = el.poller.AddRead(ln.packPollAttachment(el.accept), false); err != nil {
-				return false
+		for _, ln := range lns {
+			err = el.poller.AddRead(ln.packPollAttachment(el.accept), false)
+			if err != nil {
+				break
 			}
-			return true
-		})
+		}
 		if err != nil {
 			return err
 		}
@@ -178,12 +172,12 @@ func (eng *engine) activateReactors(ctx context.Context, numEventLoop int, maxCo
 	el.engine = eng
 	el.poller = p
 	el.eventHandler = eng.eventHandler
-	eng.listeners.Range(func(_ int, ln *listener) (goOn bool) {
-		if err = el.poller.AddRead(ln.packPollAttachment(el.accept0), true); err != nil {
-			return false
+	for _, ln := range eng.listeners {
+		err = el.poller.AddRead(ln.packPollAttachment(el.accept0), true)
+		if err != nil {
+			break
 		}
-		return true
-	})
+	}
 	if err != nil {
 		return err
 	}

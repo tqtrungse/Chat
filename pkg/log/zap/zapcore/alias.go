@@ -11,7 +11,7 @@ import (
 
 // This package is a partial fork of go.uber.org/zap/zapcore. It forks the
 // JSON encoder and the core, because both must know the type of the buffer,
-// and this fork changes that type. See FORK.md in the parent directory.
+// and this fork changes that type. See README.md in the parent directory.
 //
 // Each type below is an alias of the type of the upstream package, and not a
 // copy. Therefore, a value of this package and a value of the upstream

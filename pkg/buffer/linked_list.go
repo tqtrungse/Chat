@@ -127,7 +127,8 @@ func (ll *LinkedList) Peek(maxBytes int) ([][]byte, error) {
 			offset = maxBytes - cum
 		}
 		bs = append(bs, iter.data()[:offset])
-		if cum += offset; cum == maxBytes {
+		cum += offset
+		if cum == maxBytes {
 			break
 		}
 	}
@@ -153,13 +154,15 @@ func (ll *LinkedList) PeekWithBytes(maxBytes int, bs ...[]byte) ([][]byte, error
 	var bss [][]byte
 	var cum int
 	for _, b := range bs {
-		if n := len(b); n > 0 {
+		n := len(b)
+		if n > 0 {
 			offset := n
 			if cum+offset > maxBytes {
 				offset = maxBytes - cum
 			}
 			bss = append(bss, b[:offset])
-			if cum += offset; cum == maxBytes {
+			cum += offset
+			if cum == maxBytes {
 				return bss, nil
 			}
 		}
@@ -170,7 +173,8 @@ func (ll *LinkedList) PeekWithBytes(maxBytes int, bs ...[]byte) ([][]byte, error
 			offset = maxBytes - cum
 		}
 		bss = append(bss, iter.data()[:offset])
-		if cum += offset; cum == maxBytes {
+		cum += offset
+		if cum == maxBytes {
 			break
 		}
 	}

@@ -1,13 +1,12 @@
 // Copyright (c) 2016 Uber Technologies, Inc.
 // SPDX-License-Identifier: MIT
 //
-// Forked from go.uber.org/zap/buffer/buffer.go at v1.28.0.
-
 // Forked from go.uber.org/zap/zapcore/json_encoder.go at v1.28.0.
-//
-// This file is unchanged except for the import paths. It is here because
-// EncodeEntry returns the Buffer of this fork, and that Buffer takes its
-// bytes from xxx/pkg/pool/slice. See ../FORK.md.
+
+// The code of this file has three changes from upstream: the import paths, buffer.Get in
+// place of bufferpool.Get, and any in place of interface{}. The file is here
+// because EncodeEntry returns the Buffer of this fork. That Buffer takes its
+// bytes from xxx/pkg/pool/slice. See ../README.md.
 
 package zapcore
 
@@ -21,7 +20,8 @@ import (
 	"xxx/pkg/log/zap/internal/pool"
 )
 
-// For JSON-escaping; see jsonEncoder.safeAddString below.
+// _hex holds the hexadecimal digits for JSON escapes. See
+// jsonEncoder.safeAddString.
 const _hex = "0123456789abcdef"
 
 var _jsonPool = pool.New(func() *jsonEncoder {
@@ -44,25 +44,25 @@ func putJSONEncoder(enc *jsonEncoder) {
 type jsonEncoder struct {
 	*EncoderConfig
 	buf            *buffer.Buffer
-	spaced         bool // include spaces after colons and commas
+	spaced         bool // adds a space after each colon and each comma
 	openNamespaces int
 
-	// for encoding generic values by reflection
+	// reflectBuf and reflectEnc encode a generic value through reflection.
 	reflectBuf *buffer.Buffer
 	reflectEnc ReflectedEncoder
 }
 
-// NewJSONEncoder creates a fast, low-allocation JSON encoder. The encoder
-// appropriately escapes all field keys and values.
+// NewJSONEncoder creates a fast JSON encoder that makes few allocations. The
+// encoder escapes each field key and each value.
 //
-// Note that the encoder doesn't deduplicate keys, so it's possible to produce
-// a message like
+// The encoder does not remove duplicate keys. Therefore, it can produce a
+// message like
 //
 //	{"foo":"bar","foo":"baz"}
 //
-// This is permitted by the JSON specification, but not encouraged. Many
-// libraries will ignore duplicate key-value pairs (typically keeping the last
-// pair) when unmarshaling, but users should attempt to avoid adding duplicate
+// The JSON specification permits this message, but does not recommend it.
+// When many libraries unmarshal such a message, they ignore the duplicate
+// key-value pairs. Usually, they keep the last pair. Do not add duplicate
 // keys.
 func NewJSONEncoder(cfg EncoderConfig) Encoder {
 	return newJSONEncoder(cfg, false)
@@ -75,7 +75,8 @@ func newJSONEncoder(cfg EncoderConfig, spaced bool) *jsonEncoder {
 		cfg.LineEnding = DefaultLineEnding
 	}
 
-	// If no EncoderConfig.NewReflectedEncoder is provided by the user, then use default
+	// Use the default reflected encoder if the user gives no
+	// EncoderConfig.NewReflectedEncoder.
 	if cfg.NewReflectedEncoder == nil {
 		cfg.NewReflectedEncoder = defaultReflectedEncoder
 	}
@@ -152,9 +153,9 @@ func (enc *jsonEncoder) resetReflectBuf() {
 
 var nullLiteralBytes = []byte("null")
 
-// Only invoke the standard JSON encoder if there is actually something to
-// encode; otherwise write JSON null literal directly.
-func (enc *jsonEncoder) encodeReflected(obj interface{}) ([]byte, error) {
+// encodeReflected calls the standard JSON encoder only for a value that is not
+// nil. For nil, it writes the JSON null literal directly.
+func (enc *jsonEncoder) encodeReflected(obj any) ([]byte, error) {
 	if obj == nil {
 		return nullLiteralBytes, nil
 	}
@@ -166,7 +167,7 @@ func (enc *jsonEncoder) encodeReflected(obj interface{}) ([]byte, error) {
 	return enc.reflectBuf.Bytes(), nil
 }
 
-func (enc *jsonEncoder) AddReflected(key string, obj interface{}) error {
+func (enc *jsonEncoder) AddReflected(key string, obj any) error {
 	valueBytes, err := enc.encodeReflected(obj)
 	if err != nil {
 		return err
@@ -206,8 +207,8 @@ func (enc *jsonEncoder) AppendArray(arr ArrayMarshaler) error {
 }
 
 func (enc *jsonEncoder) AppendObject(obj ObjectMarshaler) error {
-	// Close ONLY new openNamespaces that are created during
-	// AppendObject().
+	// Close only the namespaces that this call of AppendObject opens. Keep
+	// the namespaces that were open before this call.
 	old := enc.openNamespaces
 	enc.openNamespaces = 0
 	enc.addElementSeparator()
@@ -231,19 +232,18 @@ func (enc *jsonEncoder) AppendByteString(val []byte) {
 	enc.buf.AppendByte('"')
 }
 
-// appendComplex appends the encoded form of the provided complex128 value.
-// precision specifies the encoding precision for the real and imaginary
-// components of the complex number.
+// appendComplex appends the encoded form of val. precision is the precision
+// of the real part and of the imaginary part.
 func (enc *jsonEncoder) appendComplex(val complex128, precision int) {
 	enc.addElementSeparator()
-	// Cast to a platform-independent, fixed-size type.
+	// Convert to a type that has a fixed size on each platform.
 	r, i := float64(real(val)), float64(imag(val))
 	enc.buf.AppendByte('"')
-	// Because we're always in a quoted string, we can use strconv without
-	// special-casing NaN and +/-Inf.
+	// The value is always in a quoted string. Therefore, strconv needs no
+	// special case for NaN and +/-Inf.
 	enc.buf.AppendFloat(r, precision)
-	// If imaginary part is less than 0, minus (-) sign is added by default
-	// by AppendFloat.
+	// AppendFloat adds the minus (-) sign if the imaginary part is less than
+	// 0. Therefore, add only the plus (+) sign here.
 	if i >= 0 {
 		enc.buf.AppendByte('+')
 	}
@@ -258,8 +258,8 @@ func (enc *jsonEncoder) AppendDuration(val time.Duration) {
 		e(val, enc)
 	}
 	if cur == enc.buf.Len() {
-		// User-supplied EncodeDuration is a no-op. Fall back to nanoseconds to keep
-		// JSON valid.
+		// The EncodeDuration of the user wrote nothing. Write the value in
+		// nanoseconds, so that the JSON stays valid.
 		enc.AppendInt64(int64(val))
 	}
 }
@@ -269,7 +269,7 @@ func (enc *jsonEncoder) AppendInt64(val int64) {
 	enc.buf.AppendInt(val)
 }
 
-func (enc *jsonEncoder) AppendReflected(val interface{}) error {
+func (enc *jsonEncoder) AppendReflected(val any) error {
 	valueBytes, err := enc.encodeReflected(val)
 	if err != nil {
 		return err
@@ -299,8 +299,8 @@ func (enc *jsonEncoder) AppendTime(val time.Time) {
 		e(val, enc)
 	}
 	if cur == enc.buf.Len() {
-		// User-supplied EncodeTime is a no-op. Fall back to nanos since epoch to keep
-		// output JSON valid.
+		// The EncodeTime of the user wrote nothing. Write the nanoseconds since
+		// the epoch, so that the output JSON stays valid.
 		enc.AppendInt64(val.UnixNano())
 	}
 }
@@ -357,8 +357,8 @@ func (enc *jsonEncoder) EncodeEntry(ent Entry, fields []Field) (*buffer.Buffer, 
 		cur := final.buf.Len()
 		final.EncodeLevel(ent.Level, final)
 		if cur == final.buf.Len() {
-			// User-supplied EncodeLevel was a no-op. Fall back to strings to keep
-			// output JSON valid.
+			// The EncodeLevel of the user wrote nothing. Write the level as a
+			// string, so that the output JSON stays valid.
 			final.AppendString(ent.Level.String())
 		}
 	}
@@ -370,16 +370,16 @@ func (enc *jsonEncoder) EncodeEntry(ent Entry, fields []Field) (*buffer.Buffer, 
 		cur := final.buf.Len()
 		nameEncoder := final.EncodeName
 
-		// if no name encoder provided, fall back to FullNameEncoder for backwards
-		// compatibility
+		// Use FullNameEncoder if the user gives no name encoder. This keeps
+		// the backward compatibility.
 		if nameEncoder == nil {
 			nameEncoder = FullNameEncoder
 		}
 
 		nameEncoder(ent.LoggerName, final)
 		if cur == final.buf.Len() {
-			// User-supplied EncodeName was a no-op. Fall back to strings to
-			// keep output JSON valid.
+			// The EncodeName of the user wrote nothing. Write the logger name
+			// as a string, so that the output JSON stays valid.
 			final.AppendString(ent.LoggerName)
 		}
 	}
@@ -389,8 +389,8 @@ func (enc *jsonEncoder) EncodeEntry(ent Entry, fields []Field) (*buffer.Buffer, 
 			cur := final.buf.Len()
 			final.EncodeCaller(ent.Caller, final)
 			if cur == final.buf.Len() {
-				// User-supplied EncodeCaller was a no-op. Fall back to strings to
-				// keep output JSON valid.
+				// The EncodeCaller of the user wrote nothing. Write the caller
+				// as a string, so that the output JSON stays valid.
 				final.AppendString(ent.Caller.String())
 			}
 		}
@@ -472,9 +472,9 @@ func (enc *jsonEncoder) appendFloat(val float64, bitSize int) {
 	}
 }
 
-// safeAddString JSON-escapes a string and appends it to the internal buffer.
-// Unlike the standard library's encoder, it doesn't attempt to protect the
-// user from browser vulnerabilities or JSONP-related problems.
+// safeAddString escapes s for JSON and appends it to the internal buffer. The
+// encoder of the standard library protects the user from browser
+// vulnerabilities and JSONP problems. This function does not.
 func (enc *jsonEncoder) safeAddString(s string) {
 	safeAppendStringLike(
 		(*buffer.Buffer).AppendString,
@@ -484,7 +484,8 @@ func (enc *jsonEncoder) safeAddString(s string) {
 	)
 }
 
-// safeAddByteString is no-alloc equivalent of safeAddString(string(s)) for s []byte.
+// safeAddByteString does the work of safeAddString(string(s)) for s []byte.
+// It makes no allocation.
 func (enc *jsonEncoder) safeAddByteString(s []byte) {
 	safeAppendStringLike(
 		(*buffer.Buffer).AppendBytes,
@@ -494,8 +495,9 @@ func (enc *jsonEncoder) safeAddByteString(s []byte) {
 	)
 }
 
-// safeAppendStringLike is a generic implementation of safeAddString and safeAddByteString.
-// It appends a string or byte slice to the buffer, escaping all special characters.
+// safeAppendStringLike is the generic implementation of safeAddString and
+// safeAddByteString. It appends a string or a byte slice to buf, and it
+// escapes each special character.
 func safeAppendStringLike[S []byte | string](
 	// appendTo appends this string-like object to the buffer.
 	appendTo func(*buffer.Buffer, S),
@@ -505,43 +507,42 @@ func safeAppendStringLike[S []byte | string](
 	buf *buffer.Buffer,
 	s S,
 ) {
-	// The encoding logic below works by skipping over characters
-	// that can be safely copied as-is,
-	// until a character is found that needs special handling.
-	// At that point, we copy everything we've seen so far,
-	// and then handle that special character.
+	// The loop below does not copy a safe character immediately. It
+	// continues until it finds a character that needs special treatment.
+	// Then it copies all the bytes before that character, and it writes the
+	// escape for that character.
 	//
-	// last is the index of the last byte that was copied to the buffer.
+	// last is the index of the last byte that the loop copied to buf.
 	last := 0
 	for i := 0; i < len(s); {
 		if s[i] >= utf8.RuneSelf {
-			// Character >= RuneSelf may be part of a multi-byte rune.
-			// They need to be decoded before we can decide how to handle them.
+			// A character >= RuneSelf can be part of a multi-byte rune. Decode
+			// the rune before you select the treatment.
 			r, size := decodeRune(s[i:])
 			if r != utf8.RuneError || size != 1 {
-				// No special handling required.
-				// Skip over this rune and continue.
+				// This rune needs no special treatment. Skip this rune and
+				// continue.
 				i += size
 				continue
 			}
 
-			// Invalid UTF-8 sequence.
-			// Replace it with the Unicode replacement character.
+			// The UTF-8 sequence is not valid. Replace it with the Unicode
+			// replacement character.
 			appendTo(buf, s[last:i])
 			buf.AppendString(`\ufffd`)
 
 			i++
 			last = i
 		} else {
-			// Character < RuneSelf is a single-byte UTF-8 rune.
+			// A character < RuneSelf is a single-byte UTF-8 rune.
 			if s[i] >= 0x20 && s[i] != '\\' && s[i] != '"' {
-				// No escaping necessary.
-				// Skip over this character and continue.
+				// This character needs no escape. Skip this character and
+				// continue.
 				i++
 				continue
 			}
 
-			// This character needs to be escaped.
+			// This character needs an escape.
 			appendTo(buf, s[last:i])
 			switch s[i] {
 			case '\\', '"':
@@ -557,7 +558,7 @@ func safeAppendStringLike[S []byte | string](
 				buf.AppendByte('\\')
 				buf.AppendByte('t')
 			default:
-				// Encode bytes < 0x20, except for the escape sequences above.
+				// Encode each byte < 0x20 that the cases above do not cover.
 				buf.AppendString(`\u00`)
 				buf.AppendByte(_hex[s[i]>>4])
 				buf.AppendByte(_hex[s[i]&0xF])
@@ -568,6 +569,6 @@ func safeAppendStringLike[S []byte | string](
 		}
 	}
 
-	// add remaining
+	// Copy the remaining bytes.
 	appendTo(buf, s[last:])
 }

@@ -6,23 +6,46 @@
 package batcher
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestPanicError_Unwrap_NonErrorValue(t *testing.T) {
-	e := &PanicError{Value: "plain string panic"}
-	require.Nil(t, e.Unwrap())
-}
-
-func TestPanicError_Unwrap_NilValue(t *testing.T) {
-	e := &PanicError{Value: nil}
-	require.Nil(t, e.Unwrap())
-}
-
-func TestPanicError_Unwrap_NonErrorStruct(t *testing.T) {
+func TestPanicError_Unwrap(t *testing.T) {
 	type payload struct{ msg string }
-	e := &PanicError{Value: payload{msg: "boom"}}
-	require.Nil(t, e.Unwrap())
+	errBoom := errors.New("boom")
+
+	cases := []struct {
+		name  string
+		value any
+		want  error
+	}{
+		{
+			name:  "error value",
+			value: errBoom,
+			want:  errBoom,
+		},
+		{
+			name:  "non-error value",
+			value: "plain string panic",
+			want:  nil,
+		},
+		{
+			name:  "nil value",
+			value: nil,
+			want:  nil,
+		},
+		{
+			name:  "non-error struct",
+			value: payload{msg: "boom"},
+			want:  nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &PanicError{Value: tc.value}
+			require.Equal(t, tc.want, e.Unwrap())
+		})
+	}
 }

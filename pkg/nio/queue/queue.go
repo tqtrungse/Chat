@@ -8,8 +8,7 @@ package queue
 
 import (
 	"sync/atomic"
-
-	"xxx/pkg/collection/mpsc"
+	"xxx/pkg/mpsc"
 )
 
 // EventPriority is the priority of an event.

@@ -54,30 +54,81 @@ func TestNextPowerOfTwo_Table(t *testing.T) {
 		in   int
 		want uint
 	}{
-		{-5, 1},
-		{0, 1},
-		{1, 1},
-		{2, 2},
-		{3, 4},
-		{4, 4},
-		{5, 8},
-		{7, 8},
-		{8, 8},
-		{9, 16},
-		{1023, 1024},
-		{1024, 1024},
-		{1025, 2048},
-		{1 << 20, 1 << 20},
-		{1<<20 + 1, 1 << 21},
-		{1 << 30, 1 << 30},
-		{1<<30 + 1, 1 << 31},
-		{math.MaxInt32, 1 << 31},
+		{
+			in:   -5,
+			want: 1,
+		},
+		{
+			in:   0,
+			want: 1,
+		},
+		{
+			in:   1,
+			want: 1,
+		},
+		{
+			in:   2,
+			want: 2,
+		},
+		{
+			in:   3,
+			want: 4,
+		},
+		{
+			in:   4,
+			want: 4,
+		},
+		{
+			in:   5,
+			want: 8,
+		},
+		{
+			in:   7,
+			want: 8,
+		},
+		{
+			in:   8,
+			want: 8,
+		},
+		{
+			in:   9,
+			want: 16,
+		},
+		{
+			in:   1023,
+			want: 1024,
+		},
+		{
+			in:   1024,
+			want: 1024,
+		},
+		{
+			in:   1025,
+			want: 2048,
+		},
+		{
+			in:   1 << 20,
+			want: 1 << 20,
+		},
+		{
+			in:   1<<20 + 1,
+			want: 1 << 21,
+		},
+		{
+			in:   1 << 30,
+			want: 1 << 30,
+		},
+		{
+			in:   1<<30 + 1,
+			want: 1 << 31,
+		},
+		{
+			in:   math.MaxInt32,
+			want: 1 << 31,
+		},
 	}
 	for _, c := range cases {
-		t.Run(
-			fmt.Sprint(c.in),
-			func(t *testing.T) { checkOne(t, c.in, c.want) },
-		)
+		t.Run(fmt.Sprint(c.in), func(t *testing.T) { checkOne(t, c.in, c.want) })
 	}
 }
 
@@ -87,16 +138,13 @@ func TestNextPowerOfTwo_EveryBit(t *testing.T) {
 	// Maximum k = UintSize-2, ensuring v+1 does not overflow an int; the maximum result is 2^(UintSize-1).
 	for k := 0; k <= bits.UintSize-2; k++ {
 		v := 1 << k
-		t.Run(
-			fmt.Sprintf("k=%d", k),
-			func(t *testing.T) {
-				checkOne(t, v, uint(1)<<k)       // correct power of 2
-				checkOne(t, v+1, uint(1)<<(k+1)) // just passed
-				if k >= 2 {
-					checkOne(t, v-1, uint(1)<<k) // immediately below (k=1 → v-1=1 → 1, ignored)
-				}
-			},
-		)
+		t.Run(fmt.Sprintf("k=%d", k), func(t *testing.T) {
+			checkOne(t, v, uint(1)<<k)       // correct power of 2
+			checkOne(t, v+1, uint(1)<<(k+1)) // just passed
+			if k >= 2 {
+				checkOne(t, v-1, uint(1)<<k) // immediately below (k=1 → v-1=1 → 1, ignored)
+			}
+		})
 	}
 }
 

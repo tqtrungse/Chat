@@ -6,11 +6,11 @@
 package batcher
 
 import (
+	"math/bits"
 	"sync/atomic"
 	"unsafe"
 
 	"xxx/pkg/cpu"
-	"xxx/pkg/os"
 )
 
 // partition holds the admission state and the queue of one batching loop.
@@ -24,7 +24,7 @@ type partition[T any] struct {
 	_     [cpu.CacheLineSize - unsafe.Sizeof(atomic.Uint64{})]byte
 
 	incoming chan Req[T]
-	_        [cpu.CacheLineSize - os.PtrSize]byte
+	_        [cpu.CacheLineSize - bits.UintSize/8]byte
 }
 
 // acquire admits a new Submit call and increments the active count.

@@ -1,10 +1,8 @@
 // Copyright (c) 2016 Uber Technologies, Inc.
 // SPDX-License-Identifier: MIT
 //
-// Forked from go.uber.org/zap/buffer/buffer.go at v1.28.0.
+// Forked from go.uber.org/zap/zapcore/core.go at v1.28.0.
 
-// Modified from go.uber.org/zap/zapcore/core.go.
-//
 // The Core interface is not here. It is an alias of the Core of upstream in
 // alias.go. Therefore, zap.New, zapcore.NewTee and
 // zapcore.NewSamplerWithOptions accept the core of this file. nopCore and
@@ -122,8 +120,9 @@ func (c *ioCore) Write(ent Entry, fields []Field) error {
 	}
 
 	if ent.Level > ErrorLevel {
-		// Since we may be crashing the program, sync the output.
-		// Ignore Sync errors, pending a clean solution to issue #370.
+		// An entry above ErrorLevel can stop the program. Therefore, sync the
+		// output now. Ignore the Sync error until upstream issue #370 has a
+		// clean solution.
 		_ = c.Sync()
 	}
 	return nil

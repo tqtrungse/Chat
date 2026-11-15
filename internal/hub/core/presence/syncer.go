@@ -15,11 +15,11 @@ import (
 	"xxx/internal/shared/device"
 
 	"xxx/pkg/batcher"
-	"xxx/pkg/bit"
 	"xxx/pkg/breaker"
 	"xxx/pkg/jitter"
 	"xxx/pkg/log"
 	workerpool "xxx/pkg/pool/worker"
+	"xxx/pkg/utils/bit"
 
 	"go.uber.org/zap"
 )

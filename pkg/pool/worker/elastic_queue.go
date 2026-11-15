@@ -6,13 +6,13 @@
 package worker
 
 import (
+	"math/bits"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 
 	"xxx/pkg/cpu"
-	"xxx/pkg/generic"
-	"xxx/pkg/os"
+	"xxx/pkg/utils/generic"
 )
 
 const segmentSize = 1024
@@ -34,7 +34,7 @@ type boundedSegment[V any] struct {
 
 	mtx  sync.Mutex
 	next atomic.Pointer[boundedSegment[V]]
-	_    [cpu.CacheLineSize - os.PtrSize - unsafe.Sizeof(sync.Mutex{})]byte
+	_    [cpu.CacheLineSize - bits.UintSize/8 - unsafe.Sizeof(sync.Mutex{})]byte
 
 	buf       [segmentSize]entry[V]
 	entrySize uint32
@@ -117,10 +117,10 @@ func (s *boundedSegment[V]) publish(idx int, value V) {
 // Zero value is not usable; use New.
 type elastic[V any] struct {
 	head atomic.Pointer[boundedSegment[V]]
-	_    [cpu.CacheLineSize - os.PtrSize]byte
+	_    [cpu.CacheLineSize - bits.UintSize/8]byte
 
 	tail atomic.Pointer[boundedSegment[V]]
-	_    [cpu.CacheLineSize - os.PtrSize]byte
+	_    [cpu.CacheLineSize - bits.UintSize/8]byte
 }
 
 func newElastic[V any]() *elastic[V] {

@@ -31,7 +31,10 @@ func newListenerTestLogger(t *testing.T) *log.Logger {
 
 	logger, closeLogger, _ := logtest.New(
 		t,
-		log.Config{BufferSize: 1024, FlushInterval: time.Hour},
+		log.Config{
+			BufferSize:    1024,
+			FlushInterval: time.Hour,
+		},
 	)
 	t.Cleanup(func() { _ = closeLogger() })
 	return logger
@@ -56,67 +59,64 @@ func TestInitListenerPreservesBindErrorWithKeepAlive(t *testing.T) {
 
 func TestCreateListenersClosesEarlierListenersOnFailure(t *testing.T) {
 	for _, network := range []string{"tcp4", "unix"} {
-		t.Run(
-			network,
-			func(t *testing.T) {
-				occupied, err := net.Listen("tcp4", "127.0.0.1:0")
+		t.Run(network, func(t *testing.T) {
+			occupied, err := net.Listen("tcp4", "127.0.0.1:0")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = occupied.Close() })
+
+			// Keep Unix socket paths short enough for sockaddr_un on macOS.
+			dir, err := os.MkdirTemp("", "nio-ln-")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+			var addrs []string
+			var reservations []net.Listener
+			for i := range 3 {
+				addr := "127.0.0.1:0"
+				if network == "unix" {
+					addr = filepath.Join(dir, fmt.Sprintf("s%d", i))
+				}
+
+				reservation, err := net.Listen(network, addr)
 				require.NoError(t, err)
-				t.Cleanup(func() { _ = occupied.Close() })
 
-				// Keep Unix socket paths short enough for sockaddr_un on macOS.
-				dir, err := os.MkdirTemp("", "nio-ln-")
+				t.Cleanup(func() { _ = reservation.Close() })
+				reservations = append(reservations, reservation)
+				addrs = append(addrs, network+"://"+reservation.Addr().String())
+			}
+
+			for _, reservation := range reservations {
+				require.NoError(t, reservation.Close())
+			}
+			addrs = append(addrs, "tcp4://"+occupied.Addr().String())
+
+			listeners, options, err := createListeners(
+				addrs,
+				WithLogger(newListenerTestLogger(t)),
+				WithTCPKeepAlive(30*time.Second),
+			)
+			require.ErrorIs(t, err, unix.EADDRINUSE)
+			require.ErrorContains(t, err, "listen "+addrs[3]+": ")
+
+			var syscallErr *os.SyscallError
+			require.ErrorAs(t, err, &syscallErr)
+			require.Equal(t, "bind", syscallErr.Syscall)
+			require.Nil(t, listeners)
+			require.Nil(t, options)
+
+			for _, addr := range addrs[:3] {
+				proto, address, err := parseProtoAddr(addr)
 				require.NoError(t, err)
-				t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
-				var addrs []string
-				var reservations []net.Listener
-				for i := range 3 {
-					addr := "127.0.0.1:0"
-					if network == "unix" {
-						addr = filepath.Join(dir, fmt.Sprintf("s%d", i))
-					}
-
-					reservation, err := net.Listen(network, addr)
-					require.NoError(t, err)
-
-					t.Cleanup(func() { _ = reservation.Close() })
-					reservations = append(reservations, reservation)
-					addrs = append(addrs, network+"://"+reservation.Addr().String())
+				if proto == "unix" {
+					require.NoFileExists(t, address)
 				}
 
-				for _, reservation := range reservations {
-					require.NoError(t, reservation.Close())
-				}
-				addrs = append(addrs, "tcp4://"+occupied.Addr().String())
-
-				listeners, options, err := createListeners(
-					addrs,
-					WithLogger(newListenerTestLogger(t)),
-					WithTCPKeepAlive(30*time.Second),
-				)
-				require.ErrorIs(t, err, unix.EADDRINUSE)
-				require.ErrorContains(t, err, "listen "+addrs[3]+": ")
-
-				var syscallErr *os.SyscallError
-				require.ErrorAs(t, err, &syscallErr)
-				require.Equal(t, "bind", syscallErr.Syscall)
-				require.Nil(t, listeners)
-				require.Nil(t, options)
-
-				for _, addr := range addrs[:3] {
-					proto, address, err := parseProtoAddr(addr)
-					require.NoError(t, err)
-
-					if proto == "unix" {
-						require.NoFileExists(t, address)
-					}
-
-					rebound, err := net.Listen(proto, address)
-					require.NoError(t, err, "earlier listener must release %s", addr)
-					require.NoError(t, rebound.Close())
-				}
-			},
-		)
+				rebound, err := net.Listen(proto, address)
+				require.NoError(t, err, "earlier listener must release %s", addr)
+				require.NoError(t, rebound.Close())
+			}
+		})
 	}
 }
 
@@ -245,7 +245,11 @@ func TestListenerOpenPreservesFirstError(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Cleanup(func() { _ = occupied.Close() })
-	ln := &listener{fd: -1, network: "tcp4", address: occupied.Addr().String()}
+	ln := &listener{
+		fd:      -1,
+		network: "tcp4",
+		address: occupied.Addr().String(),
+	}
 	firstErr := ln.open()
 	require.ErrorIs(t, firstErr, unix.EADDRINUSE)
 	// Removing the original bind conflict must not cause a second open attempt.
@@ -300,19 +304,16 @@ func TestParseProtoAddr(t *testing.T) {
 			err:     nil,
 		},
 	} {
-		t.Run(
-			tc.input,
-			func(t *testing.T) {
-				network, address, err := parseProtoAddr(tc.input)
-				if tc.err != nil {
-					require.ErrorIs(t, err, tc.err)
-					return
-				}
-				require.NoError(t, err)
-				require.Equal(t, tc.network, network)
-				require.Equal(t, tc.address, address)
-			},
-		)
+		t.Run(tc.input, func(t *testing.T) {
+			network, address, err := parseProtoAddr(tc.input)
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.network, network)
+			require.Equal(t, tc.address, address)
+		})
 	}
 }
 

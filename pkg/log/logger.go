@@ -17,7 +17,7 @@ import (
 	// logzapcore is a partial fork of zapcore. It gives the encoder and the
 	// core that move the buffer of the encoder to the sink, with no copy.
 	// Each other part of zap and zapcore comes from upstream. See
-	// zap/FORK.md.
+	// zap/README.md.
 	logzapcore "xxx/pkg/log/zap/zapcore"
 )
 
@@ -40,9 +40,10 @@ type Logger struct {
 // asynchronous sink. A zero Config gives each default value.
 //
 // The logger encodes an entry on the goroutine of the caller. Then it sends
-// the entry to one writer goroutine through a queue of a fixed size. A log
-// call costs one copy and one channel send, and the call does not wait for
-// stdout. If the queue is full, the sink discards the entries and counts
+// the buffer of the encoder to one writer goroutine through a queue of a
+// fixed size. The sink becomes the owner of that buffer and does not copy
+// it. After the encode, a log call costs one channel send, and the call does
+// not wait for stdout. If the queue is full, the sink discards the entries and counts
 // them, and the caller does not wait. The sink writes the count in the
 // stream, and Dropped gives the same count. In a container, stdout is a pipe
 // to the log collector. Without this design, a slow collector stops the
@@ -112,8 +113,8 @@ func newLogger(
 	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	encoder := logzapcore.NewJSONEncoder(encoderConfig)
 
-	// lowCore applies for Debug (-1), Info (0), Warn (1).
-	// lowCore passes through a sampling if configured.
+	// lowCore accepts Debug (-1), Info (0) and Warn (1). If sampling is on,
+	// a sampler wraps lowCore.
 	lowCore := logzapcore.NewCore(
 		encoder,
 		l.sink,
@@ -130,8 +131,8 @@ func newLogger(
 		)
 	}
 
-	// highCore applies for Error (2), DPanic (3), Panic (4), Fatal (5).
-	// highCore has no sampler. Therefore, it writes every entry, and it
+	// highCore accepts Error (2), DPanic (3), Panic (4) and Fatal (5).
+	// highCore has no sampler. Therefore, it writes each entry, and it
 	// ignores none.
 	highCore := logzapcore.NewCore(
 		encoder,
@@ -147,12 +148,14 @@ func newLogger(
 		// Add the file and the line number of each log call.
 		zap.AddCaller(),
 
-		// The log shows the file name and line number of the code that calls the wrapper function.
-		// The log does not show the file name and line number of the wrapper function itself.
+		// The log shows the file name and the line number of the code that
+		// calls the wrapper function. It does not show the file name and the
+		// line number of the wrapper function.
 		zap.AddCallerSkip(1),
 
-		// Keep the diagnostics of zap out of the log stream and out of the
-		// sink.
+		// zap writes its own diagnostics to the diagnostics writer.
+		// Therefore, the diagnostics are not in the log stream, and they do
+		// not use the sink.
 		zap.ErrorOutput(zapcore.Lock(zapcore.AddSync(diagnostics))),
 	)
 	return l, l.close, nil
@@ -163,8 +166,8 @@ func newLogger(
 //
 // Use Component to send the logs of a library to this logger. The caller of
 // such an entry is in that library, some frames deep, and the depth is not
-// constant. Therefore, the caller field would show the bridge and nothing
-// useful.
+// constant. Therefore, the caller field shows only the bridge, and that
+// value has no use.
 //
 // The new Logger shares the sink and the shutdown of this Logger. A close of
 // one Logger closes both. Do not close a component Logger separately.

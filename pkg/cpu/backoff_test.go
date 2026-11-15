@@ -31,22 +31,39 @@ func TestCpu_IsDone(t *testing.T) {
 		step int
 		want bool
 	}{
-		{"zero step", 0, false},
-		{"just below yieldLimit", yieldLimit - 1, false},
-		{"exactly yieldLimit", yieldLimit, false},
-		{"one above yieldLimit", yieldLimit + 1, true},
-		{"well above yieldLimit", yieldLimit + 100, true},
+		{
+			name: "zero step",
+			step: 0,
+			want: false,
+		},
+		{
+			name: "just below yieldLimit",
+			step: yieldLimit - 1,
+			want: false,
+		},
+		{
+			name: "exactly yieldLimit",
+			step: yieldLimit,
+			want: false,
+		},
+		{
+			name: "one above yieldLimit",
+			step: yieldLimit + 1,
+			want: true,
+		},
+		{
+			name: "well above yieldLimit",
+			step: yieldLimit + 100,
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {
-		t.Run(
-			tt.name,
-			func(t *testing.T) {
-				b := Backoff{step: tt.step}
-				got := b.IsDone()
-				require.Equal(t, tt.want, got)
-			},
-		)
+		t.Run(tt.name, func(t *testing.T) {
+			b := Backoff{step: tt.step}
+			got := b.IsDone()
+			require.Equal(t, tt.want, got)
+		})
 	}
 }
 

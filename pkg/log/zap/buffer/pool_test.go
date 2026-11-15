@@ -74,7 +74,7 @@ func TestPool_RoundTripAfterGrowth(t *testing.T) {
 }
 
 func TestPool_GetAfterFreeGivesCleanLength(t *testing.T) {
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		buf := Get()
 		require.Equal(t, 0, buf.Len(), "iteration %d", i)
 		buf.AppendString("some text for the entry")

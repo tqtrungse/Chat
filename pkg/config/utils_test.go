@@ -74,7 +74,8 @@ func TestSplitList(t *testing.T) {
 			want: nil},
 		{
 			name: "single",
-			in:   "a", want: []string{"a"},
+			in:   "a",
+			want: []string{"a"},
 		},
 		{
 			name: "multiple",
@@ -103,12 +104,9 @@ func TestSplitList(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		t.Run(
-			tt.name,
-			func(t *testing.T) {
-				assert.Equal(t, tt.want, SplitList(tt.in))
-			},
-		)
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, SplitList(tt.in))
+		})
 	}
 }
 
@@ -307,14 +305,11 @@ func TestDefaultLoader_ExactFile(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "app.yaml"), "k: yaml\n")
 
 	for _, ext := range []string{"json", "toml", "yaml"} {
-		t.Run(
-			ext,
-			func(t *testing.T) {
-				l, err := defaultLoader(filepath.Join(dir, "app."+ext))
-				require.NoError(t, err)
-				assert.Equal(t, ext, l.GetString("k"))
-			},
-		)
+		t.Run(ext, func(t *testing.T) {
+			l, err := defaultLoader(filepath.Join(dir, "app."+ext))
+			require.NoError(t, err)
+			assert.Equal(t, ext, l.GetString("k"))
+		})
 	}
 }
 
@@ -457,21 +452,18 @@ func TestLoad_EnvFileExtension(t *testing.T) {
 // TestLoad_UnsupportedExtension checks that a file with an extension that viper does not know is an error.
 func TestLoad_UnsupportedExtension(t *testing.T) {
 	for _, name := range []string{"app.txt", "app"} {
-		t.Run(
-			name,
-			func(t *testing.T) {
-				isolate(t, "SVC_CONFIG_FILE")
-				path := filepath.Join(t.TempDir(), name)
-				writeFile(t, path, "a=1\n")
-				t.Setenv("SVC_CONFIG_FILE", path)
+		t.Run(name, func(t *testing.T) {
+			isolate(t, "SVC_CONFIG_FILE")
+			path := filepath.Join(t.TempDir(), name)
+			writeFile(t, path, "a=1\n")
+			t.Setenv("SVC_CONFIG_FILE", path)
 
-				l, err := Load("svc")
-				require.Error(t, err)
-				assert.Nil(t, l)
+			l, err := Load("svc")
+			require.Error(t, err)
+			assert.Nil(t, l)
 
-				var unsupported viper.UnsupportedConfigError
-				assert.True(t, errors.As(err, &unsupported))
-			},
-		)
+			var unsupported viper.UnsupportedConfigError
+			assert.True(t, errors.As(err, &unsupported))
+		})
 	}
 }

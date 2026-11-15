@@ -10,7 +10,7 @@ import (
 	"hash/crc32"
 	"net"
 
-	"xxx/pkg/bs"
+	"xxx/pkg/utils/bs"
 )
 
 // LoadBalancing represents the type of load-balancing algorithm.

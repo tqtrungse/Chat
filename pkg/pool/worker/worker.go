@@ -6,10 +6,10 @@
 package worker
 
 import (
+	cryptorand "crypto/rand"
+	"encoding/binary"
 	"math/rand/v2"
 	"runtime/debug"
-
-	"xxx/pkg/hash"
 
 	"go.uber.org/zap"
 )
@@ -61,7 +61,7 @@ func newWorker(id int, p *Pool) *worker {
 		id:    id,
 		pool:  p,
 		local: newLocal[Task](),
-		rng:   rand.New(rand.NewPCG(uint64(id)+1, hash.MakeSeed())),
+		rng:   rand.New(rand.NewPCG(uint64(id)+1, makeSeed())),
 	}
 	w.ctx = Context{w: w}
 	return w
@@ -69,7 +69,6 @@ func newWorker(id int, p *Pool) *worker {
 
 func (w *worker) run() {
 	defer w.pool.workersWg.Done()
-
 	for {
 		task, ok := w.findTask()
 		if !ok {
@@ -201,4 +200,10 @@ func (w *worker) parkUntilWork() (Task, bool) {
 			return nil, false
 		}
 	}
+}
+
+func makeSeed() uint64 {
+	var b [8]byte
+	_, _ = cryptorand.Read(b[:])
+	return binary.LittleEndian.Uint64(b[:])
 }

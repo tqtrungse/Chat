@@ -23,16 +23,16 @@ import (
 // the shutdown function and the path of that file.
 //
 // log.NewLogger reads os.Stdout one time, and the sink keeps that file.
-// Therefore, New puts the file of the test in os.Stdout only for that call
-// and puts the former value back at once. The tests that use New must not
+// Therefore, New puts the file of the test in os.Stdout only for that call.
+// Then it sets the former value again at once. The tests that use New must not
 // call t.Parallel, because os.Stdout is a value of the process.
 //
 // The sink holds each entry in a queue and in a buffer. Therefore, call
 // log.Logger.Sync or the shutdown function before a read of the file.
 //
-// Sampling is off unless the test asks for it with cfg.SampleFirst: a test
-// that counts entries cannot accept a sampler that thins out one message
-// that repeats.
+// Sampling is off, unless cfg.SampleFirst is more than zero. A test that
+// counts entries cannot accept a sampler, because the sampler removes some
+// entries of a message that repeats.
 func New(t *testing.T, cfg log.Config) (logger *log.Logger, closeFn func() error, path string) {
 	t.Helper()
 

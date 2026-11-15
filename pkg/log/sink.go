@@ -38,7 +38,7 @@ const (
 // a fixed size, and returns. WriteBuffer does not wait and does not fail. If
 // the queue is full, WriteBuffer discards the entry and counts it. This
 // behavior is the purpose of the type. In a container, stdout is a pipe to
-// the log collector. A writing to a full pipe waits, and it stops the
+// the log collector. A write to a full pipe waits, and it stops the
 // goroutine that wrote the log. That goroutine can be an event loop.
 //
 // The sink copies no bytes. The forked core gives the ownership of the buffer
@@ -114,7 +114,7 @@ func newAsyncSink(
 
 // WriteBuffer puts buf in the queue. The sink is the owner of buf after this
 // call, and the sink frees buf one time. The writer goroutine frees buf after
-// to write. This method frees buf if the queue is full.
+// the write. This method frees buf if the queue is full.
 //
 // The forked core gives the buffer of the encoder to this method and frees
 // nothing. The original core frees the buffer immediately after the write, and
@@ -197,7 +197,8 @@ func (s *asyncSink) Sync() error {
 // Therefore, the production path calls Stop one time.
 func (s *asyncSink) Stop() error {
 	if s.stopOnce.CompareAndSwap(false, true) {
-		// Emit event to drain remaining logs.
+		// The closed channel tells the writer goroutine to write the
+		// remaining entries and exit.
 		close(s.quit)
 	}
 
@@ -309,8 +310,8 @@ func (s *asyncSink) write(buf *buffer.Buffer) {
 
 	// A bufio.Writer copies the bytes into its own buffer, or it writes the
 	// bytes to stdout. Both operations are complete when Write returns.
-	// Therefore, the free below is correct, and it gives the bytes back for
-	// the next entry.
+	// Therefore, the free below is correct, and it returns the bytes to the
+	// pool for the next entry.
 	_, err := s.bw.Write(buf.Bytes())
 	s.setErr(err)
 	buf.Free()

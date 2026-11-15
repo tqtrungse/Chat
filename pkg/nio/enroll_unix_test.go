@@ -22,8 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"xxx/pkg/collection/swiss"
-	"xxx/pkg/hash"
 	"xxx/pkg/log"
 	"xxx/pkg/log/logtest"
 	errorx "xxx/pkg/nio/error"
@@ -40,72 +38,69 @@ const enrollTestTimeout = 3 * time.Second
 
 func TestEnrollSetsCloseOnExecAndSurvivesOriginalClose(t *testing.T) {
 	for _, network := range []string{"tcp4", "unix"} {
-		t.Run(
-			network,
-			func(t *testing.T) {
-				var (
-					fixture  = newEnrollmentFixture(t, &enrollmentHandler{}, nil)
-					original net.Conn
-					peer     net.Conn
-				)
+		t.Run(network, func(t *testing.T) {
+			var (
+				fixture  = newEnrollmentFixture(t, &enrollmentHandler{}, nil)
+				original net.Conn
+				peer     net.Conn
+			)
 
-				if network == "unix" {
-					original, peer = enrollmentSocketPair(t)
-				} else {
-					ln, err := net.Listen("tcp4", "127.0.0.1:0")
-					require.NoError(t, err)
-					t.Cleanup(func() { _ = ln.Close() })
-
-					original, err = net.DialTimeout(
-						"tcp4",
-						ln.Addr().String(),
-						enrollTestTimeout,
-					)
-					require.NoError(t, err)
-					t.Cleanup(func() { _ = original.Close() })
-
-					peer, err = ln.Accept()
-					require.NoError(t, err)
-					t.Cleanup(func() { _ = peer.Close() })
-				}
-
-				ch, err := fixture.loop.Enroll(t.Context(), original)
+			if network == "unix" {
+				original, peer = enrollmentSocketPair(t)
+			} else {
+				ln, err := net.Listen("tcp4", "127.0.0.1:0")
 				require.NoError(t, err)
+				t.Cleanup(func() { _ = ln.Close() })
 
-				result := awaitEnrollmentResult(t, ch)
-				require.NoError(t, result.Err)
-				awaitOriginalConnClosed(t, original)
-
-				flags, err := unix.FcntlInt(uintptr(result.Conn.Fd()), unix.F_GETFD, 0)
-				require.NoError(t, err)
-				require.NotZero(t, flags&unix.FD_CLOEXEC)
-
-				var (
-					done     = make(chan struct{})
-					n        int
-					writeErr error
+				original, err = net.DialTimeout(
+					"tcp4",
+					ln.Addr().String(),
+					enrollTestTimeout,
 				)
-				require.NoError(
-					t,
-					fixture.loop.Execute(
-						t.Context(),
-						func(context.Context) error {
-							n, writeErr = result.Conn.Write([]byte("probe"))
-							close(done)
-							return nil
-						}),
-				)
-				awaitEnrollmentSignal(t, done)
-				require.NoError(t, writeErr)
-				require.Equal(t, 5, n)
-				require.NoError(t, peer.SetReadDeadline(time.Now().Add(enrollTestTimeout)))
-
-				var got [5]byte
-				_, err = io.ReadFull(peer, got[:])
 				require.NoError(t, err)
-				require.Equal(t, "probe", string(got[:]))
-			},
-		)
+				t.Cleanup(func() { _ = original.Close() })
+
+				peer, err = ln.Accept()
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = peer.Close() })
+			}
+
+			ch, err := fixture.loop.Enroll(t.Context(), original)
+			require.NoError(t, err)
+
+			result := awaitEnrollmentResult(t, ch)
+			require.NoError(t, result.Err)
+			awaitOriginalConnClosed(t, original)
+
+			flags, err := unix.FcntlInt(uintptr(result.Conn.Fd()), unix.F_GETFD, 0)
+			require.NoError(t, err)
+			require.NotZero(t, flags&unix.FD_CLOEXEC)
+
+			var (
+				done     = make(chan struct{})
+				n        int
+				writeErr error
+			)
+			require.NoError(
+				t,
+				fixture.loop.Execute(
+					t.Context(),
+					func(context.Context) error {
+						n, writeErr = result.Conn.Write([]byte("probe"))
+						close(done)
+						return nil
+					}),
+			)
+			awaitEnrollmentSignal(t, done)
+			require.NoError(t, writeErr)
+			require.Equal(t, 5, n)
+			require.NoError(t, peer.SetReadDeadline(time.Now().Add(enrollTestTimeout)))
+
+			var got [5]byte
+			_, err = io.ReadFull(peer, got[:])
+			require.NoError(t, err)
+			require.Equal(t, "probe", string(got[:]))
+		})
 	}
 }
 
@@ -384,7 +379,10 @@ func TestEnrollCanceledBeforeDial(t *testing.T) {
 
 	// An already canceled request is rejected synchronously, before dialing
 	// or transferring ownership of an established net.Conn.
-	ch, err := fixture.loop.Register(ctx, &net.UnixAddr{Name: "unused", Net: "unix"})
+	ch, err := fixture.loop.Register(ctx, &net.UnixAddr{
+		Name: "unused",
+		Net:  "unix",
+	})
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, ch)
 
@@ -410,53 +408,50 @@ func TestEnrollCanceledDuringDial(t *testing.T) {
 			name = "engine"
 		}
 
-		t.Run(
-			name,
-			func(t *testing.T) {
-				fixture := newEnrollmentFixture(t, &enrollmentHandler{}, nil)
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
+		t.Run(name, func(t *testing.T) {
+			fixture := newEnrollmentFixture(t, &enrollmentHandler{}, nil)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
 
-				registry, err := fixture.loop.newConnRegistration(ctx)
-				require.NoError(t, err)
+			registry, err := fixture.loop.newConnRegistration(ctx)
+			require.NoError(t, err)
 
-				entered := make(chan struct{})
-				returned := make(chan struct{})
+			entered := make(chan struct{})
+			returned := make(chan struct{})
 
-				// A listener that does not Accept can still finish the TCP
-				// handshake. Inject a dial blocked on ctx.Done instead, so this
-				// test exercises cancellation of an in-flight dial deterministically.
-				go func() {
-					defer close(returned)
-					registry.prepare(
-						nil,
-						&net.TCPAddr{
-							IP:   net.IPv4(127, 0, 0, 1),
-							Port: 1,
-						},
-						func(ctx context.Context, network, address string) (net.Conn, error) {
-							close(entered)
-							<-ctx.Done()
-							return nil, ctx.Err()
-						},
-					)
-				}()
+			// A listener that does not Accept can still finish the TCP
+			// handshake. Inject a dial blocked on ctx.Done instead, so this
+			// test exercises cancellation of an in-flight dial deterministically.
+			go func() {
+				defer close(returned)
+				registry.prepare(
+					nil,
+					&net.TCPAddr{
+						IP:   net.IPv4(127, 0, 0, 1),
+						Port: 1,
+					},
+					func(ctx context.Context, network, address string) (net.Conn, error) {
+						close(entered)
+						<-ctx.Done()
+						return nil, ctx.Err()
+					},
+				)
+			}()
 
-				awaitEnrollmentSignal(t, entered)
-				want := context.Canceled
-				if shutdown {
-					fixture.loop.engine.shutdown(nil)
-					want = errorx.ErrEngineInShutdown
-				} else {
-					cancel()
-				}
+			awaitEnrollmentSignal(t, entered)
+			want := context.Canceled
+			if shutdown {
+				fixture.loop.engine.shutdown(nil)
+				want = errorx.ErrEngineInShutdown
+			} else {
+				cancel()
+			}
 
-				result := awaitEnrollmentResult(t, registry.result)
-				require.ErrorIs(t, result.Err, want)
-				require.Nil(t, result.Conn)
-				awaitEnrollmentSignal(t, returned)
-			},
-		)
+			result := awaitEnrollmentResult(t, registry.result)
+			require.ErrorIs(t, result.Err, want)
+			require.Nil(t, result.Conn)
+			awaitEnrollmentSignal(t, returned)
+		})
 	}
 }
 
@@ -794,7 +789,7 @@ func newEnrollmentFixture(
 	root, cancel := context.WithCancel(t.Context())
 	eg, ctx := errgroup.WithContext(root)
 	eng := &engine{
-		listeners: swiss.NewTable[int, *listener](hash.Int),
+		listeners: make(map[int]*listener),
 		opts: &Options{
 			Logger:         logger,
 			ReadBufferCap:  1024,
@@ -807,17 +802,24 @@ func newEnrollmentFixture(
 	eng.concurrency.Group, eng.concurrency.ctx = eg, ctx
 	// Validate needs a listener, but these tests enroll connections directly.
 	// The sentinel has no real fd and is never registered with the poller.
-	eng.listeners.Set(-1, &listener{fd: -1, logger: logger})
+	eng.listeners[-1] = &listener{
+		fd:     -1,
+		logger: logger,
+	}
 	poller, err := netpoll.OpenPoller(logger)
 	require.NoError(t, err)
 
 	el := &eventloop{
-		engine: eng, listeners: eng.listeners, poller: poller,
-		buffer: make([]byte, 1024), eventHandler: handler,
+		engine:       eng,
+		listeners:    eng.listeners,
+		poller:       poller,
+		buffer:       make([]byte, 1024),
+		eventHandler: handler,
 	}
 	el.connections.init(0)
 	eng.eventLoops = &leastConnectionsLoadBalancer{
-		eventLoops: []*eventloop{el}, size: 1,
+		eventLoops: []*eventloop{el},
+		size:       1,
 	}
 
 	fixture := &enrollmentFixture{

@@ -84,8 +84,17 @@ func TestRecordSamplesPerReasonAndCountsEveryRejection(t *testing.T) {
 	require.Equal(
 		t,
 		[]logEntry{
-			{Level: "warn", Reason: "bad_frame", SinceLastLog: 1, Error: "invalid frame"},
-			{Level: "warn", Reason: "bad_proof", SinceLastLog: 1},
+			{
+				Level:        "warn",
+				Reason:       "bad_frame",
+				SinceLastLog: 1,
+				Error:        "invalid frame",
+			},
+			{
+				Level:        "warn",
+				Reason:       "bad_proof",
+				SinceLastLog: 1,
+			},
 		},
 		entries(),
 	)
@@ -95,7 +104,15 @@ func TestRecordSamplesPerReasonAndCountsEveryRejection(t *testing.T) {
 	stats.Record(badFrame, nil)
 	got := entries()
 	require.Len(t, got, 3)
-	require.Equal(t, logEntry{Level: "warn", Reason: "bad_frame", SinceLastLog: 11}, got[2])
+	require.Equal(
+		t,
+		logEntry{
+			Level:        "warn",
+			Reason:       "bad_frame",
+			SinceLastLog: 11,
+		},
+		got[2],
+	)
 	require.Equal(t, uint64(13), stats.Count(badFrame))
 	require.Equal(t, uint64(1), stats.Count(badProof))
 

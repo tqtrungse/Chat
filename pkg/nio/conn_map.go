@@ -6,30 +6,25 @@
 
 package nio
 
-import (
-	"sync/atomic"
-
-	"xxx/pkg/collection/swiss"
-	"xxx/pkg/hash"
-)
+import "sync/atomic"
 
 type connMatrix struct {
-	connMap   *swiss.Table[int, *conn]
+	connMap   map[int]*conn
 	connCount atomic.Int32
 }
 
 func (cm *connMatrix) init(size int) {
 	if size == 0 {
-		cm.connMap = swiss.NewTable[int, *conn](hash.Int)
+		cm.connMap = make(map[int]*conn)
 	} else {
-		cm.connMap = swiss.NewTableWithHintCap[int, *conn](size, hash.Int)
+		cm.connMap = make(map[int]*conn, size)
 	}
 }
 
 func (cm *connMatrix) iterate(f func(*conn) bool) {
-	cm.connMap.Range(func(_ int, value *conn) (goOn bool) {
-		return f(value)
-	})
+	for _, c := range cm.connMap {
+		f(c)
+	}
 }
 
 func (cm *connMatrix) incCount(delta int32) {
@@ -42,16 +37,16 @@ func (cm *connMatrix) loadCount() (n int32) {
 
 func (cm *connMatrix) addConn(c *conn) {
 	//c.gfd = gfd.NewGFD(c.fd, index, 0, 0)
-	cm.connMap.Set(c.fd, c)
+	cm.connMap[c.fd] = c
 	cm.incCount(1)
 }
 
 func (cm *connMatrix) getConn(fd int) *conn {
-	c, _ := cm.connMap.Lookup(fd)
+	c, _ := cm.connMap[fd]
 	return c
 }
 
 func (cm *connMatrix) delConn(c *conn) {
-	cm.connMap.Delete(c.fd)
+	delete(cm.connMap, c.fd)
 	cm.incCount(-1)
 }

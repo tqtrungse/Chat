@@ -39,12 +39,12 @@ func (el *eventloop) accept0(fd int, _ netpoll.IOEvent, _ netpoll.IOFlags) error
 			return errorx.ErrAcceptSocket
 		}
 
-		l, _ := el.listeners.Lookup(fd)
+		l := el.listeners[fd]
 		network := l.network
 		remoteAddr := el.prepareAcceptedSocket(nfd, sa, network)
 
 		nel := el.engine.eventLoops.next(remoteAddr)
-		l, _ = nel.listeners.Lookup(fd)
+		l = nel.listeners[fd]
 		c := newStreamConn(network, nfd, nel, sa, l.addr, remoteAddr)
 		err = nel.poller.Trigger(queue.HighPriority, nel.register, c)
 		if err != nil {
@@ -56,7 +56,7 @@ func (el *eventloop) accept0(fd int, _ netpoll.IOEvent, _ netpoll.IOFlags) error
 }
 
 func (el *eventloop) accept(fd int, ev netpoll.IOEvent, flags netpoll.IOFlags) error {
-	l, _ := el.listeners.Lookup(fd)
+	l := el.listeners[fd]
 	network := l.network
 	if network == "udp" {
 		return el.readUDP(fd, ev, flags)

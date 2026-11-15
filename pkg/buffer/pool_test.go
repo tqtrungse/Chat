@@ -19,19 +19,69 @@ func TestIndex(t *testing.T) {
 		n    int
 		want int
 	}{
-		{0, 0},
-		{1, 0},
-		{minSize, 0},          // 64 -> bucket 0
-		{minSize + 1, 1},      // 65 -> bucket 1
-		{minSize * 2, 1},      // 128 -> bucket 1
-		{minSize*2 + 1, 2},    // 129 -> bucket 2
-		{minSize * 4, 2},      // 256 -> bucket 2
-		{minSize*4 + 1, 3},    // 257 -> bucket 3
-		{minSize * 8, 3},      // 512 -> bucket 3
-		{minSize*8 + 1, 4},    // 513 -> bucket 4
-		{minSize << 19, 19},   // exactly the last bucket's representative size
-		{minSize<<19 + 1, 19}, // one byte over -> must saturate, not overflow
-		{1 << 30, 19},         // pathologically large -> must saturate, not panic
+		{
+			n:    0,
+			want: 0,
+		},
+		{
+			n:    1,
+			want: 0,
+		},
+		// 64 -> bucket 0
+		{
+			n:    minSize,
+			want: 0,
+		},
+		// 65 -> bucket 1
+		{
+			n:    minSize + 1,
+			want: 1,
+		},
+		// 128 -> bucket 1
+		{
+			n:    minSize * 2,
+			want: 1,
+		},
+		// 129 -> bucket 2
+		{
+			n:    minSize*2 + 1,
+			want: 2,
+		},
+		// 256 -> bucket 2
+		{
+			n:    minSize * 4,
+			want: 2,
+		},
+		// 257 -> bucket 3
+		{
+			n:    minSize*4 + 1,
+			want: 3,
+		},
+		// 512 -> bucket 3
+		{
+			n:    minSize * 8,
+			want: 3,
+		},
+		// 513 -> bucket 4
+		{
+			n:    minSize*8 + 1,
+			want: 4,
+		},
+		// exactly the last bucket's representative size
+		{
+			n:    minSize << 19,
+			want: 19,
+		},
+		// one byte over -> must saturate, not overflow
+		{
+			n:    minSize<<19 + 1,
+			want: 19,
+		},
+		// pathologically large -> must saturate, not panic
+		{
+			n:    1 << 30,
+			want: 19,
+		},
 	}
 	for _, c := range cases {
 		got := index(c.n)

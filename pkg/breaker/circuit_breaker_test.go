@@ -185,31 +185,28 @@ func TestExecute_PreservesCallbackBreakerErrors(t *testing.T) {
 			returned: fmt.Errorf("inner dependency: %w", gobreaker.ErrTooManyRequests),
 		},
 	} {
-		t.Run(
-			tt.name,
-			func(t *testing.T) {
-				cb := newTestBreaker(
-					Config{ConsecutiveFailures: 1},
-					func(error) bool { return false },
-					nil,
-				)
+		t.Run(tt.name, func(t *testing.T) {
+			cb := newTestBreaker(
+				Config{ConsecutiveFailures: 1},
+				func(error) bool { return false },
+				nil,
+			)
 
-				calls := 0
-				err := cb.Execute(
-					t.Context(),
-					func(context.Context) error {
-						calls++
-						return tt.returned
-					},
-				)
+			calls := 0
+			err := cb.Execute(
+				t.Context(),
+				func(context.Context) error {
+					calls++
+					return tt.returned
+				},
+			)
 
-				require.Equal(t, 1, calls)
-				require.Same(t, tt.returned, err)
-				require.ErrorIs(t, err, tt.sentinel)
-				require.NotErrorIs(t, err, ErrOpen)
-				require.Equal(t, StateClosed, cb.State())
-			},
-		)
+			require.Equal(t, 1, calls)
+			require.Same(t, tt.returned, err)
+			require.ErrorIs(t, err, tt.sentinel)
+			require.NotErrorIs(t, err, ErrOpen)
+			require.Equal(t, StateClosed, cb.State())
+		})
 	}
 }
 
@@ -535,7 +532,10 @@ func TestExecute_OnStateChangeReportsTransitions(t *testing.T) {
 		func(_ string, from, to State) {
 			mu.Lock()
 			defer mu.Unlock()
-			got = append(got, transition{from, to})
+			got = append(got, transition{
+				from: from,
+				to:   to,
+			})
 		},
 	)
 

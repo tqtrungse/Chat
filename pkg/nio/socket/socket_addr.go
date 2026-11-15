@@ -21,13 +21,17 @@ func NetAddrToSockaddr(addr net.Addr) unix.Sockaddr {
 	switch addr := addr.(type) {
 	case *net.IPAddr:
 		return IPAddrToSockaddr(addr)
+
 	case *net.TCPAddr:
 		return TCPAddrToSockaddr(addr)
+
 	case *net.UDPAddr:
 		return UDPAddrToSockaddr(addr)
+
 	case *net.UnixAddr:
 		sa, _ := UnixAddrToSockaddr(addr)
 		return sa
+
 	default:
 		return nil
 	}
@@ -57,7 +61,10 @@ func IPToSockaddr(ip net.IP, port int, zone string) unix.Sockaddr {
 	// Unspecified?
 	if ip == nil {
 		if zone != "" {
-			return &unix.SockaddrInet6{Port: port, ZoneId: uint32(ip6ZoneToInt(zone))}
+			return &unix.SockaddrInet6{
+				Port:   port,
+				ZoneId: uint32(ip6ZoneToInt(zone)),
+			}
 		}
 		return &unix.SockaddrInet4{Port: port}
 	}
@@ -71,7 +78,10 @@ func IPToSockaddr(ip net.IP, port int, zone string) unix.Sockaddr {
 
 	// Valid IPv6 address?
 	if ip6 := ip.To16(); ip6 != nil {
-		sa := unix.SockaddrInet6{Port: port, ZoneId: uint32(ip6ZoneToInt(zone))}
+		sa := unix.SockaddrInet6{
+			Port:   port,
+			ZoneId: uint32(ip6ZoneToInt(zone)),
+		}
 		copy(sa.Addr[:], ip6)
 		return &sa
 	}
@@ -102,11 +112,21 @@ func UnixAddrToSockaddr(addr *net.UnixAddr) (unix.Sockaddr, int) {
 func SockaddrToTCPOrUnixAddr(sa unix.Sockaddr) net.Addr {
 	switch sa := sa.(type) {
 	case *unix.SockaddrInet4:
-		return &net.TCPAddr{IP: sa.Addr[0:], Port: sa.Port}
+		return &net.TCPAddr{
+			IP:   sa.Addr[0:],
+			Port: sa.Port,
+		}
 	case *unix.SockaddrInet6:
-		return &net.TCPAddr{IP: sa.Addr[0:], Port: sa.Port, Zone: ip6ZoneToString(sa.ZoneId)}
+		return &net.TCPAddr{
+			IP:   sa.Addr[0:],
+			Port: sa.Port,
+			Zone: ip6ZoneToString(sa.ZoneId),
+		}
 	case *unix.SockaddrUnix:
-		return &net.UnixAddr{Name: sa.Name, Net: "unix"}
+		return &net.UnixAddr{
+			Name: sa.Name,
+			Net:  "unix",
+		}
 	}
 	return nil
 }
@@ -116,9 +136,16 @@ func SockaddrToTCPOrUnixAddr(sa unix.Sockaddr) net.Addr {
 func SockaddrToUDPAddr(sa unix.Sockaddr) net.Addr {
 	switch sa := sa.(type) {
 	case *unix.SockaddrInet4:
-		return &net.UDPAddr{IP: sa.Addr[0:], Port: sa.Port}
+		return &net.UDPAddr{
+			IP:   sa.Addr[0:],
+			Port: sa.Port,
+		}
 	case *unix.SockaddrInet6:
-		return &net.UDPAddr{IP: sa.Addr[0:], Port: sa.Port, Zone: ip6ZoneToString(sa.ZoneId)}
+		return &net.UDPAddr{
+			IP:   sa.Addr[0:],
+			Port: sa.Port,
+			Zone: ip6ZoneToString(sa.ZoneId),
+		}
 	}
 	return nil
 }

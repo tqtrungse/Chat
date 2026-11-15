@@ -17,9 +17,9 @@ import (
 	"xxx/internal/hub/core/presence"
 	"xxx/internal/shared/device"
 
-	"xxx/pkg/bs"
 	"xxx/pkg/log"
 	slicepool "xxx/pkg/pool/slice"
+	"xxx/pkg/utils/bs"
 
 	"github.com/alicebob/miniredis/v2"
 	redisv9 "github.com/redis/go-redis/v9"

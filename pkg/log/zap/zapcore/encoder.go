@@ -20,12 +20,12 @@ import (
 type Encoder interface {
 	ObjectEncoder
 
-	// Clone copies the encoder, ensuring that adding fields to the copy doesn't
-	// affect the original.
+	// Clone copies the encoder. A field that you add to the copy does not
+	// change the original.
 	Clone() Encoder
 
-	// EncodeEntry encodes an entry and fields, along with any accumulated
-	// context, into a byte buffer and returns it. Any fields that are empty,
-	// including fields on the `Entry` type, should be omitted.
+	// EncodeEntry encodes an entry, its fields and the context of the encoder
+	// into a byte buffer. Then it returns that buffer. It must omit each empty
+	// field, and this includes the fields of the `Entry` type.
 	EncodeEntry(Entry, []Field) (*buffer.Buffer, error)
 }

@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"xxx/pkg/collection/swiss"
 	"xxx/pkg/log"
 	errorx "xxx/pkg/nio/error"
 	nio "xxx/pkg/nio/io"
@@ -33,13 +32,13 @@ import (
 const iovMax = 1024
 
 type eventloop struct {
-	listeners    *swiss.Table[int, *listener] // ref listeners
-	idx          int                          // loop index in the engine loops list
-	engine       *engine                      // engine in loop
-	poller       *netpoll.Poller              // epoll or kqueue
-	buffer       []byte                       // read packet buffer whose capacity is set by user, default value is 64KB
-	connections  connMatrix                   // loop connections storage
-	eventHandler EventHandler                 // user eventHandler
+	listeners    map[int]*listener // ref listeners
+	idx          int               // loop index in the engine loops list
+	engine       *engine           // engine in loop
+	poller       *netpoll.Poller   // epoll or kqueue
+	buffer       []byte            // read packet buffer whose capacity is set by user, default value is 64KB
+	connections  connMatrix        // loop connections storage
+	eventHandler EventHandler      // user eventHandler
 }
 
 func (el *eventloop) Register(ctx context.Context, addr net.Addr) (<-chan RegisteredResult, error) {
@@ -134,7 +133,7 @@ func (el *eventloop) readUDP(fd int, _ netpoll.IOEvent, _ netpoll.IOFlags) error
 	}
 
 	var c *conn
-	if ln, ok := el.listeners.Lookup(fd); ok {
+	if ln, ok := el.listeners[fd]; ok {
 		c = newUDPConn(fd, el, ln.addr, sa, false)
 	} else {
 		c = el.connections.getConn(fd)
